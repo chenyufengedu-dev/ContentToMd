@@ -1,0 +1,20 @@
+[package]
+name = "content-to-md"
+version = "0.0.1"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+gray_matter = "0.3.2"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-http = "2"
+
+[profile.release]
+strip = true
+lto = true
+opt-level = "s"
