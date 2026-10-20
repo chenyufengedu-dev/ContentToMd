@@ -1,6 +1,7 @@
 // 外壳接口：配置读写、选文件夹、网络请求。界面和核心只通过这里接触 Tauri
 
 import { invoke } from '@tauri-apps/api/core'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { open } from '@tauri-apps/plugin-dialog'
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
 import type { Config } from '../core/config'
@@ -40,3 +41,8 @@ export const listVaultTags = (vault: string) => invoke<string[]>('list_vault_tag
 export const openNote = (vault: string, relPath: string) => invoke<void>('open_note', { vault, relPath })
 export const writeNote = (vault: string, domain: string, title: string, date: string, content: string) =>
   invoke<string>('write_note', { vault, domain, title, date, content })
+
+// 自绘标题栏用的窗口操作（窗口没有系统标题栏，见 tauri.conf.json 的 decorations）
+export const minimizeWindow = () => getCurrentWindow().minimize()
+export const toggleMaximizeWindow = () => getCurrentWindow().toggleMaximize()
+export const closeWindow = () => getCurrentWindow().close()

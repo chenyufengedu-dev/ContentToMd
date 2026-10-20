@@ -6,6 +6,7 @@ import type { Prompts } from './core/note'
 import { DEFAULT_PROMPTS } from './core/defaultPrompts'
 import SettingsPage from './pages/SettingsPage.vue'
 import CollectPage from './pages/CollectPage.vue'
+import TitleBar from './components/TitleBar.vue'
 
 const config = ref<Config | null>(null)
 const prompts = ref<Prompts | null>(null)
@@ -43,10 +44,7 @@ async function onSaved(c: Config) {
 <template>
   <p v-if="loadError" class="fatal">启动失败，无法读取配置或整理指令：{{ loadError }}</p>
   <template v-else-if="config">
-    <nav>
-      <button class="link" :disabled="firstRun" @click="page = 'home'">收藏</button>
-      <button class="link" @click="page = 'settings'">设置</button>
-    </nav>
+    <TitleBar :page="page" :home-disabled="firstRun" @navigate="(p) => (page = p)" />
     <SettingsPage v-if="page === 'settings'" :config="config" :first-run="firstRun" @saved="onSaved" />
     <div v-show="page === 'home'">
       <p v-if="vaultMissing" class="fatal">收藏库文件夹“{{ config.vaultPath }}”找不到了，请到设置里重新选择。</p>
@@ -56,15 +54,8 @@ async function onSaved(c: Config) {
 </template>
 
 <style scoped>
-nav {
-  display: flex;
-  gap: 8px;
-  padding: 8px 24px;
-  border-bottom: 1px solid var(--line);
-  background: var(--card);
-}
 .fatal {
   color: var(--err);
-  padding: 24px;
+  padding: var(--sp-5);
 }
 </style>

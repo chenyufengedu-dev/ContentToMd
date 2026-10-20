@@ -1,68 +1,186 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { useEditor, EditorContent } from '@tiptap/vue-3'
+import { Pencil, Columns2, Video, Clock, FileText, Mic, CalendarDays } from 'lucide-vue-next'
 import type { Config } from '../core/config'
 import type { Job } from '../core/pipeline'
 import { buildMarkdown, safeFileTitle, today } from '../core/note'
+import { matchToSource } from '../core/sourceMatch'
 import { writeNote } from '../shell/tauri'
+import { editorExtensions } from '../editor/extensions'
+import { linkedBlockKey } from '../editor/linkedBlock'
+import NoteProps from '../components/NoteProps.vue'
+import SourcePanel from '../components/SourcePanel.vue'
+import EditorToolbar from '../components/EditorToolbar.vue'
+import InfoTip from '../components/InfoTip.vue'
 
 const props = defineProps<{ config: Config; job: Job; existingTags: string[] }>()
 const emit = defineEmits<{ saved: [string]; discard: [] }>()
 
-// 标签和关键词用一个输入框编辑，逗号或顿号分隔
-const splitList = (s: string) => [
-  ...new Set(
-    s
-      .split(/[,，、]/)
-      .map((x) => x.trim())
-      .filter(Boolean),
-  ),
-]
 const d = props.job.draft!
 const form = reactive({
   title: d.title,
   domainId: d.domainId,
-  tags: d.tags.join('，'),
-  keywords: d.keywords.join('，'),
+  tags: [...d.tags],
+  keywords: [...d.keywords],
   summary: d.summary,
-  body: d.body,
 })
-const tagList = computed(() => splitList(form.tags))
-const known = computed(() => new Set(props.existingTags))
-const showSource = ref(false)
+const created = today()
+const transcript = props.job.transcript ?? ''
 
+// 正文获得焦点时显示编辑栏，失去焦点时收起
+const editorFocused = ref(false)
+const editor = useEditor({
+  extensions: editorExtensions(),
+  content: d.body,
+  contentType: 'markdown',
+  onFocus: () => (editorFocused.value = true),
+  onBlur: () => (editorFocused.value = false),
+})
+
+const duration = computed(() => {
+  const s = Math.round(props.job.duration ?? 0)
+  return s ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` : ''
+})
+const sourceSummary = computed(() => [props.job.fileName, duration.value, '语音转写'].filter(Boolean).join(' · '))
+
+// ---------------- 对照原文 ----------------
+// 两种状态：平时属性在右栏；对照时右栏换成原文，属性移到标题下面。
+// 用浏览器的视图过渡让这次切换平滑（WebView2 支持；不支持时直接切换）
+const comparing = ref(false)
+function setComparing(on: boolean) {
+  let applied = false
+  const apply = async () => {
+    if (applied) return
+    applied = true
+    comparing.value = on
+    if (!on) clearLink()
+    else refreshCoverage()
+    await nextTick()
+  }
+  const doc = document as Document & { startViewTransition?: (cb: () => Promise<void>) => unknown }
+  if (!doc.startViewTransition) return void apply()
+  doc.startViewTransition(apply)
+  // 窗口不在绘制时（比如被挡住）视图过渡可能迟迟不开始，0.5 秒后直接切换，不让界面卡住
+  setTimeout(() => void apply(), 500)
+}
+
+/** 正文里参与比对的段落：段落、列表项、引用里的段落，按出现顺序 */
+function bodyBlocks(): HTMLElement[] {
+  const root = paperEl.value?.querySelector('.tiptap')
+  if (!root) return []
+  return [
+    ...root.querySelectorAll<HTMLElement>(':scope > p, :scope > ul > li, :scope > ol > li, :scope > blockquote > p'),
+  ]
+}
+
+const coverage = ref(matchToSource([], transcript))
+function refreshCoverage() {
+  coverage.value = matchToSource(
+    bodyBlocks().map((el) => el.textContent ?? ''),
+    transcript,
+  )
+}
+
+const active = ref<{ from: number; to: number } | 'none' | null>(null)
+
+/** 在编辑器里标出点中的段落（用编辑器的装饰，见 linkedBlock.ts）；pos 为 null 时清除 */
+function markBlock(pos: number | null) {
+  const view = editor.value?.view
+  if (view) view.dispatch(view.state.tr.setMeta(linkedBlockKey, pos))
+}
+const linkedEl = () => paperEl.value?.querySelector<HTMLElement>('.is-linked') ?? null
+
+/** 对照时点击正文的一段：原文里对应的句子高亮，并画一条连线（F30） */
+function onBodyClick(e: MouseEvent) {
+  if (!comparing.value) return
+  // 列表项里面还包着一层段落，点到的通常是里面那层，所以先找列表项
+  const target = e.target as HTMLElement
+  const block = target.closest<HTMLElement>('li') ?? target.closest<HTMLElement>('p')
+  const blocks = bodyBlocks()
+  const idx = block ? blocks.indexOf(block) : -1
+  if (idx < 0 || !editor.value) {
+    clearLink()
+    return
+  }
+  refreshCoverage() // 正文可能刚改过
+  // 段落或列表项在编辑器里的起点：元素内部的位置减一
+  markBlock(editor.value.view.posAtDOM(blocks[idx], 0) - 1)
+  active.value = coverage.value.matches[idx] ?? 'none'
+  void nextTick(() => setTimeout(updateLink, 350)) // 等原文滚动到位
+}
+
+function clearLink() {
+  markBlock(null)
+  active.value = null
+  link.value = null
+}
+
+// 连线：从正文段落右边连到原文句子左边；任何一头滚出可视区就不画
+const confirmEl = ref<HTMLElement>()
+const paperEl = ref<HTMLElement>()
+const panel = ref<InstanceType<typeof SourcePanel>>()
+const link = ref<string | null>(null)
+function updateLink() {
+  const target = panel.value?.activeRect()
+  const view = panel.value?.viewportRect()
+  const host = confirmEl.value?.getBoundingClientRect()
+  const paper = paperEl.value?.getBoundingClientRect()
+  const el = linkedEl()
+  if (!el || !target || !view || !host || !paper) {
+    link.value = null
+    return
+  }
+  const a = el.getBoundingClientRect()
+  const ay = a.top + Math.min(a.height, 30) / 2
+  const by = target.top + Math.min(target.height, 30) / 2
+  const visible = ay > paper.top && ay < paper.bottom && by > view.top && by < view.bottom
+  if (!visible) {
+    link.value = null
+    return
+  }
+  const x1 = a.right - host.left + 4
+  const y1 = ay - host.top
+  const x2 = target.left - host.left - 4
+  const y2 = by - host.top
+  const mid = (x1 + x2) / 2
+  link.value = `M ${x1} ${y1} C ${mid} ${y1}, ${mid} ${y2}, ${x2} ${y2}`
+}
+
+// ---------------- 保存 ----------------
 const saving = ref(false)
 const saveError = ref<string | null>(null)
 const titleMissing = computed(() => !form.title.trim())
+const domainName = computed(() => props.config.domains.find((x) => x.id === form.domainId)?.name ?? '其他')
 
 async function save() {
-  if (saving.value || titleMissing.value) return
+  if (saving.value || titleMissing.value || !editor.value) return
   saving.value = true
   saveError.value = null
-  const domain = props.config.domains.find((x) => x.id === form.domainId)?.name ?? '其他'
   const title = form.title.trim()
   const md = buildMarkdown(
     {
       title,
       domainId: form.domainId,
-      tags: tagList.value,
-      keywords: splitList(form.keywords),
+      tags: form.tags,
+      keywords: form.keywords,
       summary: form.summary.trim(),
-      body: form.body.trim(),
+      body: editor.value.getMarkdown().trim(),
     },
     // 来源、平台、作者由 F02 分享文字解析填入（S1 第 4 步），这一步先留空
     {
-      domain,
+      domain: domainName.value,
       type: props.job.type,
       mode: props.job.mode,
       source: '',
       platform: '',
       author: '',
-      created: today(),
+      created,
       cover: '',
     },
   )
   try {
-    emit('saved', await writeNote(props.config.vaultPath, domain, safeFileTitle(title), today(), md))
+    emit('saved', await writeNote(props.config.vaultPath, domainName.value, safeFileTitle(title), created, md))
   } catch (e) {
     // 保存失败时编辑中的内容保留（方案第 7 节）
     saveError.value = String(e)
@@ -73,196 +191,558 @@ async function save() {
 
 const confirmingDiscard = ref(false)
 
-// 快捷键：Ctrl+S 保存，Esc 关闭弹出的确认（方案第 11 节）
+// 快捷键：Ctrl+S 保存；Esc 先收起原文，再关放弃确认（方案第 11 节）
 function onKey(e: KeyboardEvent) {
   if (e.ctrlKey && e.key.toLowerCase() === 's') {
     e.preventDefault()
     save()
-  } else if (e.key === 'Escape') confirmingDiscard.value = false
+  } else if (e.key === 'Escape') {
+    if (comparing.value) setComparing(false)
+    else confirmingDiscard.value = false
+  }
 }
-onMounted(() => window.addEventListener('keydown', onKey))
-onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
+onMounted(() => {
+  window.addEventListener('keydown', onKey)
+  window.addEventListener('resize', updateLink)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKey)
+  window.removeEventListener('resize', updateLink)
+  editor.value?.destroy()
+})
 </script>
 
 <template>
-  <main class="confirm" :class="{ split: showSource }">
-    <div class="editor">
-      <div class="props card">
-        <label
-          >标题
-          <input v-model="form.title" maxlength="30" />
+  <main ref="confirmEl" class="confirm" :class="{ comparing }">
+    <article ref="paperEl" class="paper" @scroll="updateLink">
+      <div class="paper-inner">
+        <label class="editable title-line" style="view-transition-name: note-title">
+          <textarea
+            v-model="form.title"
+            class="title"
+            rows="1"
+            maxlength="30"
+            aria-label="标题"
+            placeholder="标题"
+            spellcheck="false"
+            @keydown.enter.prevent
+          />
+          <Pencil class="edit-hint" :size="20" aria-hidden="true" />
         </label>
-        <p v-if="titleMissing" class="err small">标题不能为空</p>
-        <label
-          >领域
-          <select v-model="form.domainId">
-            <option v-for="x in config.domains" :key="x.id" :value="x.id">{{ x.name }}</option>
-          </select>
-        </label>
-        <p v-if="job.domainFallback" class="warn-text small">AI 没有选出合适的领域，已暂时放到“其他”，请选一个</p>
-        <label
-          >标签
-          <input v-model="form.tags" placeholder="用逗号分隔" />
-        </label>
-        <div class="chips">
-          <span v-for="t in tagList" :key="t" class="chip">{{ t }}<sup v-if="!known.has(t)" class="new">新</sup></span>
-        </div>
-        <label
-          >关键词
-          <input v-model="form.keywords" placeholder="用逗号分隔" />
-        </label>
-        <label
-          >这条讲什么
-          <textarea v-model="form.summary" rows="2" />
-        </label>
-      </div>
-      <p class="muted small">{{ job.mode }} · {{ job.type }} · {{ job.fileName }} · 内容来自语音转写，没有分析画面</p>
-      <textarea v-model="form.body" class="body" spellcheck="false" />
-    </div>
+        <p v-if="titleMissing" class="field-error">标题不能为空</p>
 
-    <aside v-if="showSource" class="source card">
-      <h3>原文（转写稿）</h3>
-      <div class="source-text">{{ job.transcript }}</div>
+        <label class="editable summary" style="view-transition-name: note-summary">
+          <textarea v-model="form.summary" rows="1" aria-label="这条讲什么" placeholder="一句话说清这条讲什么" />
+          <Pencil class="edit-hint" :size="16" aria-hidden="true" />
+        </label>
+
+        <NoteProps
+          v-if="comparing"
+          v-model:domain-id="form.domainId"
+          v-model:tags="form.tags"
+          v-model:keywords="form.keywords"
+          class="inline-props"
+          variant="inline"
+          :domains="config.domains"
+          :existing-tags="existingTags"
+          :source="sourceSummary"
+        />
+
+        <!-- 编辑栏的位置一直留着，出现和收起时正文不会跳动 -->
+        <div class="toolbar-slot">
+          <Transition name="toolbar">
+            <EditorToolbar v-if="editor && editorFocused" :editor="editor" />
+          </Transition>
+        </div>
+
+        <div class="body-wrap" style="view-transition-name: note-body">
+          <EditorContent :editor="editor" class="body" @click="onBodyClick" />
+        </div>
+      </div>
+    </article>
+
+    <aside class="side">
+      <div v-if="!comparing" class="side-main props-area" style="view-transition-name: props-card">
+        <div class="side-head">
+          <h2>属性信息</h2>
+          <InfoTip text="这些信息会写进笔记开头，用来分类和以后查找" />
+        </div>
+        <NoteProps
+          v-model:domain-id="form.domainId"
+          v-model:tags="form.tags"
+          v-model:keywords="form.keywords"
+          variant="stack"
+          :domains="config.domains"
+          :existing-tags="existingTags"
+          :domain-fallback="job.domainFallback"
+        />
+
+        <div class="source">
+          <h3>来源信息</h3>
+          <dl class="facts">
+            <div class="fact">
+              <dt><Video :size="16" />视频文件</dt>
+              <dd class="file">{{ job.fileName }}</dd>
+            </div>
+            <div v-if="duration" class="fact">
+              <dt><Clock :size="16" />时长</dt>
+              <dd>{{ duration }}</dd>
+            </div>
+            <div class="fact">
+              <dt><FileText :size="16" />整理方式</dt>
+              <dd>{{ job.mode }}</dd>
+            </div>
+            <div class="fact">
+              <dt><Mic :size="16" />内容来自</dt>
+              <dd>语音转写</dd>
+            </div>
+            <div class="fact">
+              <dt><CalendarDays :size="16" />收藏日期</dt>
+              <dd>{{ created }}</dd>
+            </div>
+          </dl>
+          <button class="compare-btn" @click="setComparing(true)"><Columns2 :size="17" />查看原文对比</button>
+        </div>
+      </div>
+
+      <SourcePanel
+        v-else
+        ref="panel"
+        class="side-main"
+        style="view-transition-name: source-panel"
+        :sentences="coverage.sentences"
+        :unused="coverage.unused"
+        :active="active"
+        @close="setComparing(false)"
+        @scroll="updateLink"
+      />
+
+      <footer class="actions">
+        <p v-if="saveError" class="field-error">保存失败：{{ saveError }}</p>
+        <template v-if="confirmingDiscard">
+          <p class="discard-ask">确定放弃这一条吗？已整理的内容不会保存。</p>
+          <div class="action-row">
+            <button class="btn btn-secondary" @click="confirmingDiscard = false">取消</button>
+            <button class="btn btn-danger" @click="emit('discard')">放弃这一条</button>
+          </div>
+        </template>
+        <div v-else class="action-row">
+          <button class="btn btn-secondary" @click="confirmingDiscard = true">放弃</button>
+          <button class="btn btn-primary" :disabled="saving || titleMissing" @click="save">
+            {{ saving ? '保存中…' : '保存' }}<span class="kbd">Ctrl+S</span>
+          </button>
+        </div>
+      </footer>
     </aside>
 
-    <footer>
-      <button class="link" @click="showSource = !showSource">{{ showSource ? '收起原文' : '对照原文' }}</button>
-      <span v-if="saveError" class="err">保存失败：{{ saveError }}</span>
-      <span class="spacer" />
-      <template v-if="confirmingDiscard">
-        <span>确定放弃这一条吗？</span>
-        <button class="danger-btn" @click="emit('discard')">放弃</button>
-        <button @click="confirmingDiscard = false">取消</button>
-      </template>
-      <template v-else>
-        <button @click="confirmingDiscard = true">放弃</button>
-        <button class="primary" :disabled="saving || titleMissing" @click="save">
-          {{ saving ? '保存中…' : '保存' }} <span class="hint-key">Ctrl+S</span>
-        </button>
-      </template>
-    </footer>
+    <svg v-if="link" class="link-layer" aria-hidden="true">
+      <path :d="link" />
+      <circle :cx="link.split(' ').at(-2)" :cy="link.split(' ').at(-1)" r="3" />
+    </svg>
   </main>
 </template>
 
 <style scoped>
 .confirm {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 16px;
-  max-width: 900px;
-  margin: 0 auto;
-  padding: 16px 24px 80px;
-}
-.confirm.split {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  max-width: 1400px;
-}
-.card {
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 12px 16px;
-}
-.props label {
-  display: grid;
-  grid-template-columns: 80px 1fr;
-  gap: 8px;
-  align-items: center;
-  margin-bottom: 8px;
-  font-size: 13px;
-}
-input,
-select,
-textarea {
-  padding: 6px 8px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  font: inherit;
-  background: var(--bg);
-  color: var(--fg);
-  min-width: 0;
-}
-textarea {
-  resize: vertical;
-}
-.body {
-  width: 100%;
+  position: relative;
+  height: calc(100vh - var(--titlebar-h));
   box-sizing: border-box;
-  min-height: 420px;
-  font-family: Consolas, 'Microsoft YaHei UI', monospace;
-  font-size: 13px;
-  line-height: 1.6;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(300px, 26vw, 380px);
+  gap: var(--panel-gap);
+  padding: var(--window-pad);
+  padding-top: 0;
 }
-.chips {
+.confirm.comparing {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.85fr);
+}
+
+/* 纸面和右栏共用的面板外观：由“层次”令牌决定是平铺还是卡片 */
+.paper,
+.side {
+  background: var(--card);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--panel-radius);
+  box-shadow: var(--shadow-card);
+}
+
+/* ---------------- 左：纸面 ---------------- */
+.paper {
+  overflow-y: auto;
+  view-transition-name: paper;
+}
+.paper-inner {
+  max-width: 880px;
+  margin: 0 auto;
+  /* 窄窗口时留白跟着收小 */
+  padding: clamp(var(--sp-5), 3.2vw, var(--sp-7));
+}
+
+/* 可直接修改的标题和摘要：悬停时铅笔变深，点进去后出现编辑底色和焦点框 */
+.editable {
   display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin: -2px 0 8px 88px;
+  align-items: center;
+  gap: var(--sp-3);
+  margin: 0 calc(-1 * var(--sp-3));
+  padding: var(--sp-1) var(--sp-3);
+  border-radius: var(--radius-md);
+  cursor: text;
+  transition:
+    background var(--ease),
+    box-shadow var(--ease);
 }
-.chip {
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 1px 8px;
-  font-size: 12px;
+.editable:hover {
+  background: var(--hover-soft);
 }
-.new {
+.editable:focus-within {
+  background: var(--card);
+  box-shadow:
+    0 0 0 1px var(--primary),
+    0 0 0 4px var(--primary-soft);
+}
+.editable textarea {
+  /* 输入框按内容自动变宽变高，铅笔图标紧跟在文字后面 */
+  field-sizing: content;
+  max-width: 100%;
+  min-width: 2em;
+  border: 0;
+  padding: 0;
+  background: none;
+  resize: none;
+  font: inherit;
+  color: inherit;
+  outline: none;
+}
+.edit-hint {
+  flex: none;
+  color: var(--line-strong);
+  transition: color var(--ease);
+}
+.editable:hover .edit-hint {
+  color: var(--faint);
+}
+.editable:focus-within .edit-hint {
   color: var(--primary);
-  margin-left: 2px;
 }
-.source {
-  max-height: calc(100vh - 160px);
-  overflow: auto;
-  position: sticky;
-  top: 16px;
+/* 字号字重写在外层，输入框用 font: inherit 继承（写在输入框上会被 .editable textarea 覆盖） */
+.title-line {
+  font-size: var(--fs-2xl);
+  font-weight: var(--fw-title);
+  line-height: 1.35;
+  letter-spacing: 0.01em;
+  color: var(--fg-strong);
 }
-.source h3 {
-  font-size: 14px;
-  margin: 0 0 8px;
-}
-.source-text {
-  white-space: pre-wrap;
-  font-size: 13px;
+.summary {
+  margin-top: var(--sp-2);
+  font-size: var(--fs-lg);
   line-height: 1.7;
-}
-.muted {
   color: var(--muted);
 }
-.small {
-  font-size: 12px;
-  margin: 0 0 8px 88px;
+.inline-props {
+  margin-top: var(--sp-4);
 }
-p.muted.small {
-  margin: 8px 0;
-}
-.err {
-  color: var(--err);
-}
-.warn-text {
-  color: var(--warn);
-}
-footer {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
+.toolbar-slot {
+  position: sticky;
+  top: var(--sp-2);
+  z-index: 5;
+  height: calc(var(--h-xs) + var(--sp-2) * 2 + 2px);
+  margin-top: var(--sp-3);
   display: flex;
-  gap: 10px;
   align-items: center;
-  padding: 10px 24px;
-  background: var(--card);
+}
+.toolbar-enter-active,
+.toolbar-leave-active {
+  transition:
+    opacity var(--ease),
+    transform var(--ease);
+}
+.toolbar-enter-from,
+.toolbar-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+.body-wrap {
+  padding-top: var(--sp-4);
   border-top: 1px solid var(--line);
 }
-.spacer {
+
+/* ---------------- 正文：所见即所得编辑器里的排版 ---------------- */
+.body {
+  font-size: var(--fs-lg);
+  line-height: 1.85;
+  color: var(--fg);
+}
+.body :deep(.tiptap) {
+  outline: none;
+  counter-reset: section;
+}
+.body :deep(h3) {
+  counter-increment: section;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  margin: var(--sp-6) 0 var(--sp-2);
+  font-size: var(--fs-xl);
+  font-weight: var(--fw-heading);
+  line-height: 1.4;
+  color: var(--fg-strong);
+}
+.body :deep(h3:first-child) {
+  margin-top: var(--sp-2);
+}
+.body :deep(h3)::before {
+  content: counter(section);
+  flex: none;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-num);
+  background: var(--num-bg);
+  color: var(--num-fg);
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+/* “原文金句”这类后面紧跟引用的小标题：不编号，圆圈里放引号 */
+.body :deep(h3:has(+ blockquote)) {
+  counter-increment: none;
+}
+.body :deep(h3:has(+ blockquote))::before {
+  content: '“';
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: var(--fs-deco);
+  line-height: 1;
+  padding-top: 12px;
+  box-sizing: border-box;
+}
+/* 小标题下面的内容和小标题文字对齐（让出序号的宽度） */
+.body :deep(.tiptap > p),
+.body :deep(.tiptap > ul),
+.body :deep(.tiptap > ol),
+.body :deep(.tiptap > blockquote) {
+  margin-left: 48px;
+}
+.body :deep(p) {
+  margin-top: var(--sp-1);
+  margin-bottom: var(--sp-1);
+}
+.body :deep(ul) {
+  list-style: none;
+  margin-top: var(--sp-1);
+  margin-bottom: var(--sp-1);
+  padding: 0;
+}
+.body :deep(ul > li) {
+  position: relative;
+  padding-left: 20px;
+  margin: 2px 0;
+}
+.body :deep(ul > li)::before {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 0.8em;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--bullet);
+}
+.body :deep(ol) {
+  padding-left: 20px;
+}
+.body :deep(li p) {
+  margin: 0;
+}
+.body :deep(strong) {
+  font-weight: 700;
+  color: var(--fg-strong);
+}
+.body :deep(blockquote) {
+  margin-top: var(--sp-2);
+  margin-bottom: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--card-muted);
+  border-radius: var(--radius-md);
+}
+.body :deep(blockquote p) {
+  margin: 0;
+}
+/* 对照时可点击的段落和当前点中的段落 */
+.comparing .body :deep(li),
+.comparing .body :deep(.tiptap > p),
+.comparing .body :deep(blockquote p) {
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--ease);
+}
+.comparing .body :deep(li:hover),
+.comparing .body :deep(.tiptap > p:hover) {
+  background: var(--hover-soft);
+}
+.comparing .body :deep(li.is-linked),
+.comparing .body :deep(p.is-linked) {
+  background: var(--primary-soft);
+}
+
+/* ---------------- 右栏 ---------------- */
+.side {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.side-main {
   flex: 1;
+  min-height: 0;
 }
-.danger-btn {
-  background: var(--err);
-  border-color: var(--err);
-  color: #fff;
+.props-area {
+  overflow-y: auto;
+  padding: var(--sp-5);
 }
-.hint-key {
+.side-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--sp-5);
+}
+.side-head h2 {
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-heading);
+  color: var(--fg-strong);
+}
+.source {
+  margin-top: var(--sp-6);
+}
+.source h3 {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-label);
+  color: var(--fg-strong);
+}
+.facts {
+  margin: 0;
+  padding: var(--sp-1) var(--sp-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-sm);
+}
+.fact {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-2) 0;
+}
+.fact + .fact {
+  border-top: 1px solid var(--line);
+}
+.fact dt {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--faint);
+  white-space: nowrap;
+}
+.fact dd {
+  margin: 0;
+  color: var(--fg);
+  text-align: right;
+}
+.fact .file {
+  overflow-wrap: anywhere;
+}
+.compare-btn {
+  margin-top: var(--sp-3);
+  width: 100%;
+  height: var(--h-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  border-radius: var(--radius-md);
+  color: var(--fg);
+}
+
+/* 底部操作：右栏最下面，两种状态下位置不变 */
+.actions {
+  flex: none;
+  padding: var(--sp-4) var(--sp-5);
+  border-top: 1px solid var(--line);
+  view-transition-name: actions;
+}
+.action-row {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-3);
+}
+.btn {
+  height: var(--h-md);
+  padding: 0 var(--sp-5);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-md);
+  white-space: nowrap;
+}
+.btn-primary {
+  flex: 1;
+  max-width: 220px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  border: 0;
+  background: var(--primary);
+  color: var(--on-primary);
+  font-weight: 600;
+}
+.btn-primary:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+.btn-primary:disabled {
+  background: var(--line-strong);
+  opacity: 1;
+}
+.kbd {
+  font-weight: 400;
+  font-size: var(--fs-xs);
   opacity: 0.7;
-  font-size: 12px;
-  margin-left: 4px;
+}
+.btn-secondary {
+  background: var(--card);
+}
+.btn-danger {
+  border: 0;
+  background: var(--err);
+  color: var(--on-primary);
+  font-weight: 600;
+}
+.discard-ask {
+  margin: 0 0 var(--sp-3);
+  font-size: var(--fs-sm);
+  color: var(--fg);
+}
+.field-error {
+  margin: var(--sp-2) 0;
+  font-size: var(--fs-sm);
+  color: var(--err);
+}
+
+/* 正文到原文的连线 */
+.link-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+}
+.link-layer path {
+  fill: none;
+  stroke: var(--primary);
+  stroke-width: 1.5;
+  opacity: 0.55;
+}
+.link-layer circle {
+  fill: var(--primary);
 }
 </style>

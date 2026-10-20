@@ -1,29 +1,109 @@
+/*
+ * 设计令牌（草案）。页面和组件只用这里的变量，不写死颜色、字号、间距、圆角（《代码规范》第 2 节第 4 条）。
+ * 分成几组，开发用的“设计调节页”（/dev/tuner.html）会整组替换来比较效果；
+ * 作者选定后写进 docs/设计规范.md，再把这里的默认值改成选定的值。
+ */
 :root {
-  --bg: #f6f7f9;
-  --card: #fff;
-  --fg: #1f2328;
-  --muted: #6a737d;
-  --line: #dfe3e8;
-  --primary: #2f6fed;
-  --ok: #1a7f37;
-  --err: #cf222e;
-  --warn: #b35900;
-  --warn-bg: #fff4e5;
+  /* ---- 主色（调节页：主色） ---- */
+  --primary: #4b5bd6;
+  --primary-hover: #3e4dc4;
+  --primary-soft: #eef0fc; /* 主色的浅底：选中、高亮、焦点光圈 */
+  --on-primary: #ffffff; /* 主色上的文字 */
+
+  /* ---- 中性色与层次（调节页：层次） ---- */
+  --bg: #f4f5f7; /* 窗口底色 */
+  --card: #ffffff; /* 纸面、右栏 */
+  --card-muted: #f6f7f9; /* 次级底色：引用块 */
+  --panel-border: transparent; /* 纸面和右栏的边框 */
+  --shadow-card: 0 1px 2px rgb(16 24 40 / 4%), 0 4px 16px rgb(16 24 40 / 4%);
+  --panel-gap: var(--sp-4); /* 纸面和右栏之间的距离 */
+  --window-pad: var(--sp-4); /* 面板到窗口边缘的距离 */
+
+  --hover: #f1f2f5; /* 按钮悬停 */
+  --hover-soft: #f7f8fa; /* 可编辑区域悬停 */
+  --fg: #2a3140; /* 正文 */
+  --fg-strong: #12161f; /* 标题 */
+  --muted: #5d6576; /* 次要文字 */
+  --faint: #8d94a3; /* 辅助文字、占位符 */
+  --line: #e7e9ee; /* 分隔线、边框 */
+  --line-strong: #d3d7df; /* 虚线框、悬停边框 */
+  --chip-bg: #f3f4f7; /* 标签、关键词 */
+  --chip-border: transparent;
+  --num-bg: var(--primary-soft); /* 正文小标题的序号 */
+  --num-fg: var(--primary);
+  --bullet: var(--primary); /* 正文列表圆点 */
+  --new: #f0524f; /* “新标签”角标 */
+  --ok: #1a7f4b;
+  --err: #d14343;
+  --warn: #b25e09;
+  --warn-bg: #fff5e8;
+  --shadow-pop: 0 8px 28px rgb(16 24 40 / 12%), 0 1px 3px rgb(16 24 40 / 6%); /* 下拉菜单、编辑栏、提示气泡 */
+
+  /* ---- 圆角（调节页：圆角） ---- */
+  --radius-sm: 8px; /* 小按钮、菜单项 */
+  --radius-md: 12px; /* 输入框、下拉框、按钮 */
+  --panel-radius: 20px; /* 纸面和右栏 */
+  --radius-chip: 999px; /* 标签、关键词 */
+  --radius-num: 50%; /* 小标题序号 */
+  --radius-pill: 999px; /* 角标、胶囊 */
+
+  /* ---- 字重（调节页：字重） ---- */
+  --fw-title: 700; /* 笔记标题 */
+  --fw-heading: 600; /* 正文小标题、区块标题 */
+  --fw-label: 600; /* 属性名 */
+
+  /* ---- 字号 ---- */
+  --fs-2xs: 11px; /* 角标 */
+  --fs-xs: 12px; /* 辅助信息 */
+  --fs-sm: 13px; /* 标签、说明 */
+  --fs-md: 14px; /* 界面默认：按钮、输入框、属性 */
+  --fs-lg: 16px; /* 正文、摘要 */
+  --fs-xl: 20px; /* 正文小标题 */
+  --fs-2xl: 30px; /* 笔记标题 */
+  --fs-deco: 32px; /* 装饰用的引号 */
+
+  /* ---- 间距：4 的倍数（调节页：疏密 会整组放大或缩小） ---- */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+  --sp-7: 48px;
+
+  /* ---- 控件高度 ---- */
+  --h-xs: 28px; /* 编辑栏按钮、横排属性里的小控件 */
+  --h-sm: 32px; /* 标签、关键词 */
+  --h-md: 40px; /* 按钮、输入框、下拉框 */
+
+  --titlebar-h: 44px;
+  --ease: 180ms cubic-bezier(0.2, 0, 0, 1);
+
   font-family: 'Microsoft YaHei UI', 'Microsoft YaHei', system-ui, sans-serif;
-  font-size: 14px;
+  font-size: var(--fs-md);
   color: var(--fg);
   background: var(--bg);
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #16181c;
-    --card: #1f2227;
-    --fg: #e6e8eb;
-    --muted: #9aa3ad;
-    --line: #33373e;
-    --primary: #5b8cff;
-    --ok: #4ac26b;
-    --err: #ff6b6b;
+    --bg: #111318;
+    --card: #191c22;
+    --card-muted: #20242b;
+    --hover: #242830;
+    --hover-soft: #1e2128;
+    --fg: #dde1e8;
+    --fg-strong: #f2f4f8;
+    --muted: #a0a7b4;
+    --faint: #6f7684;
+    --line: #2a2e36;
+    --line-strong: #3a3f49;
+    --chip-bg: #242830;
+    --primary: #7c89ff;
+    --primary-hover: #919cff;
+    --primary-soft: #262b4d;
+    --new: #ff6b68;
+    --ok: #4cc27f;
+    --err: #ff7272;
     --warn: #f0a04b;
     --warn-bg: #33281a;
   }
@@ -34,12 +114,17 @@ body {
 }
 button {
   font: inherit;
-  padding: 6px 14px;
+  height: var(--h-md);
+  padding: 0 var(--sp-4);
   border: 1px solid var(--line);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   background: var(--card);
   color: var(--fg);
   cursor: pointer;
+  transition: background var(--ease);
+}
+button:hover:not(:disabled) {
+  background: var(--hover);
 }
 button:disabled {
   opacity: 0.5;
@@ -48,9 +133,13 @@ button:disabled {
 button.primary {
   background: var(--primary);
   border-color: var(--primary);
-  color: #fff;
+  color: var(--on-primary);
+}
+button.primary:hover:not(:disabled) {
+  background: var(--primary-hover);
 }
 button.link {
+  height: auto;
   border: 0;
   background: none;
   padding: 2px 4px;
@@ -58,4 +147,62 @@ button.link {
 }
 button.link.danger {
   color: var(--err);
+}
+/* 细滚动条，和页面的浅色调一致 */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: var(--radius-pill);
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--faint);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 对照原文时的视图过渡（ConfirmPage 的 setComparing）：
+ * 属性三项从右栏移到标题下，属性卡片淡出，原文面板从右边滑进来 */
+::view-transition-group(*) {
+  animation-duration: 360ms;
+  animation-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+::view-transition-old(props-card) {
+  animation: vt-fade-out 200ms ease both;
+}
+::view-transition-new(source-panel) {
+  animation: vt-slide-in 360ms cubic-bezier(0.2, 0, 0, 1) both;
+}
+::view-transition-old(source-panel) {
+  animation: vt-slide-out 260ms ease both;
+}
+::view-transition-new(props-card) {
+  animation: vt-fade-in 300ms 80ms ease both;
+}
+@keyframes vt-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes vt-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes vt-slide-in {
+  from {
+    transform: translateX(48px);
+    opacity: 0;
+  }
+}
+@keyframes vt-slide-out {
+  to {
+    transform: translateX(48px);
+    opacity: 0;
+  }
 }
