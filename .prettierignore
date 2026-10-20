@@ -1,0 +1,9 @@
+dist/
+node_modules/
+src-tauri/
+s0/
+samples/
+docs/
+*.md
+package-lock.json
+.claude/
