@@ -6,3 +6,4 @@ dist/
 _test_config.json
 src-tauri/gen/
 .claude/launch.json
+dev/screenshots/
