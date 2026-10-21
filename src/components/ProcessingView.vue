@@ -3,7 +3,7 @@
 // 左边一个缩略图大小的预览框：整理前是笔记骨架加一道很淡的光泽；整理时 AI 生成的文字一个字一个字打出来，
 // 骨架被文字挤下去。右边是文件信息和步骤：已完成绿色虚线小圆环，进行中灰色虚线小圆环在转，没开始的不转
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { FileVideo, Image as ImageIcon } from 'lucide-vue-next'
+import { FileText, FileVideo, Image as ImageIcon } from 'lucide-vue-next'
 import { type Job, STEP_LABELS } from '../core/pipeline'
 import type { ErrorCode } from '../core/errors'
 
@@ -84,7 +84,12 @@ function elapsed(s: { startedAt?: number; endedAt?: number }) {
     <!-- 右：文件和步骤 -->
     <div class="status">
       <div class="file">
-        <component :is="job.images ? ImageIcon : FileVideo" class="file-icon" :size="16" aria-hidden="true" />
+        <component
+          :is="job.images ? ImageIcon : job.type === '文字' ? FileText : FileVideo"
+          class="file-icon"
+          :size="16"
+          aria-hidden="true"
+        />
         <span class="file-name">{{ summary.name }}</span>
         <span class="file-info">{{ summary.info }}</span>
       </div>

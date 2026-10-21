@@ -25,9 +25,19 @@ export function buildSystemPrompt(prompts: Prompts, mode: Mode, domains: Domain[
   return prompts._通用.replace('{{领域列表}}', domainList).replace('{{已有标签}}', tags) + '\n\n' + prompts[mode]
 }
 
-/** 原文放进分隔标记里，防止原文中的文字被当作指令（方案第 9.7 节） */
-export function buildUserMessage(sourceDesc: string, text: string): string {
-  return `来源：${sourceDesc}\n\n<<<材料开始>>>\n${text}\n<<<材料结束>>>`
+/**
+ * 原文放进分隔标记里，防止原文中的文字被当作指令（方案第 9.7 节）。
+ * 分享文字（F02，帮 AI 认专有名词）和本次要求（F04，优先于默认规则，见 _通用.md）是用户自己写的，放在标记外面；空的不写
+ */
+export function buildUserMessage(
+  sourceDesc: string,
+  text: string,
+  extra: { shareText?: string; request?: string } = {},
+): string {
+  const lines = [`来源：${sourceDesc}`]
+  if (extra.shareText?.trim()) lines.push(`分享文字：${extra.shareText.trim()}`)
+  if (extra.request?.trim()) lines.push(`本次要求：${extra.request.trim()}`)
+  return `${lines.join('\n')}\n\n<<<材料开始>>>\n${text}\n<<<材料结束>>>`
 }
 
 /** 去空白、去重、去空项，最多保留 max 个；不是字符串的项丢掉 */

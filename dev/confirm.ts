@@ -2,6 +2,7 @@
 // 用固定的示例内容渲染确认页，改样式时对照看；地址加 ?source=1 时直接切到原文对照，
 // 再加 &link=1 时自动点正文第二个小标题下的第一条，显示原文定位和连线（截图用）；
 // ?image=1 用 samples/网页滚动动画.png 看视觉收藏（按一个假的 AI 主体区域自动裁剪），再加 &crop=1 直接打开调整裁剪
+// ?savefail=1 模拟保存失败（见文件末尾）
 import { createApp, h, nextTick, reactive } from 'vue'
 import '../src/style.css'
 import ConfirmPage from '../src/pages/ConfirmPage.vue'
@@ -42,4 +43,15 @@ if (query.has('source')) {
         800,
       )
   })
+}
+// ?savefail=1 模拟收藏库文件夹找不到时点保存，看失败提示框；再加 &closed=1 关掉提示框，看按钮上方那一行
+if (query.has('savefail')) {
+  Object.assign(window, {
+    __TAURI_INTERNALS__: { invoke: () => Promise.reject('收藏库文件夹“D:\\笔记\\收藏库”找不到了，请重新选择') },
+  })
+  setTimeout(() => {
+    document.querySelector<HTMLButtonElement>('.action-row .btn-primary')?.click()
+    if (query.has('closed'))
+      setTimeout(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })), 300)
+  }, 600)
 }

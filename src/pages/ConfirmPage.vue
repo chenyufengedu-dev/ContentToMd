@@ -1,11 +1,23 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useEditor, EditorContent } from '@tiptap/vue-3'
-import { Pencil, Folder, Video, Clock, FileText, Mic, CalendarDays, Image as ImageIcon, Link2 } from 'lucide-vue-next'
+import {
+  CircleAlert,
+  Pencil,
+  Folder,
+  Video,
+  Clock,
+  FileText,
+  Mic,
+  CalendarDays,
+  Image as ImageIcon,
+  Link2,
+} from 'lucide-vue-next'
 import type { Config } from '../core/config'
 import type { Job } from '../core/pipeline'
 import { buildMarkdown, safeFileTitle, today, type NoteImage } from '../core/note'
 import { cropForSave, type Rect } from '../core/image'
+import { saveFailure, type SaveFailure } from '../core/saveFailure'
 import { matchToSource } from '../core/sourceMatch'
 import { removeAttachment, writeAttachment, writeNote } from '../shell/tauri'
 import { editorExtensions, fixCallouts } from '../editor/extensions'
@@ -16,8 +28,15 @@ import EditorToolbar from '../components/EditorToolbar.vue'
 import CropDialog from '../components/CropDialog.vue'
 
 const props = defineProps<{ config: Config; job: Job; existingTags: string[] }>()
-/** saved：笔记相对收藏库的路径，和没写进去的图片（比如“第 2 张”） */
-const emit = defineEmits<{ saved: [string, string[]]; discard: [] }>()
+/** 保存成功页要用的：笔记相对收藏库的路径、没写进去的图片（比如“第 2 张”），以及左边预览框的文字 */
+export interface SavedNote {
+  path: string
+  failedImages: string[]
+  title: string
+  summary: string
+  text: string
+}
+const emit = defineEmits<{ saved: [SavedNote]; discard: []; goSettings: [] }>()
 
 const d = props.job.draft!
 const form = reactive({
@@ -187,7 +206,9 @@ function updateLink() {
 
 // ---------------- 保存 ----------------
 const saving = ref(false)
-const saveError = ref<string | null>(null)
+/** 保存失败：先弹提示框；关掉后按钮上方留一行提醒（设计稿 设计稿/确认页/定稿-保存失败*.webp） */
+const saveError = ref<SaveFailure | null>(null)
+const failDialog = ref(false)
 const titleMissing = computed(() => !form.title.trim())
 const domainName = computed(() => props.config.domains.find((x) => x.id === form.domainId)?.name ?? '其他')
 
@@ -235,14 +256,13 @@ async function save() {
       body: fixCallouts(editor.value.getMarkdown()).trim(),
       image_captions: d.image_captions,
     },
-    // 平台、作者由 F02 分享文字解析填入（S1 第 4 步），这一步先留空
     {
       domain: domainName.value,
       type: props.job.type,
       mode: props.job.mode,
       source: props.job.source ?? '',
-      platform: '',
-      author: '',
+      platform: props.job.platform ?? '',
+      author: props.job.author ?? '',
       created,
       cover: images[0]?.path ?? '',
     },
@@ -250,11 +270,18 @@ async function save() {
   )
   try {
     const rel = await writeNote(props.config.vaultPath, domainName.value, safeFileTitle(title), created, md)
-    emit('saved', rel, failed)
+    emit('saved', {
+      path: rel,
+      failedImages: failed,
+      title,
+      summary: form.summary.trim(),
+      text: editor.value.getText({ blockSeparator: '\n' }),
+    })
   } catch (e) {
     // 保存失败时编辑中的内容保留（方案第 7 节）；刚写进去的图片删掉，不留没人引用的文件
     for (const rel of written) await removeAttachment(props.config.vaultPath, rel).catch(() => {})
-    saveError.value = String(e)
+    saveError.value = saveFailure(String(e))
+    failDialog.value = true
   } finally {
     saving.value = false
   }
@@ -268,7 +295,8 @@ function onKey(e: KeyboardEvent) {
     e.preventDefault()
     save()
   } else if (e.key === 'Escape') {
-    if (comparing.value) setComparing(false)
+    if (failDialog.value) failDialog.value = false
+    else if (comparing.value) setComparing(false)
     else confirmingDiscard.value = false
   }
 }
@@ -420,7 +448,13 @@ onBeforeUnmount(() => {
       />
 
       <footer class="actions">
-        <p v-if="saveError" class="field-error">保存失败：{{ saveError }}</p>
+        <p v-if="saveError && !failDialog" class="save-fail">
+          <CircleAlert :size="14" aria-hidden="true" />
+          <span><b>没有保存：</b>{{ saveError.reason }}</span>
+          <template v-if="saveError.toSettings">
+            ·<button class="link" @click="emit('goSettings')">去设置</button>
+          </template>
+        </p>
         <template v-if="confirmingDiscard">
           <p class="discard-ask">确定放弃这一条吗？已整理的内容不会保存。</p>
           <div class="action-row">
@@ -431,11 +465,26 @@ onBeforeUnmount(() => {
         <div v-else class="action-row">
           <button class="btn btn-secondary" @click="confirmingDiscard = true">放弃</button>
           <button class="btn btn-primary" :disabled="saving || titleMissing" @click="save">
-            {{ saving ? '保存中…' : '保存' }}<span class="kbd">Ctrl+S</span>
+            {{ saving ? '保存中…' : saveError ? '重新保存' : '保存' }}<span class="kbd">Ctrl+S</span>
           </button>
         </div>
       </footer>
     </aside>
+
+    <div v-if="failDialog && saveError" class="fail-mask" @click.self="failDialog = false">
+      <section class="fail-dialog" role="alertdialog" aria-modal="true" aria-labelledby="fail-title">
+        <h2 id="fail-title"><CircleAlert :size="20" aria-hidden="true" />没有保存</h2>
+        <p>{{ saveError.reason }}</p>
+        <p v-if="saveError.toSettings">
+          到<button class="link" @click="emit('goSettings')">设置</button>{{ saveError.next.replace(/^到设置/, '') }}
+        </p>
+        <p v-else>{{ saveError.next }}</p>
+        <div class="fail-buttons">
+          <button class="btn btn-secondary" @click="failDialog = false">知道了</button>
+          <button class="btn btn-primary" @click="save">重新保存</button>
+        </div>
+      </section>
+    </div>
 
     <CropDialog
       v-if="cropping !== null"
@@ -944,6 +993,77 @@ onBeforeUnmount(() => {
   margin: 0 0 var(--sp-3);
   font-size: var(--fs-sm);
   color: var(--fg);
+}
+.save-fail {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-1);
+  margin: 0 0 var(--sp-3);
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+.save-fail svg,
+.save-fail b {
+  flex: none;
+  color: var(--err);
+  font-weight: 500;
+}
+.save-fail span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.save-fail .link {
+  flex: none;
+  padding: 0;
+  font-size: inherit;
+}
+.fail-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: var(--sp-6);
+  background: rgb(15 18 25 / 28%);
+}
+.fail-dialog {
+  width: min(420px, 100%);
+  padding: var(--sp-5) var(--sp-5) var(--sp-4);
+  background: var(--card);
+  border-radius: var(--panel-radius);
+  box-shadow: var(--shadow-pop);
+}
+.fail-dialog h2 {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0 0 var(--sp-3);
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-heading);
+  color: var(--err);
+}
+.fail-dialog p {
+  margin: 0 0 var(--sp-1);
+  font-size: var(--fs-md);
+  line-height: 1.7;
+  color: var(--fg);
+}
+.fail-dialog .link {
+  padding: 0;
+  font-size: inherit;
+}
+.fail-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  margin-top: var(--sp-5);
+}
+.fail-buttons .btn {
+  flex: none;
+  height: var(--h-md);
+  padding: 0 var(--px-md);
 }
 .field-error {
   margin: var(--sp-2) 0;
