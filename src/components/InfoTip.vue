@@ -1,20 +1,58 @@
 <script setup lang="ts">
-// ⓘ 提示：鼠标悬停或用键盘聚焦时显示说明气泡
+// ⓘ 提示：鼠标悬停或用键盘聚焦时显示说明气泡。
+// 气泡挂到页面最外层、按图标位置定位，不会被右栏这类可滚动区域的边缘切掉；靠近窗口边缘时自动往里收
+import { ref } from 'vue'
 import { Info } from 'lucide-vue-next'
 
 defineProps<{ text: string }>()
+
+const btn = ref<HTMLElement>()
+const pos = ref<{ left: number; top: number; below: boolean } | null>(null)
+const MAX_W = 240
+const GAP = 8
+
+function show() {
+  const r = btn.value?.getBoundingClientRect()
+  if (!r) return
+  const below = r.top < 72 // 上面放不下时放到下面
+  const center = r.left + r.width / 2
+  const left = Math.min(Math.max(GAP, center - MAX_W / 2), window.innerWidth - MAX_W - GAP)
+  pos.value = { left, top: below ? r.bottom + GAP : r.top - GAP, below }
+}
+const hide = () => (pos.value = null)
 </script>
 
 <template>
   <span class="tip">
-    <button type="button" class="tip-btn" :aria-label="text"><Info :size="15" aria-hidden="true" /></button>
-    <span class="bubble" role="tooltip">{{ text }}</span>
+    <button
+      ref="btn"
+      type="button"
+      class="tip-btn"
+      :aria-label="text"
+      @mouseenter="show"
+      @mouseleave="hide"
+      @focus="show"
+      @blur="hide"
+    >
+      <Info :size="15" aria-hidden="true" />
+    </button>
+    <Teleport to="body">
+      <Transition name="bubble">
+        <span
+          v-if="pos"
+          class="bubble"
+          :class="{ below: pos.below }"
+          role="tooltip"
+          :style="{ left: `${pos.left}px`, top: `${pos.top}px` }"
+          >{{ text }}</span
+        >
+      </Transition>
+    </Teleport>
   </span>
 </template>
 
 <style scoped>
 .tip {
-  position: relative;
   display: inline-flex;
 }
 .tip-btn {
@@ -34,10 +72,8 @@ defineProps<{ text: string }>()
   color: var(--muted);
 }
 .bubble {
-  position: absolute;
-  z-index: 30;
-  bottom: calc(100% + var(--sp-2));
-  left: 50%;
+  position: fixed;
+  z-index: 100;
   width: max-content;
   max-width: 240px;
   padding: var(--sp-2) var(--sp-3);
@@ -49,19 +85,18 @@ defineProps<{ text: string }>()
   line-height: 1.6;
   white-space: normal;
   box-shadow: var(--shadow-pop);
-  opacity: 0;
-  visibility: hidden;
-  transform: translate(-50%, 4px);
-  transition:
-    opacity var(--ease),
-    transform var(--ease),
-    visibility var(--ease);
+  transform: translateY(-100%);
   pointer-events: none;
 }
-.tip:hover .bubble,
-.tip-btn:focus-visible + .bubble {
-  opacity: 1;
-  visibility: visible;
-  transform: translate(-50%, 0);
+.bubble.below {
+  transform: none;
+}
+.bubble-enter-active,
+.bubble-leave-active {
+  transition: opacity var(--ease);
+}
+.bubble-enter-from,
+.bubble-leave-to {
+  opacity: 0;
 }
 </style>

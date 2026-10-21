@@ -119,7 +119,11 @@ export async function transcribe(s: ServiceConfig, wav: Blob, fetch: Fetch, canc
   return data.text
 }
 
-/** 文字整理 / 看图理解：要求返回 JSON 对象，返回解析后的对象 */
+/**
+ * 文字整理 / 看图理解：要求返回 JSON 对象，返回解析后的对象。
+ * 传了 onText 时用流式请求，边生成边把已生成的内容交给 onText（处理中的预览框用，方案第 11 节）；
+ * 服务商不支持流式、直接返回整段时照常解析
+ */
 export async function chatJson(
   kind: 'text' | 'vision',
   s: ServiceConfig,
@@ -127,6 +131,7 @@ export async function chatJson(
   user: unknown,
   fetch: Fetch,
   cancel?: AbortSignal,
+  onText?: (soFar: string) => void,
 ): Promise<unknown> {
   const res = await request(
     kind,
@@ -138,6 +143,7 @@ export async function chatJson(
       body: JSON.stringify({
         model: s.model.trim(),
         response_format: { type: 'json_object' },
+        ...(onText ? { stream: true } : {}),
         messages: [
           { role: 'system', content: system },
           { role: 'user', content: user },
@@ -147,13 +153,58 @@ export async function chatJson(
     undefined,
     cancel,
   )
-  const data = await res.json().catch(() => null)
-  const content = data?.choices?.[0]?.message?.content
-  if (data?.choices?.[0]?.finish_reason === 'length')
-    throw new AppError('truncated', '内容太长，AI 的输出被截断了', 'finish_reason=length')
+  let content: unknown
+  let finish: unknown
+  if (onText && res.body && /event-stream/i.test(res.headers.get('Content-Type') ?? '')) {
+    ;({ content, finish } = await readStream(res.body, onText, cancel))
+  } else {
+    const data = await res.json().catch(() => null)
+    content = data?.choices?.[0]?.message?.content
+    finish = data?.choices?.[0]?.finish_reason
+  }
+  if (finish === 'length') throw new AppError('truncated', '内容太长，AI 的输出被截断了', 'finish_reason=length')
   try {
-    return JSON.parse(content)
+    return JSON.parse(String(content))
   } catch {
     throw new AppError('format', 'AI 返回的结果格式异常，请点击重试', String(content).slice(0, 500))
   }
+}
+
+/** 读流式返回（SSE）：每行 data: {...}，内容在 choices[0].delta.content，以 data: [DONE] 结束 */
+async function readStream(
+  body: ReadableStream<Uint8Array>,
+  onText: (soFar: string) => void,
+  cancel?: AbortSignal,
+): Promise<{ content: string; finish: unknown }> {
+  const reader = body.getReader()
+  const decoder = new TextDecoder()
+  let buf = ''
+  let content = ''
+  let finish: unknown
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += decoder.decode(value, { stream: true })
+      const lines = buf.split('\n')
+      buf = lines.pop() ?? '' // 最后一行可能还没收全
+      let changed = false
+      for (const line of lines) {
+        const m = /^data:\s*(.*)$/.exec(line.trim())
+        if (!m || m[1] === '[DONE]') continue
+        const choice = JSON.parse(m[1])?.choices?.[0]
+        if (typeof choice?.delta?.content === 'string') {
+          content += choice.delta.content
+          changed = true
+        }
+        if (choice?.finish_reason) finish = choice.finish_reason
+      }
+      if (changed) onText(content)
+    }
+  } catch (e) {
+    if (cancel?.aborted) throw new AppError('cancelled', '已取消')
+    if (e instanceof SyntaxError) throw new AppError('bad_response', '服务返回的结果格式不对，请点击重试', String(e))
+    throw new AppError('network', '网络连接中断，请检查网络后重试', String(e))
+  }
+  return { content, finish }
 }

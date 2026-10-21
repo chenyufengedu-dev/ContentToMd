@@ -89,6 +89,29 @@ export interface NoteMeta {
   cover: string
 }
 
+/**
+ * 处理中的预览框用：从生成到一半的 JSON 里取出标题、摘要、正文的文字（最后一段可能还没写完），
+ * 去掉 JSON 和 Markdown 的符号，只留一行行普通文字。不用于保存，保存用 parseAiResult
+ */
+export function previewText(raw: string): string {
+  const out: string[] = []
+  for (const m of raw.matchAll(/"(title|summary|body)"\s*:\s*"((?:[^"\\]|\\.)*)/g)) {
+    const text = m[2]
+      .replace(/\\(.)/g, (_, c: string) => (c === 'n' ? '\n' : c === 't' ? ' ' : c))
+      .split('\n')
+      .map((l) =>
+        l
+          .replace(/^[\s>#*-]+/, '')
+          .replace(/\[![\w-]+\]-?\s*/g, '')
+          .replace(/\*\*/g, '')
+          .trim(),
+      )
+      .filter(Boolean)
+    out.push(...text)
+  }
+  return out.join('\n')
+}
+
 /** YAML 里统一用 JSON 风格的双引号字符串，避免冒号、井号等特殊字符出错 */
 const q = (s: string) => JSON.stringify(s)
 const list = (xs: string[]) => `[${xs.map(q).join(', ')}]`

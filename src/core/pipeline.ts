@@ -10,6 +10,7 @@ import {
   buildSystemPrompt,
   buildUserMessage,
   parseAiResult,
+  previewText,
   type Mode,
   type NoteDraft,
   type Prompts,
@@ -54,6 +55,8 @@ export interface Job {
   images?: JobImage[]
   /** 用户填的来源链接（选填），写进笔记的 source */
   source?: string
+  /** 整理时 AI 已经生成的文字（去掉了格式），处理中的预览框一个字一个字显示 */
+  preview?: string
 }
 
 export function newJob(fileName: string, type: SourceType, mode: Mode): Job {
@@ -154,7 +157,10 @@ const STEPS: Record<StepId, (job: Job, ctx: RunContext, step: StepState) => Prom
     for (let attempt = 0; ; attempt++) {
       try {
         const parsed = parseAiResult(
-          await chatJson(kind, ctx.config.services[kind], system, user, ctx.fetch, ctx.cancel),
+          await chatJson(kind, ctx.config.services[kind], system, user, ctx.fetch, ctx.cancel, (soFar) => {
+            job.preview = previewText(soFar)
+            ctx.onUpdate()
+          }),
           ctx.config.domains,
         )
         if (!parsed) throw new AppError('format', 'AI 返回的结果缺少标题或正文，请点击重试')

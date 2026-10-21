@@ -71,7 +71,7 @@ const TIPS = {
         <span v-for="t in tags" :key="t" class="chip">
           {{ t }}
           <button class="chip-x" :aria-label="`删除标签 ${t}`" @click="removeTag(t)"><X :size="13" /></button>
-          <span v-if="!known.has(t)" class="new-badge" title="新标签">新</span>
+          <span v-if="!known.has(t)" class="new-dot" title="新标签：收藏库里还没有，保存后会新建" />
         </span>
         <input
           v-if="adding === 'tags'"
@@ -155,16 +155,15 @@ const TIPS = {
   background: var(--hover);
   color: var(--fg-strong);
 }
-.new-badge {
+.new-dot {
+  /* 新标签：右上角一个小红点 */
   position: absolute;
-  top: -9px;
-  right: -8px;
-  padding: 0 5px;
-  border-radius: var(--radius-pill);
+  top: -3px;
+  right: -3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
   background: var(--new);
-  color: var(--on-primary);
-  font-size: var(--fs-2xs);
-  line-height: 1.6;
   box-shadow: 0 0 0 2px var(--card);
 }
 .chip-add {

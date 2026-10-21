@@ -43,9 +43,10 @@ function onPicLoad(i: number, e: Event) {
 function cropView(i: number) {
   const n = naturals.value[i]
   const c: Rect = pics[i].crop ?? { x: 0, y: 0, w: n.w, h: n.h }
-  if (!n.w || !c.w || !c.h) return { box: {}, img: { position: 'static' as const, width: '100%' } }
+  if (!n.w || !c.w || !c.h) return { box: {}, fig: {}, img: { position: 'static' as const, width: '100%' } }
   return {
-    box: { aspectRatio: `${c.w} / ${c.h}`, maxWidth: `calc(var(--pic-max-h) * ${c.w / c.h})` },
+    box: { aspectRatio: `${c.w} / ${c.h}` },
+    fig: { width: `min(100%, calc(var(--pic-max-h) * ${c.w / c.h}))` },
     img: {
       width: `${(n.w / c.w) * 100}%`,
       height: `${(n.h / c.h) * 100}%`,
@@ -326,7 +327,7 @@ onBeforeUnmount(() => {
         </button>
 
         <div v-if="pics.length" class="pics">
-          <figure v-for="(p, i) in pics" :key="picUrls[i]" class="pic">
+          <figure v-for="(p, i) in pics" :key="picUrls[i]" class="pic" :style="cropView(i).fig">
             <div class="pic-crop" :style="cropView(i).box">
               <img
                 :src="picUrls[i]"
@@ -609,11 +610,15 @@ onBeforeUnmount(() => {
   background: var(--line);
 }
 .pics {
-  --pic-max-h: 440px;
+  --pic-max-h: 240px; /* 所有图片按这个高度显示，宽度按比例，太宽时缩到正文宽度；多张时并排 */
   margin-top: var(--sp-4);
   display: flex;
-  flex-direction: column;
+  flex-wrap: wrap;
+  align-items: flex-start;
   gap: var(--sp-3);
+}
+.pic-note {
+  width: 100%;
 }
 .pic {
   position: relative;

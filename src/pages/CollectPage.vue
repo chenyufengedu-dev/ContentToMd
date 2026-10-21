@@ -4,25 +4,13 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef } from 'vue'
 import { type Config, SERVICE_LABELS, isServiceConfigured, type ServiceKind } from '../core/config'
 import { type Mode, MODES, type Prompts, type SourceType, preselectMode } from '../core/note'
-import { type Job, newImageJob, newJob, runJob, STEP_LABELS } from '../core/pipeline'
+import { type Job, newImageJob, newJob, runJob } from '../core/pipeline'
 import { describeError, isAppError, type ErrorCode } from '../core/errors'
 import { checkImages, MAX_IMAGES, readPixels, toAiDataUrl } from '../core/image'
 import { httpFetch, listVaultTags, openNote } from '../shell/tauri'
 import ConfirmPage from './ConfirmPage.vue'
-import {
-  Check,
-  CircleCheck,
-  Circle,
-  FileText,
-  FileVideo,
-  Image as ImageIcon,
-  Link2,
-  LoaderCircle,
-  PenLine,
-  Plus,
-  Upload,
-  X,
-} from 'lucide-vue-next'
+import ProcessingView from '../components/ProcessingView.vue'
+import { CircleCheck, FileText, FileVideo, Image as ImageIcon, Link2, PenLine, Plus, Upload, X } from 'lucide-vue-next'
 
 const props = defineProps<{ config: Config; prompts: Prompts }>()
 const emit = defineEmits<{ goSettings: [] }>()
@@ -154,7 +142,7 @@ const now = ref(Date.now())
 let ticker: number | undefined
 
 const summary = computed(() => {
-  if (images.value.length) return { name: `${images.value.length} 张图片`, info: `图片 · ${mode.value}` }
+  if (images.value.length) return { name: `${images.value.length} 张图片`, info: mode.value }
   if (file.value)
     return {
       name: file.value.name,
@@ -228,14 +216,6 @@ function backToEdit() {
   phase.value = 'drop'
 }
 
-const isAuthError = computed(() => error.value?.code === 'auth')
-const failedStep = computed(() => job.value?.steps.find((s) => s.status === 'failed'))
-
-function elapsed(s: { startedAt?: number; endedAt?: number }) {
-  if (!s.startedAt) return ''
-  return `${Math.round(((s.endedAt ?? now.value) - s.startedAt) / 1000)} 秒`
-}
-
 // ---------------- 保存后 ----------------
 const savedPath = ref('')
 const failedImages = ref<string[]>([])
@@ -295,48 +275,19 @@ onBeforeUnmount(() => {
     </div>
   </main>
 
-  <!-- 处理中 / 失败：放入的内容缩成一行，下面是步骤 -->
-  <main v-else-if="phase !== 'drop' && job" class="page">
-    <div class="card">
-      <div v-if="summary" class="summary-row">
-        <component :is="kind === '图片' ? ImageIcon : FileVideo" :size="18" aria-hidden="true" />
-        <span class="file-name">{{ summary.name }}</span>
-        <span class="muted">{{ summary.info }}</span>
-      </div>
-      <div class="steps">
-        <div v-for="s in job.steps" :key="s.id" class="step" :class="s.status">
-          <span class="icon" aria-hidden="true">
-            <Check v-if="s.status === 'done'" :size="16" />
-            <LoaderCircle v-else-if="s.status === 'running'" class="spin" :size="16" />
-            <X v-else-if="s.status === 'failed'" :size="16" />
-            <Circle v-else :size="8" />
-          </span>
-          <span>{{ STEP_LABELS[s.id] }}</span>
-          <span v-if="s.note" class="muted">{{ s.note }}</span>
-          <span class="muted time">{{ s.status === 'failed' ? '失败' : elapsed(s) }}</span>
-        </div>
-      </div>
-      <div v-if="phase === 'failed' && error" class="failed">
-        <p class="failed-msg">{{ error.message }}</p>
-        <details v-if="error.detail">
-          <summary>详细信息</summary>
-          <pre>{{ error.detail }}</pre>
-        </details>
-      </div>
-      <div class="row actions">
-        <template v-if="phase === 'processing'">
-          <button class="secondary" @click="cancel">取消</button>
-        </template>
-        <template v-else>
-          <span v-if="failedStep" class="muted retry-hint"
-            >从“{{ STEP_LABELS[failedStep.id] }}”这一步重新开始，前面的步骤不用重做</span
-          >
-          <button class="secondary" @click="backToEdit">返回修改</button>
-          <button v-if="isAuthError" class="primary" @click="emit('goSettings')">去设置</button>
-          <button v-else class="primary" @click="run">重试</button>
-        </template>
-      </div>
-    </div>
+  <!-- 处理中 / 失败 -->
+  <main v-else-if="phase !== 'drop' && job && summary" class="page proc-page">
+    <ProcessingView
+      :job="job"
+      :failed="phase === 'failed'"
+      :summary="summary"
+      :error="error"
+      :now="now"
+      @cancel="cancel"
+      @retry="run"
+      @back="backToEdit"
+      @go-settings="emit('goSettings')"
+    />
   </main>
 
   <!-- 投放 -->
@@ -648,73 +599,11 @@ button.secondary:hover:not(:disabled) {
   opacity: 0.7;
   font-size: var(--fs-xs);
 }
-.retry-hint {
-  margin-right: auto;
-}
 
-/* ---- 处理步骤 ---- */
-.steps {
-  margin-top: var(--sp-4);
-  padding-top: var(--sp-3);
-  border-top: 1px solid var(--line);
-}
-.step {
-  display: flex;
-  gap: var(--sp-3);
-  align-items: center;
-  padding: var(--sp-2) 0;
-}
-.icon {
-  width: 16px;
-  display: grid;
-  place-items: center;
-}
-.step.pending {
-  color: var(--faint);
-}
-.step.running {
-  font-weight: var(--fw-heading);
-  color: var(--fg-strong);
-}
-.step.running .icon {
-  color: var(--accent);
-}
-.step.done .icon {
-  color: var(--ok);
-}
-.step.failed .icon,
-.step.failed .time {
-  color: var(--err);
-}
-.spin {
-  animation: spin 1s linear infinite;
-}
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-.time {
-  margin-left: auto;
-}
-.failed {
-  margin-top: var(--sp-3);
-  padding: var(--sp-3) var(--sp-4);
-  border-radius: var(--radius-md);
-  background: var(--card-muted);
-}
-.failed-msg {
-  margin: 0;
-  color: var(--fg-strong);
-}
-.failed details {
-  margin-top: var(--sp-2);
-  font-size: var(--fs-sm);
-  color: var(--muted);
-}
-.failed pre {
-  white-space: pre-wrap;
-  font-size: var(--fs-xs);
+/* ---- 处理中：主体小、四周留白多（设计稿 定稿-处理中-*.webp） ---- */
+.proc-page {
+  max-width: 820px;
+  padding-top: var(--sp-7);
 }
 
 /* ---- 保存成功 ---- */
