@@ -1,7 +1,6 @@
 <script setup lang="ts">
-// 笔记的领域、标签、关键词。两种样式共用一份数据：
-// stack：右栏里竖着排（平时）；inline：标题下面一条横排（对照原文时）。
-// 每一项带 view-transition-name，两种样式切换时由浏览器做位置过渡
+// 笔记的领域、标签、关键词：右栏「属性信息」里竖着排，所有修改都在这里做。
+// 对照原文时标题下那一行只是显示（见 ConfirmPage 的 meta-row），不能改
 import { computed, nextTick, ref } from 'vue'
 import { Plus, X } from 'lucide-vue-next'
 import type { Domain } from '../core/config'
@@ -9,12 +8,9 @@ import SelectBox from './SelectBox.vue'
 import InfoTip from './InfoTip.vue'
 
 const props = defineProps<{
-  variant: 'stack' | 'inline'
   domains: Domain[]
   existingTags: string[]
   domainFallback?: boolean
-  /** 横排时末尾显示的来源摘要，比如“商务礼仪.mp4 · 3:01 · 语音转写” */
-  source?: string
 }>()
 const domainId = defineModel<number>('domainId', { required: true })
 const tags = defineModel<string[]>('tags', { required: true })
@@ -56,26 +52,20 @@ const TIPS = {
 </script>
 
 <template>
-  <div class="props" :class="variant">
-    <div class="field" style="view-transition-name: prop-domain">
+  <div class="props">
+    <div class="field">
       <div class="field-head">
         <span class="label">领域</span>
-        <InfoTip v-if="variant === 'stack'" :text="TIPS.domain" />
+        <InfoTip :text="TIPS.domain" />
       </div>
-      <SelectBox
-        v-model="domainId"
-        class="domain"
-        :options="domainOptions"
-        aria-label="领域"
-        :size="variant === 'stack' ? 'md' : 'sm'"
-      />
-      <p v-if="domainFallback && variant === 'stack'" class="warn">AI 没有选出合适的领域，已暂时放到“其他”，请选一个</p>
+      <SelectBox v-model="domainId" class="domain" :options="domainOptions" aria-label="领域" size="md" />
+      <p v-if="domainFallback" class="warn">AI 没有选出合适的领域，已暂时放到“其他”，请选一个</p>
     </div>
 
-    <div class="field" style="view-transition-name: prop-tags">
+    <div class="field">
       <div class="field-head">
         <span class="label">标签</span>
-        <InfoTip v-if="variant === 'stack'" :text="TIPS.tags" />
+        <InfoTip :text="TIPS.tags" />
       </div>
       <div class="chips">
         <span v-for="t in tags" :key="t" class="chip">
@@ -95,15 +85,15 @@ const TIPS = {
           @keyup.esc="adding = null"
         />
         <button v-else class="chip-add" aria-label="添加标签" @click="startAdding('tags')">
-          <Plus :size="14" /><span v-if="variant === 'stack'">添加标签</span>
+          <Plus :size="14" /><span>添加标签</span>
         </button>
       </div>
     </div>
 
-    <div class="field" style="view-transition-name: prop-keywords">
+    <div class="field">
       <div class="field-head">
         <span class="label">关键词</span>
-        <InfoTip v-if="variant === 'stack'" :text="TIPS.keywords" />
+        <InfoTip :text="TIPS.keywords" />
       </div>
       <div class="chips">
         <span v-for="k in keywords" :key="k" class="chip">
@@ -122,20 +112,14 @@ const TIPS = {
           @keyup.esc="adding = null"
         />
         <button v-else class="chip-add" aria-label="添加关键词" @click="startAdding('keywords')">
-          <Plus :size="14" /><span v-if="variant === 'stack'">添加关键词</span>
+          <Plus :size="14" /><span>添加关键词</span>
         </button>
       </div>
-    </div>
-
-    <div v-if="variant === 'inline' && source" class="field source">
-      <span class="label">来源</span>
-      <span class="source-text">{{ source }}</span>
     </div>
   </div>
 </template>
 
 <style scoped>
-/* ---------- 共用 ---------- */
 .label {
   color: var(--fg-strong);
   font-weight: var(--fw-label);
@@ -199,105 +183,43 @@ const TIPS = {
 .chip-input {
   box-sizing: border-box;
   padding: 0 var(--px-sm);
-  border: 1px solid var(--primary);
+  border: 1px solid var(--accent);
   border-radius: var(--radius-chip);
-  box-shadow: 0 0 0 3px var(--primary-soft);
+  box-shadow: 0 0 0 3px var(--accent-soft);
   background: var(--card);
   color: var(--fg);
   font: inherit;
   outline: none;
 }
 
-/* ---------- 右栏：竖排 ---------- */
-.stack .field + .field {
+.field + .field {
   margin-top: var(--sp-5);
 }
-.stack .field-head {
+.field-head {
   display: flex;
   align-items: center;
   gap: var(--sp-1);
   margin-bottom: var(--sp-2);
   font-size: var(--fs-md);
 }
-.stack .chip {
+.chip {
   height: var(--h-sm);
   padding: 0 calc(var(--px-sm) / 2) 0 var(--px-sm);
   font-size: var(--fs-sm);
 }
-.stack .chip-add {
+.chip-add {
   height: var(--h-sm);
   padding: 0 var(--px-sm);
   font-size: var(--fs-sm);
 }
-.stack .chip-input {
+.chip-input {
   width: 130px;
   height: var(--h-sm);
   font-size: var(--fs-sm);
 }
-.stack .warn {
+.warn {
   margin: var(--sp-2) 0 0;
   font-size: var(--fs-sm);
   color: var(--warn);
-}
-
-/* ---------- 标题下：一条横排 ---------- */
-.inline {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--sp-2) var(--sp-4);
-  padding: var(--sp-2) var(--sp-3);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  font-size: var(--fs-sm);
-}
-.inline .field {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-}
-.inline .field + .field {
-  padding-left: var(--sp-4);
-  border-left: 1px solid var(--line);
-}
-.inline .field-head {
-  display: contents;
-}
-.inline .label {
-  color: var(--faint);
-  font-weight: 400;
-}
-.inline .domain {
-  min-width: 112px;
-}
-.inline .chips {
-  gap: var(--sp-1);
-}
-.inline .chip {
-  height: var(--h-xs);
-  padding: 0 calc(var(--px-sm) / 2 - 2px) 0 calc(var(--px-sm) - 2px);
-  font-size: var(--fs-sm);
-}
-.inline .chip-x {
-  width: 16px;
-  height: 16px;
-}
-.inline .new-badge {
-  top: -7px;
-  right: -6px;
-}
-.inline .chip-add {
-  width: var(--h-xs);
-  height: var(--h-xs);
-  padding: 0;
-  justify-content: center;
-}
-.inline .chip-input {
-  width: 110px;
-  height: var(--h-xs);
-  font-size: var(--fs-sm);
-}
-.inline .source-text {
-  color: var(--muted);
 }
 </style>

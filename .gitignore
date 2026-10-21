@@ -7,3 +7,6 @@ _test_config.json
 src-tauri/gen/
 .claude/launch.json
 dev/screenshots/
+
+# 生图 AI 出的设计稿和参考图（图片大，不进 git）
+设计稿/

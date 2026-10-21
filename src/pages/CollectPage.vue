@@ -297,7 +297,7 @@ const busy = computed(() => phase.value !== 'drop')
 }
 .drop:hover:not(.disabled):not(.has),
 .drop.dragging {
-  border-color: var(--primary);
+  border-color: var(--accent);
   background: var(--hover-soft);
 }
 .drop.disabled,
@@ -362,7 +362,7 @@ const busy = computed(() => phase.value !== 'drop')
   cursor: pointer;
 }
 .radio input {
-  accent-color: var(--primary);
+  accent-color: var(--accent);
 }
 .warn {
   margin-top: var(--sp-3);

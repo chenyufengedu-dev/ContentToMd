@@ -2,7 +2,6 @@
 // 原文对照：和正文并排显示，两边各自滚动。原文按句子显示：
 // 正文点中的那一段对应的句子高亮；没被笔记用到的句子颜色变淡（F30）
 import { computed, nextTick, ref, watch } from 'vue'
-import { FileText, X, CircleHelp } from 'lucide-vue-next'
 import type { Sentence } from '../core/sourceMatch'
 
 const props = defineProps<{
@@ -11,11 +10,10 @@ const props = defineProps<{
   /** 正文点中的段落对应的句子范围；null 表示没点，'none' 表示点了但原文里没找到 */
   active: { from: number; to: number } | 'none' | null
 }>()
-const emit = defineEmits<{ close: []; scroll: [] }>()
+const emit = defineEmits<{ scroll: [] }>()
 
 const textEl = ref<HTMLElement>()
 const unusedCount = computed(() => props.unused.filter(Boolean).length)
-const totalChars = computed(() => props.sentences.reduce((n, s) => n + s.text.length, 0))
 const isActive = (i: number) =>
   props.active && props.active !== 'none' && i >= props.active.from && i <= props.active.to
 
@@ -47,16 +45,7 @@ defineExpose({ activeRect, viewportRect })
 
 <template>
   <aside class="panel" aria-label="原文对照">
-    <header class="head">
-      <span class="icon-tile"><FileText :size="18" /></span>
-      <div class="head-text">
-        <h2>原文对照</h2>
-        <p class="sub">语音转写 · 共 {{ totalChars }} 字</p>
-      </div>
-      <button class="close" aria-label="收起原文" @click="emit('close')"><X :size="18" /></button>
-    </header>
     <p class="hint">
-      <CircleHelp :size="14" aria-hidden="true" />
       点击左边正文的一段，这里会标出它对应的原文。颜色较淡的 {{ unusedCount }} 句是笔记里没有写到的内容。
     </p>
     <p v-if="active === 'none'" class="not-found">
@@ -82,60 +71,11 @@ defineExpose({ activeRect, viewportRect })
   min-height: 0;
   overflow: hidden;
 }
-.head {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-3);
-  padding: var(--sp-5) var(--sp-5) var(--sp-3);
-}
-.icon-tile {
-  width: 34px;
-  height: 34px;
-  border-radius: var(--radius-sm);
-  display: grid;
-  place-items: center;
-  background: var(--primary-soft);
-  color: var(--primary);
-}
-.head-text {
-  flex: 1;
-}
-h2 {
-  margin: 0;
-  font-size: var(--fs-lg);
-  font-weight: 700;
-  color: var(--fg-strong);
-}
-.sub {
-  margin: 2px 0 0;
-  font-size: var(--fs-xs);
-  color: var(--faint);
-}
-.close {
-  width: var(--h-sm);
-  height: var(--h-sm);
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: none;
-  color: var(--muted);
-  display: grid;
-  place-items: center;
-}
 .hint {
-  display: flex;
-  gap: 6px;
-  margin: 0 var(--sp-5);
-  padding: var(--sp-2) var(--sp-3);
-  border-radius: var(--radius-md);
-  background: var(--card-muted);
+  margin: var(--sp-4) var(--sp-5) 0;
   font-size: var(--fs-xs);
   line-height: 1.6;
-  color: var(--muted);
-}
-.hint svg {
-  flex: none;
-  margin-top: 3px;
+  color: var(--faint);
 }
 .not-found {
   margin: var(--sp-2) var(--sp-5) 0;
@@ -160,8 +100,8 @@ h2 {
   color: var(--faint);
 }
 .sentence.active {
-  background: var(--primary-soft);
+  background: var(--accent-soft);
   color: var(--fg-strong);
-  box-shadow: 0 0 0 2px var(--primary-soft);
+  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 </style>

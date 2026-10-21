@@ -368,8 +368,8 @@ input:hover {
   border-color: var(--line-strong);
 }
 input:focus {
-  border-color: var(--primary);
-  box-shadow: 0 0 0 3px var(--primary-soft);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 .domains {
   list-style: none;
