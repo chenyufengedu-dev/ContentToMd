@@ -43,7 +43,30 @@ export const SAMPLE_JOB: Job = {
     summary:
       '商务礼仪的三个重点是摆正位置、端正态度、分清场合：尊重上下平级，态度会像镜子一样回馈自己，礼仪要看对象和场合使用。',
     body: BODY,
+    image_captions: [],
   },
+}
+
+/** 视觉收藏的示例（?image=1）：正文取自固定样本的整理结果 */
+export const SAMPLE_IMAGE_DRAFT = {
+  title: '给 AI 描述网页滚动动画的 6 个术语',
+  domainId: 5,
+  tags: ['网页设计', '动效', '提示词'],
+  keywords: ['Scroll-triggered', 'Parallax', 'Sticky', 'Scroll Snap', '横向滚动'],
+  summary: '一张科普卡片，用六张线框小图把六个滚动动效术语逐一对应到画面表现上。',
+  body: `一张白底科普卡片，用六个线框小图讲清网页滚动动画的六种常见类型。
+
+### 缩略图的排布
+- 六张小卡按 2 行 3 列排布，每张是一个带圆角、带细灰边框的白色浏览器窗口线框。
+- 术语以“英文 + 中文”两行文字压在每张小图下方。
+
+### 六个术语对应的画面
+- Scroll-triggered／滚动触发：窗口里是四块圆角灰色卡片。
+- Sticky／吸顶：左侧一列项目列表，分组标题随滚动固定在列表顶部。
+
+> [!info]- 图片中的文字
+> 给 AI 描述网页滚动动画，记住这 6 个词`,
+  image_captions: ['六个滚动动效术语的科普卡片'],
 }
 
 export const SAMPLE_EXISTING_TAGS = ['商务礼仪', '职场沟通']

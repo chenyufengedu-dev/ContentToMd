@@ -134,6 +134,94 @@ fn write_note(
     Ok(format!("{domain}/{name}"))
 }
 
+/// 写入一张图片：收藏库/附件/年-月/文件名（方案第 10.2、10.4 节）。重名时在扩展名前加 -2、-3……绝不覆盖；
+/// 先写临时文件再改名。返回相对收藏库的路径，比如 附件/2026-10/2026-10-20-标题-1.png
+fn save_attachment(vault: &str, month: &str, name: &str, bytes: &[u8]) -> Result<String, String> {
+    check_segment(month)?;
+    check_segment(name)?;
+    let vault = PathBuf::from(vault);
+    if !vault.is_dir() {
+        return Err(format!(
+            "收藏库文件夹“{}”找不到了，请重新选择",
+            vault.display()
+        ));
+    }
+    let dir = vault.join("附件").join(month);
+    fs::create_dir_all(&dir).map_err(|e| io_msg(&dir, e))?;
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((s, e)) => (s.to_string(), format!(".{e}")),
+        None => (name.to_string(), String::new()),
+    };
+    let mut file = name.to_string();
+    let mut n = 2;
+    while dir.join(&file).exists() {
+        file = format!("{stem}-{n}{ext}");
+        n += 1;
+    }
+    let target = dir.join(&file);
+    let tmp = dir.join(format!(".{file}.tmp"));
+    fs::write(&tmp, bytes).map_err(|e| io_msg(&tmp, e))?;
+    if let Err(e) = fs::rename(&tmp, &target) {
+        let _ = fs::remove_file(&tmp);
+        return Err(io_msg(&target, e));
+    }
+    Ok(format!("附件/{month}/{file}"))
+}
+
+/// 图片内容直接放在请求体里（不转成 JSON 数组，几 MB 的图也快），其余参数放在请求头里，经过 encodeURIComponent
+#[tauri::command]
+fn write_attachment(request: tauri::ipc::Request<'_>) -> Result<String, String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("图片数据格式不对".into());
+    };
+    let header = |k: &str| -> Result<String, String> {
+        let v = request
+            .headers()
+            .get(k)
+            .and_then(|v| v.to_str().ok())
+            .ok_or(format!("缺少参数 {k}"))?;
+        percent_decode(v)
+    };
+    save_attachment(
+        &header("vault")?,
+        &header("month")?,
+        &header("name")?,
+        bytes,
+    )
+}
+
+/// 保存笔记失败时，删掉刚写进去的图片，不在收藏库里留下没人引用的文件。只能删“附件”文件夹里的
+#[tauri::command]
+fn remove_attachment(vault: String, rel_path: String) -> Result<(), String> {
+    let rel = std::path::Path::new(&rel_path);
+    if !rel.starts_with("附件")
+        || rel
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err("只能删除附件文件夹里的图片".into());
+    }
+    let path = PathBuf::from(vault).join(rel);
+    fs::remove_file(&path).map_err(|e| io_msg(&path, e))
+}
+
+fn percent_decode(s: &str) -> Result<String, String> {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            let h = std::str::from_utf8(&b[i + 1..i + 3]).map_err(|_| "参数编码不对")?;
+            out.push(u8::from_str_radix(h, 16).map_err(|_| "参数编码不对")?);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).map_err(|_| "参数编码不对".into())
+}
+
 fn io_msg(path: &std::path::Path, e: std::io::Error) -> String {
     use std::io::ErrorKind::*;
     let why = match e.kind() {
@@ -238,6 +326,8 @@ fn main() {
             folder_has_notes,
             ensure_prompts,
             write_note,
+            write_attachment,
+            remove_attachment,
             list_vault_tags,
             open_note
         ])
@@ -379,5 +469,37 @@ mod tests {
             percent_encode(r"D:\库\a b.md"),
             "D%3A%5C%E5%BA%93%5Ca%20b.md"
         );
+    }
+
+    #[test]
+    fn 图片写进附件按月分文件夹_重名不覆盖() {
+        let v = TempVault::new("att");
+        let a = save_attachment(&v.path(), "2026-10", "2026-10-20-标题-1.png", b"one").unwrap();
+        let b = save_attachment(&v.path(), "2026-10", "2026-10-20-标题-1.png", b"two").unwrap();
+        assert_eq!(a, "附件/2026-10/2026-10-20-标题-1.png");
+        assert_eq!(b, "附件/2026-10/2026-10-20-标题-1-2.png");
+        assert_eq!(fs::read(v.0.join(&a)).unwrap(), b"one");
+        assert!(save_attachment(&v.path(), "..", "x.png", b"x").is_err());
+        assert!(save_attachment(&v.path(), "2026-10", "../x.png", b"x").is_err());
+    }
+
+    #[test]
+    fn 只能删除附件里的图片() {
+        let v = TempVault::new("rm");
+        let a = save_attachment(&v.path(), "2026-10", "a.png", b"x").unwrap();
+        fs::write(v.0.join("笔记.md"), "x").unwrap();
+        assert!(remove_attachment(v.path(), "笔记.md".into()).is_err());
+        assert!(remove_attachment(v.path(), "附件/../笔记.md".into()).is_err());
+        remove_attachment(v.path(), a.clone()).unwrap();
+        assert!(!v.0.join(&a).exists());
+    }
+
+    #[test]
+    fn 请求头参数解码() {
+        assert_eq!(
+            percent_decode("%E9%99%84%E4%BB%B6-1.png").unwrap(),
+            "附件-1.png"
+        );
+        assert_eq!(percent_decode("a%20b").unwrap(), "a b");
     }
 }

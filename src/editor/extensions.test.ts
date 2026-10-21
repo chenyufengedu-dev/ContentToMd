@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
 import { Editor } from '@tiptap/core'
-import { editorExtensions } from './extensions'
+import { editorExtensions, fixCallouts } from './extensions'
 
 const BODY = `### 一、摆正位置
 
@@ -21,7 +21,7 @@ const BODY = `### 一、摆正位置
 
 function roundTrip(md: string): string {
   const editor = new Editor({ extensions: editorExtensions(), content: md, contentType: 'markdown' })
-  const out = editor.getMarkdown()
+  const out = fixCallouts(editor.getMarkdown())
   editor.destroy()
   return out
 }
@@ -29,5 +29,9 @@ function roundTrip(md: string): string {
 describe('正文编辑器的 Markdown 往返', () => {
   it('小标题、列表、加粗、引用原样进出', () => {
     expect(roundTrip(BODY).trim()).toBe(BODY)
+  })
+  it('图片中的文字折叠框（Obsidian callout）原样进出', () => {
+    const md = ['### 配色', '', '- 白底黑字', '', '> [!info]- 图片中的文字', '> 第一行', '> 第二行'].join('\n')
+    expect(roundTrip(md).trim()).toBe(md)
   })
 })

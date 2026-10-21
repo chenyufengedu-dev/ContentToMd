@@ -24,7 +24,19 @@ describe('parseAiResult', () => {
       keywords: ['摆正位置', '端正态度'],
       summary: aiResult.summary,
       body: aiResult.body,
+      image_captions: [],
     })
+    expect(r?.imageRegions).toEqual([])
+  })
+
+  it('图片的说明和主体区域：说明去空白，区域原样交给裁剪去校验', () => {
+    const r = parseAiResult(
+      { ...aiResult, image_captions: [' 首页 ', 2], image_regions: [[0, 0.1, 1, 0.8], 'x'] },
+      domains,
+    )
+    expect(r?.draft.image_captions).toEqual(['首页'])
+    expect(r?.imageRegions).toEqual([[0, 0.1, 1, 0.8], 'x'])
+    expect(parseAiResult({ ...aiResult, image_regions: '坏' }, domains)?.imageRegions).toEqual([])
   })
 
   it('domain_id 不在列表里时改为“其他”并提示', () => {
@@ -118,8 +130,25 @@ describe('buildMarkdown', () => {
     expect(md).toContain('title: "他说: \\"就这样\\""')
   })
 
-  it('截图类笔记注明“仅根据截图整理”', () => {
-    expect(buildMarkdown(draft, { ...meta, type: '图片' })).toContain('> [!note] 仅根据截图整理。')
+  it('图片类笔记注明“仅根据图片整理”，图片放在正文前面', () => {
+    const md = buildMarkdown(draft, { ...meta, type: '图片', cover: '../附件/2026-10/a-1.png' }, [
+      { path: '../附件/2026-10/a-1.png', caption: '首页 [截图]' },
+      { path: '../附件/2026-10/a-2.png', caption: '' },
+    ])
+    expect(md).toContain('cover: "../附件/2026-10/a-1.png"')
+    expect(md).toContain(
+      [
+        '> [!note] 仅根据图片整理。',
+        '![首页 截图](../附件/2026-10/a-1.png)',
+        '![](../附件/2026-10/a-2.png)',
+        draft.body,
+      ].join('\n\n'),
+    )
+  })
+
+  it('路径里的空格和括号转义，不弄坏图片链接', () => {
+    const md = buildMarkdown(draft, { ...meta, type: '图片' }, [{ path: '../附件/2026-10/a (1).png', caption: '' }])
+    expect(md).toContain('![](<../附件/2026-10/a (1).png>)')
   })
 })
 

@@ -54,20 +54,27 @@ const AiResultSchema = z.object({
   keywords: strList(12),
   summary: z.string().trim().catch(''),
   body: z.string().trim().min(1),
+  image_captions: strList(9),
+  /** 每张图的主体区域 [x, y, 宽, 高]（比例），由裁剪（image.ts）逐个校验，这里只要求是数组 */
+  image_regions: z.array(z.unknown()).catch([]),
 })
 
 /** 确认页编辑的笔记内容：AI 结果里的 domain_id 换成已校验的领域编号 */
-export type NoteDraft = Omit<z.infer<typeof AiResultSchema>, 'domain_id'> & { domainId: number }
+export type NoteDraft = Omit<z.infer<typeof AiResultSchema>, 'domain_id' | 'image_regions'> & { domainId: number }
 
 /** 校验 AI 返回的 JSON；必填字段缺失时返回 null，由调用方重试。domain_id 不在列表里时改为“其他” */
-export function parseAiResult(raw: unknown, domains: Domain[]): { draft: NoteDraft; domainFallback: boolean } | null {
+export function parseAiResult(
+  raw: unknown,
+  domains: Domain[],
+): { draft: NoteDraft; domainFallback: boolean; imageRegions: unknown[] } | null {
   const r = AiResultSchema.safeParse(raw)
   if (!r.success) return null
-  const { domain_id, ...rest } = r.data
+  const { domain_id, image_regions, ...rest } = r.data
   const known = domains.some((d) => d.id === domain_id)
   return {
     draft: { ...rest, domainId: known ? domain_id : OTHER_DOMAIN_ID },
     domainFallback: !known,
+    imageRegions: image_regions,
   }
 }
 
@@ -86,8 +93,20 @@ export interface NoteMeta {
 const q = (s: string) => JSON.stringify(s)
 const list = (xs: string[]) => `[${xs.map(q).join(', ')}]`
 
-/** 拼成笔记（方案第 10.3 节） */
-export function buildMarkdown(d: NoteDraft, m: NoteMeta): string {
+/** 笔记里的一张图：path 是相对于笔记文件的位置，比如 ../附件/2026-10/xxx-1.png */
+export interface NoteImage {
+  path: string
+  caption: string
+}
+
+/** 标准 Markdown 图片写法（方案第 10.3 节）；说明里的方括号去掉，路径有空格或括号时用尖括号包起来 */
+const imageLine = (i: NoteImage) => {
+  const alt = i.caption.replace(/[[\]]/g, '').replace(/\s+/g, ' ').trim()
+  return `![${alt}](${/[\s()]/.test(i.path) ? `<${i.path}>` : i.path})`
+}
+
+/** 拼成笔记（方案第 10.3 节）。图片放在正文前面，第一张也是封面（由调用方填 meta.cover） */
+export function buildMarkdown(d: NoteDraft, m: NoteMeta, images: NoteImage[] = []): string {
   const fm = [
     '---',
     `title: ${q(d.title)}`,
@@ -108,7 +127,8 @@ export function buildMarkdown(d: NoteDraft, m: NoteMeta): string {
   if (d.summary) parts.push(`> [!summary] 这条讲什么\n> ${d.summary.replace(/\n+/g, ' ')}`)
   // 来源说明由程序加，不交给 AI
   if (m.type === '音频' || m.type === '视频') parts.push('> [!note] 内容来自语音转写，没有分析画面。')
-  if (m.type === '图片') parts.push('> [!note] 仅根据截图整理。')
+  if (m.type === '图片') parts.push('> [!note] 仅根据图片整理。')
+  for (const i of images) parts.push(imageLine(i))
   parts.push(d.body)
   return parts.join('\n\n') + '\n'
 }
