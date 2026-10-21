@@ -114,8 +114,8 @@ onBeforeUnmount(close)
 .open .trigger,
 .trigger:focus-visible {
   outline: none;
-  border-color: var(--primary);
-  box-shadow: 0 0 0 3px var(--primary-soft);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 .value {
   flex: 1;
@@ -177,7 +177,7 @@ onBeforeUnmount(close)
   background: var(--hover);
 }
 .menu li[aria-selected='true'] {
-  color: var(--primary);
+  color: var(--accent);
   font-weight: 600;
 }
 @keyframes pop {

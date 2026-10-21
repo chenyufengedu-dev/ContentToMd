@@ -10,6 +10,10 @@
   --primary-soft: color-mix(in srgb, #1f2937 9%, white); /* 主色的浅底：选中、高亮、焦点光圈 */
   --on-primary: #ffffff; /* 主色上的文字 */
 
+  /* ---- 强调色：只用在选中、高亮、链接、焦点框、小标题序号这类小面积的地方；主按钮仍用墨黑 ---- */
+  --accent: #5b5bd6;
+  --accent-soft: color-mix(in srgb, #5b5bd6 10%, white); /* 强调色的浅底 */
+
   /* ---- 中性色与层次（调节页：层次） ---- */
   --bg: #f4f5f7; /* 窗口底色 */
   --card: #ffffff; /* 纸面、右栏 */
@@ -29,9 +33,9 @@
   --line-strong: #d3d7df; /* 虚线框、悬停边框 */
   --chip-bg: #f3f4f7; /* 标签、关键词 */
   --chip-border: transparent;
-  --num-bg: var(--primary-soft); /* 正文小标题的序号 */
-  --num-fg: var(--primary);
-  --bullet: var(--primary); /* 正文列表圆点 */
+  --num-bg: var(--accent-soft); /* 正文小标题的序号 */
+  --num-fg: var(--accent);
+  --bullet: var(--accent); /* 正文列表圆点 */
   --new: #f0524f; /* “新标签”角标 */
   --ok: #1a7f4b;
   --err: #d14343;
@@ -107,6 +111,8 @@
     --primary-hover: #ffffff;
     --primary-soft: #2a2e36;
     --on-primary: #111318;
+    --accent: #8f8ff0;
+    --accent-soft: #272a4a;
     --new: #ff6b68;
     --ok: #4cc27f;
     --err: #ff7272;
@@ -149,7 +155,7 @@ button.link {
   border: 0;
   background: none;
   padding: 2px 4px;
-  color: var(--primary);
+  color: var(--accent);
 }
 button.link.danger {
   color: var(--err);

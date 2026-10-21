@@ -1,6 +1,6 @@
 <script setup lang="ts">
-// 正文编辑栏：点进正文时出现在正文上方，点到别处时收起（由确认页控制显示）。
-// 按钮用 mousedown.prevent，点按钮时正文不会失去焦点，编辑栏也就不会闪掉
+// 正文编辑栏：固定在正文上方的一排浅灰图标，没有底色和边框，平时几乎不被注意。
+// 按钮用 mousedown.prevent，点按钮时正文不会失去焦点
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import type { Editor } from '@tiptap/vue-3'
 import { Undo2, Redo2, Bold, List, ListOrdered, Quote } from 'lucide-vue-next'
@@ -30,7 +30,7 @@ const setHeading = () => props.editor.chain().focus().setHeading({ level: 3 }).r
       :disabled="!canUndo()"
       @click="editor.chain().focus().undo().run()"
     >
-      <Undo2 :size="17" />
+      <Undo2 :size="16" />
     </button>
     <button
       class="tool"
@@ -39,7 +39,7 @@ const setHeading = () => props.editor.chain().focus().setHeading({ level: 3 }).r
       :disabled="!canRedo()"
       @click="editor.chain().focus().redo().run()"
     >
-      <Redo2 :size="17" />
+      <Redo2 :size="16" />
     </button>
     <span class="divider" />
     <div class="segmented" role="group" aria-label="段落类型">
@@ -54,7 +54,7 @@ const setHeading = () => props.editor.chain().focus().setHeading({ level: 3 }).r
       title="加粗 Ctrl+B"
       @click="editor.chain().focus().toggleBold().run()"
     >
-      <Bold :size="17" />
+      <Bold :size="16" />
     </button>
     <button
       class="tool"
@@ -63,7 +63,7 @@ const setHeading = () => props.editor.chain().focus().setHeading({ level: 3 }).r
       title="列表"
       @click="editor.chain().focus().toggleBulletList().run()"
     >
-      <List :size="17" />
+      <List :size="16" />
     </button>
     <button
       class="tool"
@@ -72,7 +72,7 @@ const setHeading = () => props.editor.chain().focus().setHeading({ level: 3 }).r
       title="编号列表"
       @click="editor.chain().focus().toggleOrderedList().run()"
     >
-      <ListOrdered :size="17" />
+      <ListOrdered :size="16" />
     </button>
     <button
       class="tool"
@@ -81,7 +81,7 @@ const setHeading = () => props.editor.chain().focus().setHeading({ level: 3 }).r
       title="引用"
       @click="editor.chain().focus().toggleBlockquote().run()"
     >
-      <Quote :size="17" />
+      <Quote :size="16" />
     </button>
   </div>
 </template>
@@ -91,11 +91,6 @@ const setHeading = () => props.editor.chain().focus().setHeading({ level: 3 }).r
   display: flex;
   align-items: center;
   gap: 2px;
-  padding: var(--sp-1);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  background: var(--card);
-  box-shadow: var(--shadow-pop);
 }
 .tool {
   width: var(--h-xs);
@@ -104,7 +99,7 @@ const setHeading = () => props.editor.chain().focus().setHeading({ level: 3 }).r
   border: 0;
   border-radius: var(--radius-sm);
   background: none;
-  color: var(--muted);
+  color: var(--faint);
   display: grid;
   place-items: center;
 }
@@ -112,38 +107,36 @@ const setHeading = () => props.editor.chain().focus().setHeading({ level: 3 }).r
   background: var(--hover);
   color: var(--fg-strong);
 }
+.tool:disabled {
+  opacity: 0.4;
+}
 .tool.on {
-  background: var(--primary-soft);
-  color: var(--primary);
+  color: var(--accent);
 }
 .divider {
   width: 1px;
-  height: 16px;
-  margin: 0 var(--sp-1);
+  height: 14px;
+  margin: 0 var(--sp-2);
   background: var(--line);
 }
 .segmented {
   display: flex;
-  padding: 2px;
-  border-radius: var(--radius-sm);
-  background: var(--card-muted);
+  gap: 2px;
 }
 .seg {
-  height: calc(var(--h-xs) - 4px);
-  padding: 0 var(--px-sm);
+  height: var(--h-xs);
+  padding: 0 var(--sp-2);
   border: 0;
-  border-radius: calc(var(--radius-sm) - 2px);
+  border-radius: var(--radius-sm);
   background: none;
-  color: var(--muted);
+  color: var(--faint);
   font-size: var(--fs-sm);
 }
 .seg:hover:not(:disabled) {
-  background: none;
+  background: var(--hover);
   color: var(--fg-strong);
 }
 .seg.on {
-  background: var(--card);
   color: var(--fg-strong);
-  box-shadow: var(--shadow-card);
 }
 </style>

@@ -1,6 +1,6 @@
 <script setup lang="ts">
-// 自绘标题栏：软件名、页面切换、窗口按钮。空白处可以拖动窗口、双击最大化
-import { Star, Settings, Minus, Square, X } from 'lucide-vue-next'
+// 自绘标题栏：软件名、正中间的页面切换（胶囊形分段）、窗口按钮。空白处可以拖动窗口、双击最大化
+import { Minus, Square, X } from 'lucide-vue-next'
 import { minimizeWindow, toggleMaximizeWindow, closeWindow } from '../shell/tauri'
 
 defineProps<{ page: 'home' | 'settings'; homeDisabled: boolean }>()
@@ -13,21 +13,21 @@ const emit = defineEmits<{ navigate: ['home' | 'settings'] }>()
       <span class="logo" aria-hidden="true" />
       <span data-tauri-drag-region>ContentToMd</span>
     </div>
-    <nav class="nav">
+    <nav class="nav" aria-label="页面">
       <button
         class="nav-item"
         :aria-current="page === 'home' ? 'page' : undefined"
         :disabled="homeDisabled"
         @click="emit('navigate', 'home')"
       >
-        <Star :size="16" />收藏
+        收藏
       </button>
       <button
         class="nav-item"
         :aria-current="page === 'settings' ? 'page' : undefined"
         @click="emit('navigate', 'settings')"
       >
-        <Settings :size="16" />设置
+        设置
       </button>
     </nav>
     <div class="window-controls">
@@ -40,6 +40,7 @@ const emit = defineEmits<{ navigate: ['home' | 'settings'] }>()
 
 <style scoped>
 .titlebar {
+  position: relative;
   height: var(--titlebar-h);
   display: flex;
   align-items: center;
@@ -68,30 +69,37 @@ const emit = defineEmits<{ navigate: ['home' | 'settings'] }>()
   border: 1.5px solid var(--on-primary);
 }
 .nav {
-  margin-left: auto;
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
-  gap: var(--sp-1);
-  margin-right: var(--sp-3);
-}
-.nav-item {
-  height: var(--h-sm);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 var(--px-sm);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: none;
-  color: var(--muted);
-  font-size: var(--fs-sm);
-}
-.nav-item[aria-current='page'] {
-  color: var(--primary);
-}
-.nav-item:hover:not(:disabled) {
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--radius-pill);
   background: var(--hover);
 }
+.nav-item {
+  height: var(--h-xs);
+  min-width: 72px;
+  padding: 0 var(--px-md);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: none;
+  color: var(--muted);
+  font-size: var(--fs-md);
+}
+.nav-item:hover:not(:disabled) {
+  background: none;
+  color: var(--fg-strong);
+}
+.nav-item[aria-current='page'] {
+  background: var(--card);
+  color: var(--fg-strong);
+  font-weight: var(--fw-label);
+  box-shadow: var(--shadow-card);
+}
 .window-controls {
+  margin-left: auto;
   display: flex;
   height: 100%;
 }

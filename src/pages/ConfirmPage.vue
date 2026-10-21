@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useEditor, EditorContent } from '@tiptap/vue-3'
-import { Pencil, Columns2, Video, Clock, FileText, Mic, CalendarDays } from 'lucide-vue-next'
+import { Pencil, Folder, Video, Clock, FileText, Mic, CalendarDays } from 'lucide-vue-next'
 import type { Config } from '../core/config'
 import type { Job } from '../core/pipeline'
 import { buildMarkdown, safeFileTitle, today } from '../core/note'
@@ -12,7 +12,6 @@ import { linkedBlockKey } from '../editor/linkedBlock'
 import NoteProps from '../components/NoteProps.vue'
 import SourcePanel from '../components/SourcePanel.vue'
 import EditorToolbar from '../components/EditorToolbar.vue'
-import InfoTip from '../components/InfoTip.vue'
 
 const props = defineProps<{ config: Config; job: Job; existingTags: string[] }>()
 const emit = defineEmits<{ saved: [string]; discard: [] }>()
@@ -28,27 +27,24 @@ const form = reactive({
 const created = today()
 const transcript = props.job.transcript ?? ''
 
-// 正文获得焦点时显示编辑栏，失去焦点时收起
-const editorFocused = ref(false)
 const editor = useEditor({
   extensions: editorExtensions(),
   content: d.body,
   contentType: 'markdown',
-  onFocus: () => (editorFocused.value = true),
-  onBlur: () => (editorFocused.value = false),
 })
 
 const duration = computed(() => {
   const s = Math.round(props.job.duration ?? 0)
   return s ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` : ''
 })
-const sourceSummary = computed(() => [props.job.fileName, duration.value, '语音转写'].filter(Boolean).join(' · '))
 
 // ---------------- 对照原文 ----------------
-// 两种状态：平时属性在右栏；对照时右栏换成原文，属性移到标题下面。
+// 右栏两个标签页：「属性信息」（默认，所有修改在这里做）和「原文对照」。
+// 对照原文时，标题下多出一行属性（只看不改），点它回到属性信息。
 // 用浏览器的视图过渡让这次切换平滑（WebView2 支持；不支持时直接切换）
 const comparing = ref(false)
 function setComparing(on: boolean) {
+  if (on === comparing.value) return
   let applied = false
   const apply = async () => {
     if (applied) return
@@ -236,23 +232,26 @@ onBeforeUnmount(() => {
           <Pencil class="edit-hint" :size="16" aria-hidden="true" />
         </label>
 
-        <NoteProps
+        <!-- 对照原文时才出现：右栏属性的只读摘要，点一下回到属性信息去修改 -->
+        <button
           v-if="comparing"
-          v-model:domain-id="form.domainId"
-          v-model:tags="form.tags"
-          v-model:keywords="form.keywords"
-          class="inline-props"
-          variant="inline"
-          :domains="config.domains"
-          :existing-tags="existingTags"
-          :source="sourceSummary"
-        />
+          class="meta-row"
+          style="view-transition-name: meta-row"
+          title="在右边的属性信息里修改"
+          @click="setComparing(false)"
+        >
+          <span class="meta"><Folder :size="14" aria-hidden="true" />{{ domainName }}</span>
+          <span v-for="t in form.tags" :key="t" class="meta-chip">{{ t }}</span>
+          <span class="meta-sep" aria-hidden="true" />
+          <span class="meta meta-source"
+            ><Video :size="14" aria-hidden="true" /><span>{{
+              [job.fileName, duration, '语音转写', created].filter(Boolean).join(' · ')
+            }}</span></span
+          >
+        </button>
 
-        <!-- 编辑栏浮在分隔线上方，不占位置：出现和收起时正文不跳动，标题和正文之间也不留空白 -->
-        <div class="toolbar-slot">
-          <Transition name="toolbar">
-            <EditorToolbar v-if="editor && editorFocused" :editor="editor" />
-          </Transition>
+        <div class="toolbar-row">
+          <EditorToolbar v-if="editor" :editor="editor" />
         </div>
 
         <div class="body-wrap" style="view-transition-name: note-body">
@@ -262,16 +261,16 @@ onBeforeUnmount(() => {
     </article>
 
     <aside class="side">
+      <div class="tabs" role="tablist" aria-label="右栏">
+        <button role="tab" class="tab" :aria-selected="comparing" @click="setComparing(true)">原文对照</button>
+        <button role="tab" class="tab" :aria-selected="!comparing" @click="setComparing(false)">属性信息</button>
+      </div>
+
       <div v-if="!comparing" class="side-main props-area" style="view-transition-name: props-card">
-        <div class="side-head">
-          <h2>属性信息</h2>
-          <InfoTip text="这些信息会写进笔记开头，用来分类和以后查找" />
-        </div>
         <NoteProps
           v-model:domain-id="form.domainId"
           v-model:tags="form.tags"
           v-model:keywords="form.keywords"
-          variant="stack"
           :domains="config.domains"
           :existing-tags="existingTags"
           :domain-fallback="job.domainFallback"
@@ -301,7 +300,6 @@ onBeforeUnmount(() => {
               <dd>{{ created }}</dd>
             </div>
           </dl>
-          <button class="compare-btn" @click="setComparing(true)"><Columns2 :size="17" />查看原文对比</button>
         </div>
       </div>
 
@@ -313,7 +311,6 @@ onBeforeUnmount(() => {
         :sentences="coverage.sentences"
         :unused="coverage.unused"
         :active="active"
-        @close="setComparing(false)"
         @scroll="updateLink"
       />
 
@@ -337,7 +334,9 @@ onBeforeUnmount(() => {
 
     <svg v-if="link" class="link-layer" aria-hidden="true">
       <path :d="link" />
-      <circle :cx="link.split(' ').at(-2)" :cy="link.split(' ').at(-1)" r="3" />
+      <!-- 两端各一个空心圆点 -->
+      <circle :cx="link.split(' ')[1]" :cy="link.split(' ')[2]" r="3.5" />
+      <circle :cx="link.split(' ').at(-2)" :cy="link.split(' ').at(-1)" r="3.5" />
     </svg>
   </main>
 </template>
@@ -348,13 +347,13 @@ onBeforeUnmount(() => {
   height: calc(100vh - var(--titlebar-h));
   box-sizing: border-box;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) clamp(300px, 26vw, 380px);
+  grid-template-columns: minmax(0, 1fr) clamp(300px, 30vw, 460px);
   gap: var(--panel-gap);
   padding: var(--window-pad);
   padding-top: 0;
 }
 .confirm.comparing {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 0.85fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.8fr);
 }
 
 /* 纸面和右栏共用的面板外观：由“层次”令牌决定是平铺还是卡片 */
@@ -398,12 +397,13 @@ onBeforeUnmount(() => {
 .editable:focus-within {
   background: var(--card);
   box-shadow:
-    0 0 0 1px var(--primary),
-    0 0 0 4px var(--primary-soft);
+    0 0 0 1px var(--accent),
+    0 0 0 4px var(--accent-soft);
 }
 .editable textarea {
   /* 输入框按内容自动变宽变高，铅笔图标紧跟在文字后面 */
   field-sizing: content;
+  overflow: hidden; /* 换行时不出现滚动条 */
   max-width: 100%;
   min-width: 2em;
   border: 0;
@@ -423,10 +423,12 @@ onBeforeUnmount(() => {
   color: var(--faint);
 }
 .editable:focus-within .edit-hint {
-  color: var(--primary);
+  color: var(--accent);
 }
 /* 字号字重写在外层，输入框用 font: inherit 继承（写在输入框上会被 .editable textarea 覆盖） */
 .title-line {
+  /* 标题折行时两行长度接近，不会剩一两个字单独成行 */
+  text-wrap: balance;
   font-size: var(--fs-2xl);
   font-weight: var(--fw-title);
   line-height: 1.35;
@@ -439,33 +441,68 @@ onBeforeUnmount(() => {
   line-height: 1.7;
   color: var(--muted);
 }
-.inline-props {
-  margin-top: var(--sp-4);
-}
-.toolbar-slot {
-  /* 高度为 0，编辑栏向上伸出；吸顶时让出编辑栏自身高度，保证它停在窗口顶部以内 */
-  position: sticky;
-  top: calc(var(--sp-2) + var(--h-xs) + var(--sp-2) * 2 + 2px);
-  z-index: 5;
-  height: 0;
-  margin-top: var(--sp-5);
+.meta-row {
+  /* 只读的一行：浅灰小字，和摘要一样低调 */
+  width: 100%;
+  height: auto;
+  margin-top: var(--sp-2);
+  padding: var(--sp-1) 0;
+  /* 始终一行：窗口窄时来源信息末尾省略，不折行 */
   display: flex;
-  align-items: flex-end;
+  align-items: center;
+  gap: var(--sp-2);
+  overflow: hidden;
+  white-space: nowrap;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  text-align: left;
 }
-.toolbar-enter-active,
-.toolbar-leave-active {
-  transition:
-    opacity var(--ease),
-    transform var(--ease);
+.meta-row:hover:not(:disabled) {
+  background: none;
+  color: var(--fg-strong);
 }
-.toolbar-enter-from,
-.toolbar-leave-to {
-  opacity: 0;
-  transform: translateY(-4px);
+.meta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.meta svg {
+  flex: none;
+  color: var(--faint);
+}
+.meta-source {
+  min-width: 0;
+}
+.meta-source span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.meta-chip {
+  flex: none;
+}
+.meta-chip {
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-chip);
+  background: var(--chip-bg);
+  line-height: 1.8;
+}
+.meta-sep {
+  flex: none;
+  width: 1px;
+  height: 12px;
+  margin: 0 var(--sp-1);
+  background: var(--line);
+}
+.toolbar-row {
+  margin-top: var(--sp-4);
+  padding: var(--sp-2) 0;
+  border-top: 1px solid var(--line);
 }
 .body-wrap {
-  padding-top: var(--sp-4);
-  border-top: 1px solid var(--line);
+  padding-top: var(--sp-1);
 }
 
 /* ---------------- 正文：所见即所得编辑器里的排版 ---------------- */
@@ -473,6 +510,8 @@ onBeforeUnmount(() => {
   font-size: var(--fs-lg);
   line-height: 1.7;
   color: var(--fg);
+  /* 段落最后一行不只剩一两个字 */
+  text-wrap: pretty;
 }
 .body :deep(.tiptap) {
   outline: none;
@@ -584,7 +623,7 @@ onBeforeUnmount(() => {
 }
 .comparing .body :deep(li.is-linked),
 .comparing .body :deep(p.is-linked) {
-  background: var(--primary-soft);
+  background: var(--accent-soft);
 }
 
 /* ---------------- 右栏 ---------------- */
@@ -602,17 +641,32 @@ onBeforeUnmount(() => {
   overflow-y: auto;
   padding: var(--sp-5);
 }
-.side-head {
+/* 右栏顶部的两个标签页：当前那个深色字、下面一条强调色细线 */
+.tabs {
+  flex: none;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--sp-5);
+  gap: var(--sp-5);
+  margin: 0 var(--sp-5);
+  padding-top: var(--sp-3);
+  border-bottom: 1px solid var(--line);
 }
-.side-head h2 {
-  margin: 0;
-  font-size: var(--fs-lg);
-  font-weight: var(--fw-heading);
+.tab {
+  height: var(--h-md);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--faint);
+  box-shadow: inset 0 -2px 0 transparent;
+}
+.tab:hover:not(:disabled) {
+  background: none;
   color: var(--fg-strong);
+}
+.tab[aria-selected='true'] {
+  color: var(--fg-strong);
+  font-weight: var(--fw-label);
+  box-shadow: inset 0 -2px 0 var(--accent);
 }
 .source {
   margin-top: var(--sp-6);
@@ -626,7 +680,7 @@ onBeforeUnmount(() => {
 .facts {
   margin: 0;
   padding: var(--sp-1) var(--sp-4);
-  border: 1px solid var(--line);
+  background: var(--card-muted);
   border-radius: var(--radius-md);
   font-size: var(--fs-sm);
 }
@@ -655,18 +709,6 @@ onBeforeUnmount(() => {
 .fact .file {
   overflow-wrap: anywhere;
 }
-.compare-btn {
-  margin-top: var(--sp-3);
-  width: 100%;
-  height: var(--h-md);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--sp-2);
-  border-radius: var(--radius-md);
-  color: var(--fg);
-}
-
 /* 底部操作：右栏最下面，两种状态下位置不变 */
 .actions {
   flex: none;
@@ -711,7 +753,12 @@ onBeforeUnmount(() => {
   opacity: 0.7;
 }
 .btn-secondary {
-  background: var(--card);
+  /* 次按钮不加边框，浅灰底，和整体的轻盈一致 */
+  border: 0;
+  background: var(--hover);
+}
+.btn-secondary:hover:not(:disabled) {
+  background: var(--line);
 }
 .btn-danger {
   border: 0;
@@ -741,11 +788,13 @@ onBeforeUnmount(() => {
 }
 .link-layer path {
   fill: none;
-  stroke: var(--primary);
+  stroke: var(--accent);
   stroke-width: 1.5;
   opacity: 0.55;
 }
 .link-layer circle {
-  fill: var(--primary);
+  fill: var(--card);
+  stroke: var(--accent);
+  stroke-width: 1.5;
 }
 </style>
