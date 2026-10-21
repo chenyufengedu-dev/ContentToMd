@@ -1,5 +1,5 @@
 // 设置页、投放页预览（只在开发时用：npx vite 后打开 /dev/pages.html）。
-// ?p=settings 设置页；?p=proc 处理中（出字前），&typing=1 模拟逐字生成，&failed=1 处理失败。
+// ?p=settings 设置页（&freeze=卡片id:毫秒 点开这张卡片并把动画停在第几毫秒，逐帧检查动画用）；?p=proc 处理中（出字前），&typing=1 模拟逐字生成，&failed=1 处理失败。
 // 不连外壳，点保存、选文件夹会报错，只用来对照样式
 import { createApp, h, reactive, ref } from 'vue'
 import '../src/style.css'
@@ -60,3 +60,28 @@ const body =
 createApp({
   render: () => [h(TitleBar, { page: p === 'settings' ? 'settings' : 'home', homeDisabled: false }), body()],
 }).mount('#app')
+
+// 逐帧检查设置页的切换动画：点开指定卡片，动画停在指定的毫秒（可加 &from=卡片id 先展开另一张）
+const freeze = query.get('freeze')
+if (freeze) {
+  const [id, ms] = freeze.split(':')
+  const click = (cid: string) =>
+    document
+      .querySelector<HTMLElement>(`[data-card=${cid}] input, [data-card=${cid}] .path, [data-card=${cid}] li`)
+      ?.click()
+  setTimeout(async () => {
+    const from = query.get('from')
+    if (from) {
+      click(from)
+      await new Promise((r) => setTimeout(r, 30))
+      document.getAnimations().forEach((a) => a.finish())
+      await new Promise((r) => setTimeout(r, 400))
+    }
+    click(id)
+    await new Promise((r) => setTimeout(r, 20))
+    document.getAnimations().forEach((a) => {
+      a.pause()
+      a.currentTime = Number(ms)
+    })
+  }, 500)
+}
