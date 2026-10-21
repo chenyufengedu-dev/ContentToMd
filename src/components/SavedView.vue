@@ -2,10 +2,17 @@
 // 保存成功（设计稿：设计稿/保存成功/定稿-保存成功.webp）。和处理中成一对：
 // 左边同一个预览框，放这条笔记的真实文字缩略预览；右边“已保存”、文件名、所在文件夹和两个按钮
 import { computed } from 'vue'
-import { Check, CircleAlert, ExternalLink, Folder } from 'lucide-vue-next'
+import { Check, CircleAlert, Coins, ExternalLink, Folder } from 'lucide-vue-next'
 import type { SavedNote } from '../pages/ConfirmPage.vue'
+import { formatYuan } from '../core/cost'
 
-const props = defineProps<{ note: SavedNote; vaultName: string; openError: string | null }>()
+const props = defineProps<{
+  note: SavedNote
+  vaultName: string
+  openError: string | null
+  /** 这一条的估算花费（元，F14）；没填价格、算不出来时不显示 */
+  cost?: number
+}>()
 const emit = defineEmits<{ open: []; next: [] }>()
 
 const parts = computed(() => props.note.path.split(/[\\/]/))
@@ -37,6 +44,9 @@ const lines = computed(() =>
       <p class="done"><Check :size="14" aria-hidden="true" />已保存</p>
       <p class="file-name" :title="fileName">{{ fileName }}</p>
       <p class="folder"><Folder :size="14" aria-hidden="true" />{{ folder }}</p>
+      <p v-if="cost !== undefined" class="cost">
+        <Coins :size="14" aria-hidden="true" />本条花费{{ formatYuan(cost) }}
+      </p>
 
       <div v-if="note.failedImages.length" class="img-fail">
         <p class="img-fail-title">
@@ -160,8 +170,17 @@ const lines = computed(() =>
   font-size: var(--fs-sm);
   color: var(--faint);
 }
-.folder svg {
+.folder svg,
+.cost svg {
   flex: none;
+}
+.cost {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-top: var(--sp-1) !important;
+  font-size: var(--fs-sm);
+  color: var(--faint);
 }
 .img-fail {
   margin-top: var(--sp-4);

@@ -38,6 +38,15 @@ const serviceSchema = (kind: ServiceKind) =>
       baseUrl: z.string().catch(DEFAULT_SERVICES[kind].baseUrl), // OpenAI 兼容接口地址，不含 /chat/completions 等路径
       model: z.string().catch(DEFAULT_SERVICES[kind].model),
       apiKey: z.string().catch(''),
+      // 单价（元 / 百万 tokens，选填，F14）：填了才算花费；填错的项当没填
+      price: z
+        .object({
+          input: z.number().nonnegative().optional().catch(undefined),
+          cachedInput: z.number().nonnegative().optional().catch(undefined),
+          output: z.number().nonnegative().optional().catch(undefined),
+        })
+        .optional()
+        .catch(undefined),
     })
     .catch({ ...DEFAULT_SERVICES[kind], apiKey: '' })
 

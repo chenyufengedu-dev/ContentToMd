@@ -166,6 +166,46 @@ describe('chatJson 边生成边返回（方案第 11 节：整理结果一边生
     )
   })
 
+  it('流式最后一块里的用量交给 onUsage，请求里要了用量（F14）', async () => {
+    let body: Record<string, unknown> = {}
+    const usage = { prompt_tokens: 10, completion_tokens: 5, prompt_cache_hit_tokens: 4 }
+    const fetch: Fetch = async (url, init) => {
+      body = JSON.parse(String(init?.body))
+      const res = await sse(['{}'])(url, init)
+      const extra = `data: ${JSON.stringify({ choices: [], usage })}\n\n`
+      const text = (await res.text()).replace('data: [DONE]', extra + 'data: [DONE]')
+      return new Response(text, { headers: { 'Content-Type': 'text/event-stream' } })
+    }
+    let got: unknown
+    await chatJson(
+      'text',
+      text,
+      's',
+      'u',
+      fetch,
+      undefined,
+      () => {},
+      (u) => (got = u),
+    )
+    expect(body.stream_options).toEqual({ include_usage: true })
+    expect(got).toEqual(usage)
+  })
+
+  it('不流式时，用量在返回的 usage 里', async () => {
+    let got: unknown
+    await chatJson(
+      'text',
+      text,
+      's',
+      'u',
+      respond(200, { choices: [{ message: { content: '{}' }, finish_reason: 'stop' }], usage: { prompt_tokens: 3 } }),
+      undefined,
+      undefined,
+      (u) => (got = u),
+    )
+    expect(got).toEqual({ prompt_tokens: 3 })
+  })
+
   it('服务商不支持流式、直接返回整段时照常解析', async () => {
     const r = await chatJson(
       'text',

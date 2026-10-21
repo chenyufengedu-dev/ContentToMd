@@ -146,6 +146,40 @@ fn draft_clear() -> Result<(), String> {
     }
 }
 
+// ---------------- 费用记录（F14，方案第 10.1 节） ----------------
+// %APPDATA%\ContentToMd\usage.jsonl，每次调用服务追加一行 JSON（不含密钥，只有密钥编号）
+
+fn append_line(path: &std::path::Path, line: &str) -> Result<(), String> {
+    use std::io::Write;
+    if line.contains('\n') {
+        return Err("一条记录只能有一行".into());
+    }
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|e| io_msg(dir, e))?;
+    }
+    let mut f = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| io_msg(path, e))?;
+    writeln!(f, "{line}").map_err(|e| io_msg(path, e))
+}
+
+#[tauri::command]
+fn usage_append(line: String) -> Result<(), String> {
+    append_line(&data_dir()?.join("usage.jsonl"), &line)
+}
+
+/// 全部记录；还没有记录时是空的
+#[tauri::command]
+fn usage_read() -> Result<String, String> {
+    let path = data_dir()?.join("usage.jsonl");
+    match fs::read_to_string(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        r => r.map_err(|e| io_msg(&path, e)),
+    }
+}
+
 // ---------------- 收藏库 ----------------
 
 /// 名字里不能带路径分隔符或“..”，保证只写在收藏库里面（方案第 10.5 节）
@@ -404,7 +438,9 @@ fn main() {
             draft_write,
             draft_list,
             draft_read,
-            draft_clear
+            draft_clear,
+            usage_append,
+            usage_read
         ])
         .run(tauri::generate_context!())
         .expect("启动失败");
@@ -483,6 +519,16 @@ mod tests {
         assert_eq!(list_draft_files(&dir), vec!["draft.json", "image-0"]);
         assert_eq!(fs::read(dir.join("draft.json")).unwrap(), b"{\"a\":2}");
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn 费用记录_逐行追加_不接受多行() {
+        let v = TempVault::new("usage");
+        let path = v.0.join("usage.jsonl");
+        append_line(&path, "{\"a\":1}").unwrap();
+        append_line(&path, "{\"a\":2}").unwrap();
+        assert!(append_line(&path, "x\ny").is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{\"a\":1}\n{\"a\":2}\n");
     }
 
     #[test]
