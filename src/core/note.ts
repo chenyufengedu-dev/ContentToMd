@@ -4,14 +4,14 @@ import { z } from 'zod'
 import type { Domain } from './config'
 import { OTHER_DOMAIN_ID } from './config'
 
-export type Mode = '原文精修' | '要点提炼' | '设计收藏'
-export const MODES: Mode[] = ['要点提炼', '原文精修', '设计收藏']
+export type Mode = '原文精修' | '要点提炼' | '视觉收藏'
+export const MODES: Mode[] = ['要点提炼', '原文精修', '视觉收藏']
 export type SourceType = '文字' | '图片' | '音频' | '视频' | '文档'
 
-/** 自动预选（方案第 9.1 节）：音视频 → 要点提炼；只有图片 → 设计收藏；其他 → 原文精修 */
+/** 自动预选（方案第 9.1 节）：音视频 → 要点提炼；只有图片 → 视觉收藏；其他 → 原文精修 */
 export function preselectMode(type: SourceType): Mode {
   if (type === '音频' || type === '视频') return '要点提炼'
-  if (type === '图片') return '设计收藏'
+  if (type === '图片') return '视觉收藏'
   return '原文精修'
 }
 

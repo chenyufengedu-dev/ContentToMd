@@ -132,6 +132,6 @@ it('safeFileTitle 替换非法字符并截短', () => {
 it('自动预选整理方式（方案第 9.1 节）', () => {
   expect(preselectMode('视频')).toBe('要点提炼')
   expect(preselectMode('音频')).toBe('要点提炼')
-  expect(preselectMode('图片')).toBe('设计收藏')
+  expect(preselectMode('图片')).toBe('视觉收藏')
   expect(preselectMode('文字')).toBe('原文精修')
 })
