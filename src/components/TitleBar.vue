@@ -14,6 +14,8 @@ const emit = defineEmits<{ navigate: ['home' | 'settings'] }>()
       <span data-tauri-drag-region>ContentToMd</span>
     </div>
     <nav class="nav" aria-label="页面">
+      <!-- 当前页下面的白色底块，切换时滑过去 -->
+      <span class="nav-thumb" :class="{ right: page === 'settings' }" aria-hidden="true" />
       <button
         class="nav-item"
         :aria-current="page === 'home' ? 'page' : undefined"
@@ -78,9 +80,24 @@ const emit = defineEmits<{ navigate: ['home' | 'settings'] }>()
   border-radius: var(--radius-pill);
   background: var(--hover);
 }
-.nav-item {
+.nav-thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 80px;
   height: var(--h-xs);
-  min-width: 72px;
+  border-radius: var(--radius-pill);
+  background: var(--card);
+  box-shadow: var(--shadow-card);
+  transition: transform 260ms cubic-bezier(0.2, 0, 0, 1);
+}
+.nav-thumb.right {
+  transform: translateX(calc(80px + 2px));
+}
+.nav-item {
+  position: relative; /* 文字在白色底块上面 */
+  height: var(--h-xs);
+  width: 80px;
   padding: 0 var(--px-md);
   border: 0;
   border-radius: var(--radius-pill);
@@ -93,10 +110,8 @@ const emit = defineEmits<{ navigate: ['home' | 'settings'] }>()
   color: var(--fg-strong);
 }
 .nav-item[aria-current='page'] {
-  background: var(--card);
   color: var(--fg-strong);
   font-weight: var(--fw-label);
-  box-shadow: var(--shadow-card);
 }
 .window-controls {
   margin-left: auto;

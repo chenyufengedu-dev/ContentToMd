@@ -123,6 +123,7 @@
 body {
   margin: 0;
   background: var(--bg);
+  overflow: hidden; /* 滚动交给标题栏下面的内容区（App.vue 的 app-body） */
 }
 button {
   font: inherit;
@@ -182,6 +183,8 @@ button.link.danger {
 }
 ::-webkit-scrollbar-track {
   background: transparent;
+  /* 卡片有圆角，滚动条上下让开圆角，滚到顶和底时不会被切掉 */
+  margin-block: var(--panel-radius);
 }
 
 /* 对照原文时的视图过渡（ConfirmPage 的 setComparing）：

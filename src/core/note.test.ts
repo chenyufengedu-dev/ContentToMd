@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { defaultConfig, OTHER_DOMAIN_ID } from './config'
-import { buildMarkdown, buildSystemPrompt, buildUserMessage, parseAiResult, preselectMode, safeFileTitle } from './note'
+import {
+  buildMarkdown,
+  buildSystemPrompt,
+  buildUserMessage,
+  parseAiResult,
+  preselectMode,
+  previewText,
+  safeFileTitle,
+} from './note'
 import { DEFAULT_PROMPTS } from './defaultPrompts'
 
 const domains = defaultConfig().domains
@@ -163,4 +171,17 @@ it('自动预选整理方式（方案第 9.1 节）', () => {
   expect(preselectMode('音频')).toBe('要点提炼')
   expect(preselectMode('图片')).toBe('视觉收藏')
   expect(preselectMode('文字')).toBe('原文精修')
+})
+
+describe('previewText：从生成到一半的结果里取出可读的文字，给处理中的预览框用', () => {
+  it('只取标题、摘要、正文，去掉 JSON 和 Markdown 的符号', () => {
+    const raw =
+      '{"title":"商务礼仪三重点","domain_id":1,"tags":["礼仪"],"summary":"三个重点","body":"### 摆正位置\n\n- **尊重**上级\n> [!info]- 图片中的文字\n> 第一'
+    expect(previewText(raw)).toBe('商务礼仪三重点\n三个重点\n摆正位置\n尊重上级\n图片中的文字\n第一')
+  })
+
+  it('还没生成出正文时只显示已有的部分；带转义的引号还原', () => {
+    expect(previewText('{"title":"他说\\"好\\"')).toBe('他说"好"')
+    expect(previewText('{"tit')).toBe('')
+  })
 })

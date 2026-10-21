@@ -45,15 +45,22 @@ async function onSaved(c: Config) {
   <p v-if="loadError" class="fatal">启动失败，无法读取配置或整理指令：{{ loadError }}</p>
   <template v-else-if="config">
     <TitleBar :page="page" :home-disabled="firstRun" @navigate="(p) => (page = p)" />
-    <SettingsPage v-if="page === 'settings'" :config="config" :first-run="firstRun" @saved="onSaved" />
-    <div v-show="page === 'home'">
-      <p v-if="vaultMissing" class="fatal">收藏库文件夹“{{ config.vaultPath }}”找不到了，请到设置里重新选择。</p>
-      <CollectPage v-if="prompts && !firstRun" :config="config" :prompts="prompts" @go-settings="page = 'settings'" />
+    <!-- 标题栏下面的内容区自己滚动，整个窗口不出滚动条，标题栏的宽度和位置就不会跟着页面变 -->
+    <div class="app-body">
+      <SettingsPage v-if="page === 'settings'" :config="config" :first-run="firstRun" @saved="onSaved" />
+      <div v-show="page === 'home'">
+        <p v-if="vaultMissing" class="fatal">收藏库文件夹“{{ config.vaultPath }}”找不到了，请到设置里重新选择。</p>
+        <CollectPage v-if="prompts && !firstRun" :config="config" :prompts="prompts" @go-settings="page = 'settings'" />
+      </div>
     </div>
   </template>
 </template>
 
 <style scoped>
+.app-body {
+  height: calc(100vh - var(--titlebar-h));
+  overflow-y: auto;
+}
 .fatal {
   color: var(--err);
   padding: var(--sp-5);

@@ -118,3 +118,64 @@ describe('transcribe', () => {
     expect(await codeOf(transcribe(asr, new Blob(['x']), respond(200, { result: 'x' })))).toBe('bad_response')
   })
 })
+
+describe('chatJson 边生成边返回（方案第 11 节：整理结果一边生成一边显示）', () => {
+  /** 按服务商的流式格式（SSE）把内容分几段吐出来 */
+  const sse =
+    (pieces: string[], finish = 'stop'): Fetch =>
+    async () => {
+      const lines = pieces.map((p) => `data: ${JSON.stringify({ choices: [{ delta: { content: p } }] })}\n\n`)
+      lines.push(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: finish }] })}\n\n`, 'data: [DONE]\n\n')
+      const body = new ReadableStream({
+        start(c) {
+          // 一行一块送出；第一行再故意拆成两块，模拟网络分包
+          const enc = new TextEncoder()
+          const first = enc.encode(lines[0])
+          c.enqueue(first.slice(0, 7))
+          c.enqueue(first.slice(7))
+          for (const l of lines.slice(1)) c.enqueue(enc.encode(l))
+          c.close()
+        },
+      })
+      return new Response(body, { headers: { 'Content-Type': 'text/event-stream' } })
+    }
+
+  it('逐段回调已生成的内容，最后返回解析后的 JSON', async () => {
+    const seen: string[] = []
+    const r = await chatJson('text', text, 's', 'u', sse(['{"title":', '"商务', '礼仪"}']), undefined, (t) =>
+      seen.push(t),
+    )
+    expect(r).toEqual({ title: '商务礼仪' })
+    expect(seen.at(-1)).toBe('{"title":"商务礼仪"}')
+    expect(seen.length).toBeGreaterThan(1)
+  })
+
+  it('请求里要求流式返回', async () => {
+    let body: Record<string, unknown> = {}
+    const fetch: Fetch = async (url, init) => {
+      body = JSON.parse(String(init?.body))
+      return sse(['{}'])(url, init)
+    }
+    await chatJson('text', text, 's', 'u', fetch, undefined, () => {})
+    expect(body.stream).toBe(true)
+  })
+
+  it('流式输出被截断 → truncated', async () => {
+    expect(await codeOf(chatJson('text', text, 's', 'u', sse(['{"a":'], 'length'), undefined, () => {}))).toBe(
+      'truncated',
+    )
+  })
+
+  it('服务商不支持流式、直接返回整段时照常解析', async () => {
+    const r = await chatJson(
+      'text',
+      text,
+      's',
+      'u',
+      respond(200, { choices: [{ message: { content: '{"a":1}' }, finish_reason: 'stop' }] }),
+      undefined,
+      () => {},
+    )
+    expect(r).toEqual({ a: 1 })
+  })
+})
