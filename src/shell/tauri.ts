@@ -78,3 +78,12 @@ export const clearDraft = () => invoke<void>('draft_clear')
 export const minimizeWindow = () => getCurrentWindow().minimize()
 export const toggleMaximizeWindow = () => getCurrentWindow().toggleMaximize()
 export const closeWindow = () => getCurrentWindow().close()
+/** 关窗口前问一句（F10）：shouldAsk 返回 true 时拦下关闭，交给 ask 弹确认框。返回取消监听的函数 */
+export const guardClose = (shouldAsk: () => boolean, ask: () => void) =>
+  getCurrentWindow().onCloseRequested((e) => {
+    if (!shouldAsk()) return
+    e.preventDefault()
+    ask()
+  })
+/** 确认后真正关闭，不再触发上面的询问 */
+export const destroyWindow = () => getCurrentWindow().destroy()
