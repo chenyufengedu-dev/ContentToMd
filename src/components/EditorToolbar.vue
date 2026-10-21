@@ -130,7 +130,7 @@ const setHeading = () => props.editor.chain().focus().setHeading({ level: 3 }).r
 }
 .seg {
   height: calc(var(--h-xs) - 4px);
-  padding: 0 var(--sp-3);
+  padding: 0 var(--px-sm);
   border: 0;
   border-radius: calc(var(--radius-sm) - 2px);
   background: none;
