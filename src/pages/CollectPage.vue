@@ -9,12 +9,24 @@ import { parseShareText, type ShareInfo } from '../core/shareText'
 import { decodeText } from '../core/textFile'
 import { describeError, isAppError, type ErrorCode } from '../core/errors'
 import { checkImages, MAX_IMAGES, readPixels, toAiDataUrl } from '../core/image'
-import { clearDraft, httpFetch, listVaultTags, openNote, saveDraft } from '../shell/tauri'
+import {
+  clearDraft,
+  destroyWindow,
+  guardClose,
+  httpFetch,
+  listVaultTags,
+  loadDraft,
+  openNote,
+  saveDraft,
+} from '../shell/tauri'
+import { fromDraft, type DraftData } from '../core/draft'
+import NoticeDialog from '../components/NoticeDialog.vue'
 import ConfirmPage, { type SavedNote } from './ConfirmPage.vue'
 import SavedView from '../components/SavedView.vue'
 import ProcessingView from '../components/ProcessingView.vue'
 import {
   CircleAlert,
+  Clock,
   FilePlus2,
   FileText,
   FileAudio,
@@ -182,7 +194,8 @@ function removeImage(i: number) {
   images.value.splice(i, 1)
   job.value = null
 }
-function clearContent() {
+/** keepDraftFile：从草稿恢复前清空界面时，不能把草稿也删了 */
+function clearContent(keepDraftFile = false) {
   images.value.forEach((x) => URL.revokeObjectURL(x.url))
   images.value = []
   if (fileUrl.value) URL.revokeObjectURL(fileUrl.value)
@@ -195,7 +208,7 @@ function clearContent() {
   request.value = ''
   errors.value = []
   job.value = null
-  dropDraft()
+  if (!keepDraftFile) dropDraft()
 }
 
 // 草稿（F10）：任务开始、每一步做完、停下来时存；保存成功、放弃、移除内容时删。存不了不打断处理
@@ -210,7 +223,12 @@ const pickedHint = computed(() =>
 /** 文件那一行的灰字：时长 · 大小，或者 字数 · 编码 */
 const itemInfo = computed(() =>
   textFile.value
-    ? `${textFile.value.text.length.toLocaleString()} 字 · ${textFile.value.encoding} 编码`
+    ? [
+        `${textFile.value.text.length.toLocaleString()} 字`,
+        textFile.value.encoding && `${textFile.value.encoding} 编码`,
+      ]
+        .filter(Boolean)
+        .join(' · ')
     : [
         duration.value ? fmtDuration(duration.value) : '',
         file.value ? `${(file.value.size / 1048576).toFixed(0)} MB` : '',
@@ -243,6 +261,8 @@ const summary = computed(() => {
       name: file.value.name,
       info: `${(file.value.size / 1048576).toFixed(1)} MB · ${fileType.value} · ${mode.value}`,
     }
+  // 从草稿接着处理的音视频：已经转写完，原文件不在了
+  if (job.value) return { name: job.value.fileName, info: `${job.value.type} · ${mode.value}` }
   return null
 })
 
@@ -269,6 +289,7 @@ async function start() {
     author: share.value?.author ?? '',
     request: request.value.trim(),
   })
+  pendingDraft.value = null
   keepDraft(true)
   existingTags.value = await listVaultTags(props.config.vaultPath).catch(() => [])
   await run()
@@ -327,6 +348,57 @@ function backToEdit() {
   phase.value = 'drop'
 }
 
+// ---------------- 草稿恢复（F10，设计稿 设计稿/投放页/状态-有草稿.webp） ----------------
+const pendingDraft = shallowRef<{ data: DraftData; files: Record<string, Blob> } | null>(null)
+const confirmingDrop = ref(false)
+const draftLabel = computed(() => {
+  if (!pendingDraft.value) return ''
+  const r = fromDraft(pendingDraft.value.data, pendingDraft.value.files)
+  const state = r.atConfirm ? '已整理完，还没保存' : r.needsFile ? '还没转写完' : '处理到一半'
+  return `${r.job.fileName} · ${state}`
+})
+
+/** 继续：整理完的回确认页；没整理完的接着处理（已完成的步骤不重做）；音视频没转写完要重新放入原文件 */
+async function resumeDraft() {
+  const d = pendingDraft.value
+  if (!d) return
+  pendingDraft.value = null
+  const { job: j, needsFile, atConfirm } = fromDraft(d.data, d.files)
+  clearContent(true)
+  mode.value = j.mode
+  source.value = j.source ?? ''
+  share.value =
+    j.platform || j.author
+      ? { url: j.source ?? '', platform: j.platform ?? '', author: j.author ?? '', raw: j.shareText ?? '' }
+      : null
+  request.value = j.request ?? ''
+  if (needsFile) {
+    errors.value.push(`上次的 ${j.fileName} 还没转写完，请重新放入这个文件`)
+    dropDraft()
+    return
+  }
+  if (j.images) images.value = j.images.map((i) => ({ file: i.file, url: URL.createObjectURL(i.file) }))
+  else if (j.type === '文字') textFile.value = { name: j.fileName, text: j.transcript ?? '', encoding: '' }
+  job.value = reactive(j) as Job
+  existingTags.value = await listVaultTags(props.config.vaultPath).catch(() => [])
+  if (atConfirm) phase.value = 'confirm'
+  else await run()
+}
+function discardDraft() {
+  if (!confirmingDrop.value) {
+    confirmingDrop.value = true // 放弃前再确认一次（方案第 12 节“放弃草稿前需要确认”）
+    return
+  }
+  confirmingDrop.value = false
+  pendingDraft.value = null
+  dropDraft()
+}
+
+// ---------------- 关闭窗口（F10，方案第 8 节，设计稿 设计稿/确认页/定稿-关闭确认弹窗.webp） ----------------
+const askClose = ref(false)
+const hasUnsaved = () => !!job.value && ['processing', 'failed', 'confirm'].includes(phase.value)
+let unguard: (() => void) | undefined
+
 // ---------------- 保存后 ----------------
 const saved = ref<SavedNote | null>(null)
 const vaultName = computed(() => props.config.vaultPath.split(/[\\/]/).filter(Boolean).at(-1) ?? '收藏库')
@@ -359,8 +431,16 @@ function onKey(e: KeyboardEvent) {
 onMounted(() => {
   window.addEventListener('keydown', onKey)
   window.addEventListener('paste', onPaste)
+  // 不在软件里（开发预览）时没有外壳，这两件事都跳过
+  loadDraft()
+    .then((d) => (pendingDraft.value = d))
+    .catch(() => {})
+  guardClose(hasUnsaved, () => (askClose.value = true))
+    .then((f) => (unguard = f))
+    .catch(() => {})
 })
 onBeforeUnmount(() => {
+  unguard?.()
   window.removeEventListener('keydown', onKey)
   window.removeEventListener('paste', onPaste)
   images.value.forEach((x) => URL.revokeObjectURL(x.url))
@@ -402,6 +482,14 @@ onBeforeUnmount(() => {
   <!-- 投放（设计稿 设计稿/投放页/基准-已放视频.webp 和 状态-*.webp）：只有一张白卡片，里面不套卡片、输入框不带边框 -->
   <main v-else class="page">
     <div class="card" @dragover.prevent="dragging = true" @dragleave.self="dragging = false" @drop.prevent="onDrop">
+      <div v-if="pendingDraft && !hasContent" class="draft-line">
+        <Clock :size="16" aria-hidden="true" />
+        <span class="draft-text">有 1 条未保存的草稿：{{ draftLabel }}</span>
+        <button class="soft small" :class="{ danger: confirmingDrop }" @click="discardDraft">
+          {{ confirmingDrop ? '确认放弃' : '放弃' }}
+        </button>
+        <button class="primary small" @click="resumeDraft">继续</button>
+      </div>
       <template v-if="images.length">
         <div class="thumbs">
           <figure v-for="(img, i) in images" :key="img.url" class="thumb">
@@ -439,7 +527,7 @@ onBeforeUnmount(() => {
           <span class="item-name">{{ textFile?.name ?? file!.name }}</span>
           <span class="item-info">{{ itemInfo }}</span>
         </span>
-        <button class="icon-x" aria-label="移除" @click="clearContent"><X :size="16" /></button>
+        <button class="icon-x" aria-label="移除" @click="clearContent()"><X :size="16" /></button>
       </div>
 
       <button v-else class="drop" :class="{ dragging }" @click="fileInput?.click()">
@@ -523,6 +611,16 @@ onBeforeUnmount(() => {
       </div>
     </div>
   </main>
+  <NoticeDialog
+    v-if="askClose"
+    title="还有 1 条没有保存"
+    cancel-text="取消"
+    ok-text="关闭软件"
+    @cancel="askClose = false"
+    @ok="destroyWindow"
+  >
+    <p>草稿会保留，下次打开时可以继续。</p>
+  </NoticeDialog>
 </template>
 
 <style scoped>
@@ -543,6 +641,38 @@ onBeforeUnmount(() => {
   margin: 0;
   font-size: var(--fs-sm);
   color: var(--faint);
+}
+
+/* ---- 有草稿：卡片最上面一行，没有底色和边框 ---- */
+.draft-line {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-4);
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+.draft-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.small {
+  height: var(--h-xs);
+  padding: 0 var(--px-sm);
+  font-size: var(--fs-sm);
+}
+.soft {
+  border: 0;
+  background: var(--hover);
+}
+.soft:hover:not(:disabled) {
+  background: var(--line);
+}
+.soft.danger {
+  color: var(--err);
 }
 
 /* ---- 空白时的投放区：浅灰底，无边框 ---- */

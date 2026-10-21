@@ -26,6 +26,7 @@ import NoteProps from '../components/NoteProps.vue'
 import SourcePanel from '../components/SourcePanel.vue'
 import EditorToolbar from '../components/EditorToolbar.vue'
 import CropDialog from '../components/CropDialog.vue'
+import NoticeDialog from '../components/NoticeDialog.vue'
 
 const props = defineProps<{ config: Config; job: Job; existingTags: string[] }>()
 /** 保存成功页要用的：笔记相对收藏库的路径、没写进去的图片（比如“第 2 张”），以及左边预览框的文字 */
@@ -317,8 +318,8 @@ function onKey(e: KeyboardEvent) {
     e.preventDefault()
     save()
   } else if (e.key === 'Escape') {
-    if (failDialog.value) failDialog.value = false
-    else if (comparing.value) setComparing(false)
+    if (failDialog.value) return // 提示框自己处理 Esc
+    if (comparing.value) setComparing(false)
     else confirmingDiscard.value = false
   }
 }
@@ -494,20 +495,21 @@ onBeforeUnmount(() => {
       </footer>
     </aside>
 
-    <div v-if="failDialog && saveError" class="fail-mask" @click.self="failDialog = false">
-      <section class="fail-dialog" role="alertdialog" aria-modal="true" aria-labelledby="fail-title">
-        <h2 id="fail-title"><CircleAlert :size="20" aria-hidden="true" />没有保存</h2>
-        <p>{{ saveError.reason }}</p>
-        <p v-if="saveError.toSettings">
-          到<button class="link" @click="emit('goSettings')">设置</button>{{ saveError.next.replace(/^到设置/, '') }}
-        </p>
-        <p v-else>{{ saveError.next }}</p>
-        <div class="fail-buttons">
-          <button class="btn btn-secondary" @click="failDialog = false">知道了</button>
-          <button class="btn btn-primary" @click="save">重新保存</button>
-        </div>
-      </section>
-    </div>
+    <NoticeDialog
+      v-if="failDialog && saveError"
+      title="没有保存"
+      tone="error"
+      cancel-text="知道了"
+      ok-text="重新保存"
+      @cancel="failDialog = false"
+      @ok="save"
+    >
+      <p>{{ saveError.reason }}</p>
+      <p v-if="saveError.toSettings">
+        到<button class="link" @click="emit('goSettings')">设置</button>{{ saveError.next.replace(/^到设置/, '') }}
+      </p>
+      <p v-else>{{ saveError.next }}</p>
+    </NoticeDialog>
 
     <CropDialog
       v-if="cropping !== null"
@@ -1041,52 +1043,6 @@ onBeforeUnmount(() => {
   flex: none;
   padding: 0;
   font-size: inherit;
-}
-.fail-mask {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  display: grid;
-  place-items: center;
-  padding: var(--sp-6);
-  background: rgb(15 18 25 / 28%);
-}
-.fail-dialog {
-  width: min(420px, 100%);
-  padding: var(--sp-5) var(--sp-5) var(--sp-4);
-  background: var(--card);
-  border-radius: var(--panel-radius);
-  box-shadow: var(--shadow-pop);
-}
-.fail-dialog h2 {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  margin: 0 0 var(--sp-3);
-  font-size: var(--fs-lg);
-  font-weight: var(--fw-heading);
-  color: var(--err);
-}
-.fail-dialog p {
-  margin: 0 0 var(--sp-1);
-  font-size: var(--fs-md);
-  line-height: 1.7;
-  color: var(--fg);
-}
-.fail-dialog .link {
-  padding: 0;
-  font-size: inherit;
-}
-.fail-buttons {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--sp-2);
-  margin-top: var(--sp-5);
-}
-.fail-buttons .btn {
-  flex: none;
-  height: var(--h-md);
-  padding: 0 var(--px-md);
 }
 .field-error {
   margin: var(--sp-2) 0;

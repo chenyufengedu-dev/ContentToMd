@@ -1,5 +1,5 @@
 // 设置页、投放页预览（只在开发时用：npx vite 后打开 /dev/pages.html）。
-// ?p=settings 设置页（&freeze=卡片id:毫秒 点开这张卡片并把动画停在第几毫秒，逐帧检查动画用）；?p=proc 处理中（出字前），&typing=1 模拟逐字生成，&failed=1 处理失败；?p=saved 保存成功，&imgfail=1 有图片没写入。；?drop=video|images|txt|bad 投放页放入内容后的样子。
+// ?p=settings 设置页（&freeze=卡片id:毫秒 点开这张卡片并把动画停在第几毫秒，逐帧检查动画用）；?p=proc 处理中（出字前），&typing=1 模拟逐字生成，&failed=1 处理失败；?p=saved 保存成功，&imgfail=1 有图片没写入。；?drop=video|images|txt|bad|draft 投放页放入内容后的样子。
 // 不连外壳，点保存、选文件夹会报错，只用来对照样式
 import { createApp, h, reactive, ref } from 'vue'
 import '../src/style.css'
@@ -11,6 +11,7 @@ import TitleBar from '../src/components/TitleBar.vue'
 import { defaultConfig } from '../src/core/config'
 import { DEFAULT_PROMPTS } from '../src/core/defaultPrompts'
 import { newJob } from '../src/core/pipeline'
+import { toDraft } from '../src/core/draft'
 
 const query = new URLSearchParams(location.search)
 const p = query.get('p')
@@ -76,6 +77,24 @@ const body =
       : p === 'proc'
         ? procView()
         : () => h(CollectPage, { config, prompts: DEFAULT_PROMPTS })
+
+// ?drop=draft：假装上次留下一条整理完没保存的草稿，看投放页最上面那行提示
+if (query.get('drop') === 'draft') {
+  const job = newJob('敬酒礼仪.mp4', '视频', '要点提炼')
+  job.steps.forEach((s) => (s.status = 'done'))
+  job.transcript = SAMPLE_TEXT
+  job.draft = { title: '敬酒礼仪', domainId: 1, tags: [], keywords: [], summary: '', body: '正文', image_captions: [] }
+  const json = new TextEncoder().encode(JSON.stringify(toDraft(job).data))
+  Object.assign(window, {
+    __TAURI_INTERNALS__: {
+      invoke: async (cmd: string) => {
+        if (cmd === 'draft_list') return ['draft.json']
+        if (cmd === 'draft_read') return json.buffer
+        throw new Error('预览里没有外壳')
+      },
+    },
+  })
+}
 
 createApp({
   render: () => [h(TitleBar, { page: p === 'settings' ? 'settings' : 'home', homeDisabled: false }), body()],
