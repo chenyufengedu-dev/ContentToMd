@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useEditor, EditorContent } from '@tiptap/vue-3'
 import {
   CircleAlert,
@@ -15,7 +15,7 @@ import {
 } from 'lucide-vue-next'
 import type { Config } from '../core/config'
 import type { Job } from '../core/pipeline'
-import { buildMarkdown, safeFileTitle, today, type NoteImage } from '../core/note'
+import { buildMarkdown, safeFileTitle, today, type NoteDraft, type NoteImage } from '../core/note'
 import { cropForSave, type Rect } from '../core/image'
 import { saveFailure, type SaveFailure } from '../core/saveFailure'
 import { matchToSource } from '../core/sourceMatch'
@@ -36,15 +36,18 @@ export interface SavedNote {
   summary: string
   text: string
 }
-const emit = defineEmits<{ saved: [SavedNote]; discard: []; goSettings: [] }>()
+/** edited：确认页改到一半的内容，由投放页存进草稿 */
+const emit = defineEmits<{ saved: [SavedNote]; discard: []; goSettings: []; edited: [NoteDraft] }>()
 
 const d = props.job.draft!
+/** 从草稿恢复时接着上次改到的地方（F10） */
+const start = props.job.edits ?? d
 const form = reactive({
-  title: d.title,
-  domainId: d.domainId,
-  tags: [...d.tags],
-  keywords: [...d.keywords],
-  summary: d.summary,
+  title: start.title,
+  domainId: start.domainId,
+  tags: [...start.tags],
+  keywords: [...start.keywords],
+  summary: start.summary,
 })
 const created = today()
 const transcript = props.job.transcript ?? ''
@@ -86,13 +89,32 @@ const cropping = ref<number | null>(null)
 function onCropDone(crops: (Rect | null)[]) {
   crops.forEach((c, i) => (pics[i].crop = c))
   cropping.value = null
+  rememberEdits()
 }
 
 const editor = useEditor({
   extensions: editorExtensions(),
-  content: d.body,
+  content: start.body,
   contentType: 'markdown',
+  onUpdate: () => rememberEdits(),
 })
+
+// 改动停下来 0.8 秒后存进草稿，软件意外关掉也不丢（F10）
+let draftTimer: number | undefined
+function rememberEdits() {
+  clearTimeout(draftTimer)
+  draftTimer = window.setTimeout(() => {
+    if (!editor.value) return
+    emit('edited', {
+      ...d,
+      ...form,
+      tags: [...form.tags],
+      keywords: [...form.keywords],
+      body: fixCallouts(editor.value.getMarkdown()),
+    })
+  }, 800)
+}
+watch(form, rememberEdits, { deep: true })
 
 const duration = computed(() => {
   const s = Math.round(props.job.duration ?? 0)
@@ -307,6 +329,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKey)
   window.removeEventListener('resize', updateLink)
+  clearTimeout(draftTimer)
   editor.value?.destroy()
   picUrls.forEach((u) => URL.revokeObjectURL(u))
 })

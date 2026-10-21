@@ -5,6 +5,7 @@ import type { Config } from './config'
 import { decodeTo16kMono, splitChunks, toWav, cleanTranscript, effectiveLength } from './audio'
 import { transcribe, chatJson, type Fetch } from './services'
 import { AppError, isAppError } from './errors'
+import { retryOnRateLimit } from './retry'
 import { autoCrop, type Pixels, type Rect } from './image'
 import {
   buildSystemPrompt,
@@ -61,6 +62,8 @@ export interface Job {
   author?: string
   /** 本次要求（F04），空的就按默认规则 */
   request?: string
+  /** 确认页里改到一半的内容（标题、属性、正文 Markdown），存进草稿，恢复时接着改（F10） */
+  edits?: NoteDraft
   /** 整理时 AI 已经生成的文字（去掉了格式），处理中的预览框一个字一个字显示 */
   preview?: string
 }
@@ -97,6 +100,28 @@ export interface RunContext {
   readPixels: (b: Blob) => Promise<Pixels>
   cancel: AbortSignal
   onUpdate: () => void
+  /** 429 重试前的等待；测试里换成不等 */
+  sleep?: (ms: number) => Promise<void>
+}
+
+/** 调服务：遇到 429 自动等一会儿再试，等的时候在这一步旁边写“N 秒后自动重试” */
+function call<T>(fn: () => Promise<T>, ctx: RunContext, step: StepState): Promise<T> {
+  const before = step.note
+  return retryOnRateLimit(
+    async () => {
+      const r = await fn()
+      step.note = before
+      return r
+    },
+    {
+      cancel: ctx.cancel,
+      sleep: ctx.sleep,
+      onWait: (s) => {
+        step.note = `请求太频繁，${s} 秒后自动重试`
+        ctx.onUpdate()
+      },
+    },
+  )
 }
 
 /** 从第一个没完成的步骤开始跑到底；出错时把该步标为失败并抛出 */
@@ -136,7 +161,8 @@ const STEPS: Record<StepId, (job: Job, ctx: RunContext, step: StepState) => Prom
         step.note = `第 ${i + 1}/${chunks.length} 段`
         ctx.onUpdate()
       }
-      texts.push(cleanTranscript(await transcribe(ctx.config.services.asr, chunks[i], ctx.fetch, ctx.cancel)))
+      const raw = await call(() => transcribe(ctx.config.services.asr, chunks[i], ctx.fetch, ctx.cancel), ctx, step)
+      texts.push(cleanTranscript(raw))
     }
     const text = texts.join('\n')
     if (effectiveLength(text) < 20) throw new AppError('no_speech', '没有识别到语音，可以改为提供截图')
@@ -148,7 +174,7 @@ const STEPS: Record<StepId, (job: Job, ctx: RunContext, step: StepState) => Prom
     for (const img of job.images!) img.aiUrl ??= await ctx.toAiUrl(img.file)
   },
 
-  async organize(job, ctx) {
+  async organize(job, ctx, step) {
     const system = buildSystemPrompt(ctx.prompts, job.mode, ctx.config.domains, ctx.existingTags)
     const images = job.images
     const kind = images ? 'vision' : 'text'
@@ -174,10 +200,15 @@ const STEPS: Record<StepId, (job: Job, ctx: RunContext, step: StepState) => Prom
     for (let attempt = 0; ; attempt++) {
       try {
         const parsed = parseAiResult(
-          await chatJson(kind, ctx.config.services[kind], system, user, ctx.fetch, ctx.cancel, (soFar) => {
-            job.preview = previewText(soFar)
-            ctx.onUpdate()
-          }),
+          await call(
+            () =>
+              chatJson(kind, ctx.config.services[kind], system, user, ctx.fetch, ctx.cancel, (soFar) => {
+                job.preview = previewText(soFar)
+                ctx.onUpdate()
+              }),
+            ctx,
+            step,
+          ),
           ctx.config.domains,
         )
         if (!parsed) throw new AppError('format', 'AI 返回的结果缺少标题或正文，请点击重试')
