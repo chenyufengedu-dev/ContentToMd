@@ -6,6 +6,7 @@ import { type Job, newJob, runJob, STEP_LABELS } from '../core/pipeline'
 import { describeError, isAppError, type ErrorCode } from '../core/errors'
 import { httpFetch, listVaultTags, openNote } from '../shell/tauri'
 import ConfirmPage from './ConfirmPage.vue'
+import { Check, CircleCheck, Circle, FileVideo, LoaderCircle, Upload, X } from 'lucide-vue-next'
 
 const props = defineProps<{ config: Config; prompts: Prompts }>()
 const emit = defineEmits<{ goSettings: [] }>()
@@ -179,9 +180,9 @@ const busy = computed(() => phase.value !== 'drop')
 
   <main v-else-if="phase === 'saved'" class="page">
     <div class="card saved">
-      <p>
-        ✓ 已保存到 <b>{{ savedPath }}</b>
-      </p>
+      <CircleCheck class="saved-icon" :size="40" aria-hidden="true" />
+      <p class="saved-title">已保存</p>
+      <p class="muted saved-path">{{ savedPath }}</p>
       <div class="row">
         <button @click="open">打开</button>
         <button class="primary" @click="next">继续收藏</button>
@@ -202,12 +203,13 @@ const busy = computed(() => phase.value !== 'drop')
       <template v-if="busy"><p class="muted">请先完成当前这一条</p></template>
       <template v-else-if="file">
         <div class="file">
-          <span>🎬 {{ file.name }}</span>
+          <span class="file-name"><FileVideo :size="18" aria-hidden="true" />{{ file.name }}</span>
           <span class="muted">{{ (file.size / 1048576).toFixed(1) }} MB · {{ fileType }}</span>
           <button class="link danger" @click.stop="removeFile">移除</button>
         </div>
       </template>
       <template v-else>
+        <span class="drop-icon"><Upload :size="22" aria-hidden="true" /></span>
         <p class="big">拖入音视频文件</p>
         <p class="muted">或点击这里选择文件（mp4、mov、mp3、m4a、wav）</p>
       </template>
@@ -229,9 +231,12 @@ const busy = computed(() => phase.value !== 'drop')
 
     <div v-if="job && phase !== 'drop'" class="card steps">
       <div v-for="s in job.steps" :key="s.id" class="step" :class="s.status">
-        <span class="icon">{{
-          s.status === 'done' ? '✓' : s.status === 'running' ? '◌' : s.status === 'failed' ? '✕' : '·'
-        }}</span>
+        <span class="icon" aria-hidden="true">
+          <Check v-if="s.status === 'done'" :size="16" />
+          <LoaderCircle v-else-if="s.status === 'running'" class="spin" :size="16" />
+          <X v-else-if="s.status === 'failed'" :size="16" />
+          <Circle v-else :size="8" />
+        </span>
         <span>{{ STEP_LABELS[s.id] }}</span>
         <span v-if="s.note" class="muted">{{ s.note }}</span>
         <span class="muted time">{{ elapsed(s) }}</span>
@@ -260,86 +265,129 @@ const busy = computed(() => phase.value !== 'drop')
 </template>
 
 <style scoped>
+/* 和确认页同一套：浅灰底上的白卡片，尺寸只用 src/style.css 的令牌 */
 .page {
   max-width: 720px;
   margin: 0 auto;
-  padding: 24px;
+  padding: var(--sp-5);
 }
 .card {
+  margin-top: var(--sp-4);
+  padding: var(--sp-5);
   background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 16px;
-  margin-top: 16px;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--panel-radius);
+  box-shadow: var(--shadow-card);
 }
 .drop {
-  border: 2px dashed var(--line);
-  border-radius: 10px;
-  min-height: 180px;
+  min-height: 220px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  padding: var(--sp-5);
   background: var(--card);
-  cursor: pointer;
+  border: 1.5px dashed var(--line-strong);
+  border-radius: var(--panel-radius);
   text-align: center;
-  padding: 16px;
+  cursor: pointer;
+  transition:
+    border-color var(--ease),
+    background var(--ease);
 }
+.drop:hover:not(.disabled):not(.has),
 .drop.dragging {
   border-color: var(--primary);
+  background: var(--hover-soft);
 }
 .drop.disabled,
 .drop.has {
   cursor: default;
 }
+.drop-icon {
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  margin-bottom: var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--chip-bg);
+  color: var(--muted);
+}
+.drop p {
+  margin: 0;
+}
 .big {
-  font-size: 18px;
-  margin: 0 0 6px;
+  margin-bottom: var(--sp-1);
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-heading);
+  color: var(--fg-strong);
 }
 .muted {
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 .file {
   display: flex;
-  gap: 12px;
+  gap: var(--sp-3);
   align-items: center;
   flex-wrap: wrap;
   justify-content: center;
 }
+.file-name {
+  display: inline-flex;
+  gap: var(--sp-2);
+  align-items: center;
+  font-weight: var(--fw-label);
+  color: var(--fg-strong);
+}
 .row {
   display: flex;
-  gap: 8px;
+  gap: var(--sp-2);
   align-items: center;
   flex-wrap: wrap;
 }
 .options {
-  margin-top: 16px;
-  gap: 16px;
+  margin-top: var(--sp-4);
+  gap: var(--sp-4);
+  color: var(--muted);
+  font-weight: var(--fw-label);
 }
 .radio {
   display: flex;
-  gap: 4px;
+  gap: var(--sp-1);
   align-items: center;
+  color: var(--fg);
+  font-weight: normal;
+  cursor: pointer;
+}
+.radio input {
+  accent-color: var(--primary);
 }
 .warn {
-  margin-top: 12px;
+  margin-top: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
   background: var(--warn-bg);
-  border: 1px solid var(--warn);
-  padding: 8px 12px;
-  border-radius: 6px;
+  color: var(--warn);
+  border-radius: var(--radius-md);
 }
 .steps .step {
   display: flex;
-  gap: 10px;
-  padding: 4px 0;
+  gap: var(--sp-3);
   align-items: center;
+  padding: var(--sp-1) 0;
+}
+.icon {
+  width: 16px;
+  display: grid;
+  place-items: center;
 }
 .step.pending {
-  color: var(--muted);
+  color: var(--faint);
 }
 .step.running {
-  font-weight: 600;
+  font-weight: var(--fw-heading);
+  color: var(--fg-strong);
 }
 .step.done .icon {
   color: var(--ok);
@@ -347,32 +395,64 @@ const busy = computed(() => phase.value !== 'drop')
 .step.failed .icon {
   color: var(--err);
 }
+.spin {
+  animation: spin 1s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
 .time {
   margin-left: auto;
 }
 .failed {
-  margin-top: 8px;
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-3);
   border-top: 1px solid var(--line);
-  padding-top: 8px;
 }
 .failed pre {
   white-space: pre-wrap;
-  font-size: 12px;
+  font-size: var(--fs-xs);
   color: var(--muted);
 }
 .actions {
-  margin-top: 16px;
+  margin-top: var(--sp-5);
   justify-content: flex-end;
 }
+.actions .primary {
+  min-width: 160px;
+}
 .muted-on-primary {
+  margin-left: var(--sp-1);
   opacity: 0.7;
-  font-size: 12px;
-  margin-left: 4px;
+  font-size: var(--fs-xs);
 }
 .err {
   color: var(--err);
 }
-.saved p {
-  font-size: 16px;
+.saved {
+  margin-top: var(--sp-7);
+  padding: var(--sp-7) var(--sp-5);
+  text-align: center;
+}
+.saved-icon {
+  color: var(--ok);
+}
+.saved-title {
+  margin: var(--sp-3) 0 var(--sp-1);
+  font-size: var(--fs-xl);
+  font-weight: var(--fw-heading);
+  color: var(--fg-strong);
+}
+.saved-path {
+  margin: 0 0 var(--sp-5);
+  overflow-wrap: anywhere;
+}
+.saved .row {
+  justify-content: center;
+}
+.saved .row button {
+  min-width: 120px;
 }
 </style>
