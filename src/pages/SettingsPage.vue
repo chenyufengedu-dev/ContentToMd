@@ -244,76 +244,97 @@ async function save() {
 </template>
 
 <style scoped>
+/* 和确认页同一套：浅灰底上的白卡片，尺寸只用 src/style.css 的令牌 */
 .settings {
   max-width: 720px;
   margin: 0 auto;
-  padding: 24px 24px 96px;
+  padding: var(--sp-5) var(--sp-5) calc(var(--h-md) + var(--sp-7) * 2);
 }
 h1 {
-  font-size: 22px;
-  margin: 0 0 16px;
+  margin: 0 0 var(--sp-4);
+  font-size: var(--fs-2xl);
+  font-weight: var(--fw-title);
+  line-height: 1.35;
+  color: var(--fg-strong);
 }
 h2 {
-  font-size: 16px;
-  margin: 0 0 8px;
+  margin: 0 0 var(--sp-2);
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-heading);
+  color: var(--fg-strong);
 }
 h3 {
-  font-size: 14px;
   margin: 0;
+  font-size: var(--fs-md);
+  font-weight: var(--fw-heading);
+  color: var(--fg-strong);
+}
+p {
+  line-height: 1.7;
 }
 section {
+  margin-bottom: var(--sp-4);
+  padding: var(--sp-5);
   background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 16px;
-  margin-bottom: 16px;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--panel-radius);
+  box-shadow: var(--shadow-card);
 }
 .banner {
+  margin: 0 0 var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
   background: var(--warn-bg);
-  border: 1px solid var(--warn);
-  padding: 10px 12px;
-  border-radius: 6px;
+  color: var(--warn);
+  border-radius: var(--radius-md);
 }
 .hint {
+  margin: 0 0 var(--sp-4);
   color: var(--muted);
-  font-size: 13px;
-  margin: 0 0 8px;
+  font-size: var(--fs-sm);
 }
 .row {
   display: flex;
-  gap: 8px;
+  gap: var(--sp-2);
   align-items: center;
   flex-wrap: wrap;
 }
 .path {
   flex: 1;
   min-width: 0;
+  min-height: var(--h-md);
+  display: flex;
+  align-items: center;
+  padding: 0 var(--px-md);
+  background: var(--card-muted);
+  border-radius: var(--radius-md);
   overflow-wrap: anywhere;
   font-family: Consolas, monospace;
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 .missing .tag-missing,
 .path.missing {
   color: var(--warn);
-  font-weight: 600;
+  font-weight: var(--fw-label);
+}
+.tag-missing {
+  padding: 0 var(--sp-2);
+  background: var(--warn-bg);
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-xs);
 }
 .service {
+  padding: var(--sp-4) 0;
   border-top: 1px solid var(--line);
-  padding: 12px 0;
 }
 .service:first-of-type {
-  border-top: 0;
   padding-top: 0;
-}
-.service.missing {
-  border-left: 3px solid var(--warn);
-  padding-left: 10px;
+  border-top: 0;
 }
 .service-head {
   display: flex;
-  gap: 8px;
+  gap: var(--sp-2);
   align-items: center;
-  margin-bottom: 8px;
+  margin-bottom: var(--sp-3);
 }
 .service-head .link {
   margin-left: auto;
@@ -322,48 +343,69 @@ label {
   display: grid;
   grid-template-columns: 72px 1fr;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 6px;
-  font-size: 13px;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+  color: var(--muted);
+  font-weight: var(--fw-label);
 }
 input {
-  padding: 6px 8px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  font: inherit;
-  background: var(--bg);
-  color: var(--fg);
   min-width: 0;
+  height: var(--h-md);
+  box-sizing: border-box;
+  padding: 0 var(--px-md);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-weight: normal;
+  background: var(--card);
+  color: var(--fg);
+  outline: none;
+  transition:
+    border-color var(--ease),
+    box-shadow var(--ease);
+}
+input:hover {
+  border-color: var(--line-strong);
+}
+input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-soft);
 }
 .domains {
   list-style: none;
   padding: 0;
-  margin: 0 0 8px;
+  margin: 0 0 var(--sp-3);
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--sp-2);
 }
 .domains li {
+  min-height: var(--h-sm);
   display: flex;
-  gap: 4px;
+  gap: var(--sp-1);
   align-items: center;
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  padding: 2px 10px;
+  padding: 0 calc(var(--px-sm) / 2) 0 var(--px-sm);
+  background: var(--chip-bg);
+  border-radius: var(--radius-chip);
+  font-size: var(--fs-sm);
+}
+.domains li input,
+.domains li button {
+  height: var(--h-xs);
 }
 .ok {
   color: var(--ok);
 }
 .field-err {
-  margin: -2px 0 6px 80px;
-  font-size: 12px;
+  margin: 0 0 var(--sp-2) calc(72px + var(--sp-2));
+  font-size: var(--fs-xs);
 }
 .err {
   color: var(--err);
 }
 .detail pre {
   white-space: pre-wrap;
-  font-size: 12px;
+  font-size: var(--fs-xs);
   color: var(--muted);
 }
 footer {
@@ -374,9 +416,15 @@ footer {
   display: flex;
   justify-content: flex-end;
   align-items: center;
-  gap: 12px;
-  padding: 12px 24px;
+  gap: var(--sp-4);
+  padding: var(--sp-4) var(--sp-5);
   background: var(--card);
   border-top: 1px solid var(--line);
+}
+footer .hint {
+  margin: 0;
+}
+footer .primary {
+  min-width: 160px;
 }
 </style>
