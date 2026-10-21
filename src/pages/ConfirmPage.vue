@@ -1,20 +1,23 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useEditor, EditorContent } from '@tiptap/vue-3'
-import { Pencil, Folder, Video, Clock, FileText, Mic, CalendarDays } from 'lucide-vue-next'
+import { Pencil, Folder, Video, Clock, FileText, Mic, CalendarDays, Image as ImageIcon, Link2 } from 'lucide-vue-next'
 import type { Config } from '../core/config'
 import type { Job } from '../core/pipeline'
-import { buildMarkdown, safeFileTitle, today } from '../core/note'
+import { buildMarkdown, safeFileTitle, today, type NoteImage } from '../core/note'
+import { cropForSave, type Rect } from '../core/image'
 import { matchToSource } from '../core/sourceMatch'
-import { writeNote } from '../shell/tauri'
-import { editorExtensions } from '../editor/extensions'
+import { removeAttachment, writeAttachment, writeNote } from '../shell/tauri'
+import { editorExtensions, fixCallouts } from '../editor/extensions'
 import { linkedBlockKey } from '../editor/linkedBlock'
 import NoteProps from '../components/NoteProps.vue'
 import SourcePanel from '../components/SourcePanel.vue'
 import EditorToolbar from '../components/EditorToolbar.vue'
+import CropDialog from '../components/CropDialog.vue'
 
 const props = defineProps<{ config: Config; job: Job; existingTags: string[] }>()
-const emit = defineEmits<{ saved: [string]; discard: [] }>()
+/** saved：笔记相对收藏库的路径，和没写进去的图片（比如“第 2 张”） */
+const emit = defineEmits<{ saved: [string, string[]]; discard: [] }>()
 
 const d = props.job.draft!
 const form = reactive({
@@ -26,6 +29,44 @@ const form = reactive({
 })
 const created = today()
 const transcript = props.job.transcript ?? ''
+
+// ---------------- 图片（F29）----------------
+// 图片放在正文前面，按裁剪框显示；悬停时可以调整裁剪或恢复原图
+const pics = props.job.images ?? []
+const picUrls = pics.map((p) => URL.createObjectURL(p.file))
+const naturals = ref(pics.map(() => ({ w: 0, h: 0 })))
+function onPicLoad(i: number, e: Event) {
+  const el = e.target as HTMLImageElement
+  naturals.value[i] = { w: el.naturalWidth, h: el.naturalHeight }
+}
+/** 用定位把图片裁成框里的那一块：容器按框的比例，图片按“整张 / 框”放大并移位 */
+function cropView(i: number) {
+  const n = naturals.value[i]
+  const c: Rect = pics[i].crop ?? { x: 0, y: 0, w: n.w, h: n.h }
+  if (!n.w || !c.w || !c.h) return { box: {}, img: { position: 'static' as const, width: '100%' } }
+  return {
+    box: { aspectRatio: `${c.w} / ${c.h}`, maxWidth: `calc(var(--pic-max-h) * ${c.w / c.h})` },
+    img: {
+      width: `${(n.w / c.w) * 100}%`,
+      height: `${(n.h / c.h) * 100}%`,
+      left: `${(-c.x / c.w) * 100}%`,
+      top: `${(-c.y / c.h) * 100}%`,
+    },
+  }
+}
+const sameRect = (a?: Rect | null, b?: Rect | null) =>
+  !!a && !!b && a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h
+const cropNote = computed(() => {
+  const p = pics[0]
+  if (!p?.autoCrop) return ''
+  if (sameRect(p.crop, p.autoCrop)) return '已自动裁掉状态栏和空白边'
+  return p.crop ? '已按你的调整裁剪' : '已恢复原图'
+})
+const cropping = ref<number | null>(null)
+function onCropDone(crops: (Rect | null)[]) {
+  crops.forEach((c, i) => (pics[i].crop = c))
+  cropping.value = null
+}
 
 const editor = useEditor({
   extensions: editorExtensions(),
@@ -149,11 +190,40 @@ const saveError = ref<string | null>(null)
 const titleMissing = computed(() => !form.title.trim())
 const domainName = computed(() => props.config.domains.find((x) => x.id === form.domainId)?.name ?? '其他')
 
+const EXT: Record<string, string> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+}
+
+/** 图片按裁剪框写进 附件/年-月/（方案第 10.4 节）。写不进去的跳过并记下，笔记照样保存 */
+async function writeImages(title: string): Promise<{ images: NoteImage[]; written: string[]; failed: string[] }> {
+  const images: NoteImage[] = []
+  const written: string[] = []
+  const failed: string[] = []
+  const base = safeFileTitle(title).slice(0, 20)
+  for (const [i, p] of pics.entries()) {
+    try {
+      const blob = await cropForSave(p.file, p.crop ?? null)
+      const ext = EXT[blob.type] ?? p.file.name.split('.').pop() ?? 'png'
+      const name = `${created}-${base}-${i + 1}.${ext}`
+      const rel = await writeAttachment(props.config.vaultPath, created.slice(0, 7), name, blob)
+      written.push(rel)
+      images.push({ path: `../${rel}`, caption: d.image_captions[i] ?? '' })
+    } catch {
+      failed.push(`第 ${i + 1} 张`)
+    }
+  }
+  return { images, written, failed }
+}
+
 async function save() {
   if (saving.value || titleMissing.value || !editor.value) return
   saving.value = true
   saveError.value = null
   const title = form.title.trim()
+  const { images, written, failed } = await writeImages(title)
   const md = buildMarkdown(
     {
       title,
@@ -161,24 +231,28 @@ async function save() {
       tags: form.tags,
       keywords: form.keywords,
       summary: form.summary.trim(),
-      body: editor.value.getMarkdown().trim(),
+      body: fixCallouts(editor.value.getMarkdown()).trim(),
+      image_captions: d.image_captions,
     },
-    // 来源、平台、作者由 F02 分享文字解析填入（S1 第 4 步），这一步先留空
+    // 平台、作者由 F02 分享文字解析填入（S1 第 4 步），这一步先留空
     {
       domain: domainName.value,
       type: props.job.type,
       mode: props.job.mode,
-      source: '',
+      source: props.job.source ?? '',
       platform: '',
       author: '',
       created,
-      cover: '',
+      cover: images[0]?.path ?? '',
     },
+    images,
   )
   try {
-    emit('saved', await writeNote(props.config.vaultPath, domainName.value, safeFileTitle(title), created, md))
+    const rel = await writeNote(props.config.vaultPath, domainName.value, safeFileTitle(title), created, md)
+    emit('saved', rel, failed)
   } catch (e) {
-    // 保存失败时编辑中的内容保留（方案第 7 节）
+    // 保存失败时编辑中的内容保留（方案第 7 节）；刚写进去的图片删掉，不留没人引用的文件
+    for (const rel of written) await removeAttachment(props.config.vaultPath, rel).catch(() => {})
     saveError.value = String(e)
   } finally {
     saving.value = false
@@ -205,6 +279,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKey)
   window.removeEventListener('resize', updateLink)
   editor.value?.destroy()
+  picUrls.forEach((u) => URL.revokeObjectURL(u))
 })
 </script>
 
@@ -250,6 +325,24 @@ onBeforeUnmount(() => {
           >
         </button>
 
+        <div v-if="pics.length" class="pics">
+          <figure v-for="(p, i) in pics" :key="picUrls[i]" class="pic">
+            <div class="pic-crop" :style="cropView(i).box">
+              <img
+                :src="picUrls[i]"
+                :alt="d.image_captions[i] ?? ''"
+                :style="cropView(i).img"
+                @load="onPicLoad(i, $event)"
+              />
+            </div>
+            <div class="pic-tools">
+              <button @click="cropping = i">调整裁剪</button>
+              <button v-if="p.crop" @click="p.crop = null">恢复原图</button>
+            </div>
+          </figure>
+          <p v-if="cropNote" class="pic-note">{{ cropNote }}</p>
+        </div>
+
         <div class="toolbar-row">
           <EditorToolbar v-if="editor" :editor="editor" />
         </div>
@@ -262,7 +355,10 @@ onBeforeUnmount(() => {
 
     <aside class="side">
       <div class="tabs" role="tablist" aria-label="右栏">
-        <button role="tab" class="tab" :aria-selected="comparing" @click="setComparing(true)">原文对照</button>
+        <!-- 图片没有转写原文，只有属性信息 -->
+        <button v-if="transcript" role="tab" class="tab" :aria-selected="comparing" @click="setComparing(true)">
+          原文对照
+        </button>
         <button role="tab" class="tab" :aria-selected="!comparing" @click="setComparing(false)">属性信息</button>
       </div>
 
@@ -279,8 +375,12 @@ onBeforeUnmount(() => {
         <div class="source">
           <h3>来源信息</h3>
           <dl class="facts">
-            <div class="fact">
-              <dt><Video :size="16" />视频文件</dt>
+            <div v-if="pics.length" class="fact">
+              <dt><ImageIcon :size="16" />图片</dt>
+              <dd>{{ pics.length }} 张</dd>
+            </div>
+            <div v-else class="fact">
+              <dt><Video :size="16" />{{ job.type }}文件</dt>
               <dd class="file">{{ job.fileName }}</dd>
             </div>
             <div v-if="duration" class="fact">
@@ -291,9 +391,13 @@ onBeforeUnmount(() => {
               <dt><FileText :size="16" />整理方式</dt>
               <dd>{{ job.mode }}</dd>
             </div>
-            <div class="fact">
+            <div v-if="!pics.length" class="fact">
               <dt><Mic :size="16" />内容来自</dt>
               <dd>语音转写</dd>
+            </div>
+            <div v-if="job.source" class="fact">
+              <dt><Link2 :size="16" />来源链接</dt>
+              <dd class="file link-text" :title="job.source">{{ job.source }}</dd>
             </div>
             <div class="fact">
               <dt><CalendarDays :size="16" />收藏日期</dt>
@@ -331,6 +435,14 @@ onBeforeUnmount(() => {
         </div>
       </footer>
     </aside>
+
+    <CropDialog
+      v-if="cropping !== null"
+      :images="pics.map((p, i) => ({ url: picUrls[i], crop: p.crop ?? null }))"
+      :start="cropping"
+      @done="onCropDone"
+      @cancel="cropping = null"
+    />
 
     <svg v-if="link" class="link-layer" aria-hidden="true">
       <path :d="link" />
@@ -496,6 +608,57 @@ onBeforeUnmount(() => {
   margin: 0 var(--sp-1);
   background: var(--line);
 }
+.pics {
+  --pic-max-h: 440px;
+  margin-top: var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.pic {
+  position: relative;
+  margin: 0;
+}
+.pic-crop {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+  background: var(--card-muted);
+}
+.pic-crop img {
+  position: absolute;
+  max-width: none;
+  display: block;
+}
+/* 悬停时右上角浮出两个小按钮 */
+.pic-tools {
+  position: absolute;
+  top: var(--sp-2);
+  right: var(--sp-2);
+  display: flex;
+  gap: var(--sp-1);
+  opacity: 0;
+  transition: opacity var(--ease);
+}
+.pic:hover .pic-tools,
+.pic:focus-within .pic-tools {
+  opacity: 1;
+}
+.pic-tools button {
+  height: var(--h-xs);
+  padding: 0 var(--px-sm);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: rgb(255 255 255 / 92%);
+  box-shadow: var(--shadow-card);
+  font-size: var(--fs-sm);
+}
+.pic-note {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--faint);
+}
 .toolbar-row {
   margin-top: var(--sp-4);
   padding: var(--sp-2) 0;
@@ -557,11 +720,11 @@ onBeforeUnmount(() => {
   padding-top: 12px;
   box-sizing: border-box;
 }
-/* 小标题下面的内容和小标题文字对齐（让出序号的宽度） */
-.body :deep(.tiptap > p),
-.body :deep(.tiptap > ul),
-.body :deep(.tiptap > ol),
-.body :deep(.tiptap > blockquote) {
+/* 小标题下面的内容和小标题文字对齐（让出序号的宽度）；第一个小标题之前的开头段落不缩进 */
+.body :deep(.tiptap > h3 ~ p),
+.body :deep(.tiptap > h3 ~ ul),
+.body :deep(.tiptap > h3 ~ ol),
+.body :deep(.tiptap > h3 ~ blockquote) {
   margin-left: 48px;
 }
 .body :deep(p) {
@@ -708,6 +871,12 @@ onBeforeUnmount(() => {
 }
 .fact .file {
   overflow-wrap: anywhere;
+}
+.fact .link-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow-wrap: normal;
 }
 /* 底部操作：右栏最下面，两种状态下位置不变 */
 .actions {

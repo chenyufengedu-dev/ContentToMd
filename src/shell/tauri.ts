@@ -41,6 +41,13 @@ export const listVaultTags = (vault: string) => invoke<string[]>('list_vault_tag
 export const openNote = (vault: string, relPath: string) => invoke<void>('open_note', { vault, relPath })
 export const writeNote = (vault: string, domain: string, title: string, date: string, content: string) =>
   invoke<string>('write_note', { vault, domain, title, date, content })
+/** 图片写进 收藏库/附件/年-月/；图片内容直接放在请求体里，参数放请求头（见 main.rs 的 write_attachment） */
+export const writeAttachment = async (vault: string, month: string, name: string, data: Blob) =>
+  invoke<string>('write_attachment', new Uint8Array(await data.arrayBuffer()), {
+    headers: { vault: encodeURIComponent(vault), month: encodeURIComponent(month), name: encodeURIComponent(name) },
+  })
+export const removeAttachment = (vault: string, relPath: string) =>
+  invoke<void>('remove_attachment', { vault, relPath })
 
 // 自绘标题栏用的窗口操作（窗口没有系统标题栏，见 tauri.conf.json 的 decorations）
 export const minimizeWindow = () => getCurrentWindow().minimize()

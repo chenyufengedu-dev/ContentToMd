@@ -9,3 +9,9 @@ export const editorExtensions = () => [
   Markdown,
   LinkedBlock,
 ]
+
+/**
+ * 编辑器导出的 Markdown 会把方括号转义成 \[，Obsidian 的提示框（> [!info]- 图片中的文字）就认不出了。
+ * 只还原引用开头的提示框标记，正文里别处的转义不动
+ */
+export const fixCallouts = (md: string) => md.replace(/^((?:> ?)+)\\\[!([\w-]+)\\\]/gm, '$1[!$2]')
