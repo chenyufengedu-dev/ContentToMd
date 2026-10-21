@@ -1,11 +1,12 @@
 // 设置页、投放页预览（只在开发时用：npx vite 后打开 /dev/pages.html）。
-// ?p=settings 设置页（&freeze=卡片id:毫秒 点开这张卡片并把动画停在第几毫秒，逐帧检查动画用）；?p=proc 处理中（出字前），&typing=1 模拟逐字生成，&failed=1 处理失败。
+// ?p=settings 设置页（&freeze=卡片id:毫秒 点开这张卡片并把动画停在第几毫秒，逐帧检查动画用）；?p=proc 处理中（出字前），&typing=1 模拟逐字生成，&failed=1 处理失败；?p=saved 保存成功，&imgfail=1 有图片没写入。；?drop=video|images|txt|bad 投放页放入内容后的样子。
 // 不连外壳，点保存、选文件夹会报错，只用来对照样式
 import { createApp, h, reactive, ref } from 'vue'
 import '../src/style.css'
 import SettingsPage from '../src/pages/SettingsPage.vue'
 import CollectPage from '../src/pages/CollectPage.vue'
 import ProcessingView from '../src/components/ProcessingView.vue'
+import SavedView from '../src/components/SavedView.vue'
 import TitleBar from '../src/components/TitleBar.vue'
 import { defaultConfig } from '../src/core/config'
 import { DEFAULT_PROMPTS } from '../src/core/defaultPrompts'
@@ -50,12 +51,31 @@ function procView() {
     ])
 }
 
+const savedView = () =>
+  h('main', { class: 'page', style: 'max-width:820px;margin:0 auto;padding:48px 20px' }, [
+    h(SavedView, {
+      note: {
+        path: '为人处世/商务礼仪三重点：摆正位置、端正态度、分清场合.md',
+        failedImages: query.has('imgfail') ? ['第 2 张'] : [],
+        title: '商务礼仪三重点：摆正位置、端正态度、分清场合',
+        summary: '商务礼仪的三个重点是摆正位置、端正态度、分清场合：尊重上级、态度会像镜子一样回馈自己。',
+        text:
+          SAMPLE_TEXT.split('\n').slice(1).join('\n') +
+          '\n态度不端正，影响的不只是职业发展。\n分清场合\n有人觉得出去一直守规矩很别扭。',
+      },
+      vaultName: '收藏库',
+      openError: null,
+    }),
+  ])
+
 const body =
-  p === 'settings'
-    ? () => h(SettingsPage, { config, firstRun: true })
-    : p === 'proc'
-      ? procView()
-      : () => h(CollectPage, { config, prompts: DEFAULT_PROMPTS })
+  p === 'saved'
+    ? savedView
+    : p === 'settings'
+      ? () => h(SettingsPage, { config, firstRun: true })
+      : p === 'proc'
+        ? procView()
+        : () => h(CollectPage, { config, prompts: DEFAULT_PROMPTS })
 
 createApp({
   render: () => [h(TitleBar, { page: p === 'settings' ? 'settings' : 'home', homeDisabled: false }), body()],
@@ -84,4 +104,49 @@ if (freeze) {
       a.currentTime = Number(ms)
     })
   }, 500)
+}
+
+// 投放页的几种样子：?drop=video 放视频并粘贴分享文字、images 放两张截图、txt 放 GBK 的 txt 并写本次要求、bad 放认不出编码的 txt
+const drop = query.get('drop')
+if (drop) {
+  const put = (files: File[]) => {
+    const dt = new DataTransfer()
+    files.forEach((f) => dt.items.add(f))
+    document.querySelector('.card')?.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true }))
+  }
+  const sample = async (name: string, type: string) =>
+    new File([await (await fetch(`/samples/${name}`)).blob()], name, { type })
+  const type = (sel: string, text: string, paste = false) => {
+    const el = document.querySelector<HTMLInputElement | HTMLTextAreaElement>(sel)!
+    if (paste) {
+      const dt = new DataTransfer()
+      dt.setData('text/plain', text)
+      el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }))
+    } else {
+      el.value = text
+      el.dispatchEvent(new Event('input'))
+    }
+  }
+  setTimeout(async () => {
+    if (drop === 'video') {
+      put([await sample('商务礼仪.mp4', 'video/mp4')])
+      await new Promise((r) => setTimeout(r, 100))
+      type(
+        '.link-input input',
+        '7.53 复制打开抖音，看看【礼仪老师小王的作品】商务礼仪三重点 # 商务礼仪  https://v.douyin.com/iAbC123/ Xzm:/',
+        true,
+      )
+    } else if (drop === 'images') {
+      put([await sample('网页滚动动画.png', 'image/png'), await sample('会议幻灯片.png', 'image/png')])
+    } else if (drop === 'txt') {
+      // “会议记录：决定下周上线” 的 GBK 编码，重复几遍
+      const gbk = 'BBE1D2E9BCC7C2BCA3BABEF6B6A8CFC2D6DCC9CFCFDF'
+      const bytes = new Uint8Array(gbk.match(/../g)!.map((x) => parseInt(x, 16)))
+      put([new File(Array(40).fill(bytes), '会议记录.txt', { type: 'text/plain' })])
+      await new Promise((r) => setTimeout(r, 100))
+      type('.textarea textarea', '只保留决定事项和负责人')
+    } else if (drop === 'bad') {
+      put([new File([new Uint8Array(300).map((_, i) => (i * 37 + 129) % 256)], '旧笔记.txt', { type: 'text/plain' })])
+    }
+  }, 300)
 }

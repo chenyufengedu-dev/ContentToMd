@@ -55,6 +55,12 @@ export interface Job {
   images?: JobImage[]
   /** 用户填的来源链接（选填），写进笔记的 source */
   source?: string
+  /** 粘贴的分享文字原文（F02）：解析出的平台、作者写进笔记，原文一起发给 AI 帮它认专有名词 */
+  shareText?: string
+  platform?: string
+  author?: string
+  /** 本次要求（F04），空的就按默认规则 */
+  request?: string
   /** 整理时 AI 已经生成的文字（去掉了格式），处理中的预览框一个字一个字显示 */
   preview?: string
 }
@@ -62,6 +68,11 @@ export interface Job {
 export function newJob(fileName: string, type: SourceType, mode: Mode): Job {
   const ids: StepId[] = ['extract', 'transcribe', 'organize']
   return { fileName, type, mode, steps: ids.map((id) => ({ id, status: 'pending' })) }
+}
+
+/** MD / TXT（F07）：放入时已经解出文字，只剩整理一步；文字放在 transcript，确认页的原文对照照常用 */
+export function newTextJob(fileName: string, text: string, mode: Mode): Job {
+  return { fileName, type: '文字', mode, steps: [{ id: 'organize', status: 'pending' }], transcript: text }
 }
 
 export function newImageJob(files: File[], mode: Mode): Job {
@@ -141,6 +152,7 @@ const STEPS: Record<StepId, (job: Job, ctx: RunContext, step: StepState) => Prom
     const system = buildSystemPrompt(ctx.prompts, job.mode, ctx.config.domains, ctx.existingTags)
     const images = job.images
     const kind = images ? 'vision' : 'text'
+    const extra = { shareText: job.shareText, request: job.request }
     const user = images
       ? [
           {
@@ -148,11 +160,16 @@ const STEPS: Record<StepId, (job: Job, ctx: RunContext, step: StepState) => Prom
             text: buildUserMessage(
               `${images.length} 张图片`,
               `材料是下面的 ${images.length} 张图片，按顺序是第 1～${images.length} 张。`,
+              extra,
             ),
           },
           ...images.map((i) => ({ type: 'image_url', image_url: { url: i.aiUrl! } })),
         ]
-      : buildUserMessage(`${job.type}（语音转写）`, job.transcript!)
+      : buildUserMessage(
+          job.type === '文字' ? `文字文件（${job.fileName}）` : `${job.type}（语音转写）`,
+          job.transcript!,
+          extra,
+        )
     // 返回格式不对时自动重试 1 次（方案第 8 节）
     for (let attempt = 0; ; attempt++) {
       try {

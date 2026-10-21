@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { defaultConfig } from './config'
 import { DEFAULT_PROMPTS } from './defaultPrompts'
 import { AppError } from './errors'
-import { newImageJob, newJob, runJob, type Job, type RunContext } from './pipeline'
+import { newImageJob, newJob, newTextJob, runJob, type Job, type RunContext } from './pipeline'
 import type { Fetch } from './services'
 
 const TRANSCRIPT = '🎼商务礼仪的三个重点分享给大家。第一个重点呢叫做摆正位置。第二个重点呢叫做端正态度。'
@@ -153,5 +153,18 @@ describe('runJob：图片', () => {
     c.config.services.vision.baseUrl = 'https://vision.example.com/v1'
     await runJob(newImageJob(images(), '要点提炼'), c)
     expect(calls.urls[0]).toBe('https://vision.example.com/v1/chat/completions')
+  })
+
+  it('文字文件：只有整理一步，原文和本次要求都发给 AI（F07、F04）', async () => {
+    const { fetch, calls } = fakeServices([chatOk(AI_RESULT)])
+    const job = newTextJob('会议记录.txt', '决定下周上线', '原文精修')
+    job.request = '只保留决定事项'
+    await runJob(job, ctx(fetch))
+    expect(job.steps.map((s) => s.id)).toEqual(['organize'])
+    expect(job.transcript).toBe('决定下周上线')
+    const user = (calls.bodies[0] as { messages: { content: string }[] }).messages[1].content
+    expect(user).toContain('本次要求：只保留决定事项')
+    expect(user).toContain('<<<材料开始>>>\n决定下周上线')
+    expect(job.draft?.title).toBe('商务礼仪三重点')
   })
 })
