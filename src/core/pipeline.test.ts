@@ -155,6 +155,18 @@ describe('runJob：图片', () => {
     expect(calls.urls[0]).toBe('https://vision.example.com/v1/chat/completions')
   })
 
+  it('整理时 429：自动等一会儿再试，成功后不用用户点重试（方案第 8 节）', async () => {
+    const { fetch, calls } = fakeServices([chatStatus(429), chatOk(AI_RESULT)])
+    const job = newTextJob('会议记录.txt', '决定下周上线', '原文精修')
+    const notes: (string | undefined)[] = []
+    const c = { ...ctx(fetch), sleep: async () => {}, onUpdate: () => notes.push(job.steps[0].note) }
+    await runJob(job, c)
+    expect(calls.chat).toBe(2)
+    expect(notes).toContain('请求太频繁，5 秒后自动重试')
+    expect(job.steps[0].note).toBeUndefined()
+    expect(job.draft?.title).toBe('商务礼仪三重点')
+  })
+
   it('文字文件：只有整理一步，原文和本次要求都发给 AI（F07、F04）', async () => {
     const { fetch, calls } = fakeServices([chatOk(AI_RESULT)])
     const job = newTextJob('会议记录.txt', '决定下周上线', '原文精修')

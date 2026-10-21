@@ -75,6 +75,77 @@ fn ensure_prompts(defaults: HashMap<String, String>) -> Result<HashMap<String, S
     Ok(out)
 }
 
+// ---------------- 草稿（F10，方案第 10.1 节） ----------------
+// 一次只处理一条，只有一份草稿：%APPDATA%\ContentToMd\drafts\current\ 里的 draft.json 和图片原文件
+
+fn draft_dir() -> Result<PathBuf, String> {
+    Ok(data_dir()?.join("drafts").join("current"))
+}
+
+/// 先写临时文件再改名，写到一半崩溃也不会留下坏掉的草稿
+fn put_draft_file(dir: &std::path::Path, name: &str, bytes: &[u8]) -> Result<(), String> {
+    check_segment(name)?;
+    fs::create_dir_all(dir).map_err(|e| io_msg(dir, e))?;
+    let target = dir.join(name);
+    let tmp = dir.join(format!(".{name}.tmp"));
+    fs::write(&tmp, bytes).map_err(|e| io_msg(&tmp, e))?;
+    fs::rename(&tmp, &target).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        io_msg(&target, e)
+    })
+}
+
+fn list_draft_files(dir: &std::path::Path) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return vec![];
+    };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| !n.starts_with('.'))
+        .collect();
+    names.sort();
+    names
+}
+
+/// 文件内容放在请求体里，文件名放在请求头 name 里（同 write_attachment）
+#[tauri::command]
+fn draft_write(request: tauri::ipc::Request<'_>) -> Result<(), String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("草稿数据格式不对".into());
+    };
+    let name = request
+        .headers()
+        .get("name")
+        .and_then(|v| v.to_str().ok())
+        .ok_or("缺少参数 name")?;
+    put_draft_file(&draft_dir()?, &percent_decode(name)?, bytes)
+}
+
+/// 草稿里有哪些文件；没有草稿时是空的
+#[tauri::command]
+fn draft_list() -> Result<Vec<String>, String> {
+    Ok(list_draft_files(&draft_dir()?))
+}
+
+#[tauri::command]
+fn draft_read(name: String) -> Result<tauri::ipc::Response, String> {
+    check_segment(&name)?;
+    let path = draft_dir()?.join(&name);
+    let bytes = fs::read(&path).map_err(|e| io_msg(&path, e))?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
+/// 保存或放弃后删掉草稿（只删 drafts\current 这一个文件夹）
+#[tauri::command]
+fn draft_clear() -> Result<(), String> {
+    let dir = draft_dir()?;
+    match fs::remove_dir_all(&dir) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(io_msg(&dir, e)),
+        _ => Ok(()),
+    }
+}
+
 // ---------------- 收藏库 ----------------
 
 /// 名字里不能带路径分隔符或“..”，保证只写在收藏库里面（方案第 10.5 节）
@@ -329,7 +400,11 @@ fn main() {
             write_attachment,
             remove_attachment,
             list_vault_tags,
-            open_note
+            open_note,
+            draft_write,
+            draft_list,
+            draft_read,
+            draft_clear
         ])
         .run(tauri::generate_context!())
         .expect("启动失败");
@@ -395,6 +470,28 @@ mod tests {
         );
         // 不留下临时文件
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 3);
+    }
+
+    #[test]
+    fn 草稿文件_写入后能列出和读回_覆盖时不留临时文件() {
+        let v = TempVault::new("draft");
+        let dir = v.0.join("current");
+        assert!(list_draft_files(&dir).is_empty());
+        put_draft_file(&dir, "draft.json", b"{\"a\":1}").unwrap();
+        put_draft_file(&dir, "image-0", b"png").unwrap();
+        put_draft_file(&dir, "draft.json", b"{\"a\":2}").unwrap();
+        assert_eq!(list_draft_files(&dir), vec!["draft.json", "image-0"]);
+        assert_eq!(fs::read(dir.join("draft.json")).unwrap(), b"{\"a\":2}");
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn 草稿文件名带路径时拒绝() {
+        let v = TempVault::new("draft-escape");
+        let dir = v.0.join("current");
+        for name in ["..", r"..\x", "a/b", ""] {
+            assert!(put_draft_file(&dir, name, b"x").is_err(), "应拒绝 {name}");
+        }
     }
 
     #[test]

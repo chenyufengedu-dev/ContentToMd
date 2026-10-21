@@ -3,13 +3,13 @@
 // 一次只放一种内容：一个音视频文件、一个 MD / TXT 文件，或者 1～9 张图片（设计稿 设计稿/投放页/*.webp）
 import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef } from 'vue'
 import { type Config, SERVICE_LABELS, isServiceConfigured, type ServiceKind } from '../core/config'
-import { type Mode, MODES, type Prompts, type SourceType, preselectMode } from '../core/note'
+import { type Mode, MODES, type NoteDraft, type Prompts, type SourceType, preselectMode } from '../core/note'
 import { type Job, newImageJob, newJob, newTextJob, runJob } from '../core/pipeline'
 import { parseShareText, type ShareInfo } from '../core/shareText'
 import { decodeText } from '../core/textFile'
 import { describeError, isAppError, type ErrorCode } from '../core/errors'
 import { checkImages, MAX_IMAGES, readPixels, toAiDataUrl } from '../core/image'
-import { httpFetch, listVaultTags, openNote } from '../shell/tauri'
+import { clearDraft, httpFetch, listVaultTags, openNote, saveDraft } from '../shell/tauri'
 import ConfirmPage, { type SavedNote } from './ConfirmPage.vue'
 import SavedView from '../components/SavedView.vue'
 import ProcessingView from '../components/ProcessingView.vue'
@@ -195,7 +195,12 @@ function clearContent() {
   request.value = ''
   errors.value = []
   job.value = null
+  dropDraft()
 }
+
+// 草稿（F10）：任务开始、每一步做完、停下来时存；保存成功、放弃、移除内容时删。存不了不打断处理
+const keepDraft = (withFiles = false) => job.value && void saveDraft(job.value, withFiles).catch(() => {})
+const dropDraft = () => void clearDraft().catch(() => {})
 
 const autoPicked = computed(() => kind.value && mode.value === preselectMode(kind.value))
 const pickedHint = computed(() =>
@@ -264,6 +269,7 @@ async function start() {
     author: share.value?.author ?? '',
     request: request.value.trim(),
   })
+  keepDraft(true)
   existingTags.value = await listVaultTags(props.config.vaultPath).catch(() => [])
   await run()
 }
@@ -276,6 +282,7 @@ async function run() {
   abort = new AbortController()
   now.value = Date.now()
   ticker = window.setInterval(() => (now.value = Date.now()), 500)
+  let doneSteps = job.value.steps.filter((s) => s.status === 'done').length
   try {
     await runJob(job.value, {
       config: props.config,
@@ -286,7 +293,11 @@ async function run() {
       toAiUrl: toAiDataUrl,
       readPixels,
       cancel: abort.signal,
-      onUpdate: () => {},
+      onUpdate: () => {
+        const done = job.value?.steps.filter((s) => s.status === 'done').length ?? 0
+        if (done > doneSteps) keepDraft()
+        doneSteps = done
+      },
     })
     phase.value = 'confirm'
   } catch (e) {
@@ -301,6 +312,7 @@ async function run() {
   } finally {
     clearInterval(ticker)
     abort = null
+    keepDraft()
   }
 }
 
@@ -311,15 +323,22 @@ function cancel() {
 /** 返回修改：保留放入的内容，丢掉这次的处理结果 */
 function backToEdit() {
   job.value = null
+  dropDraft()
   phase.value = 'drop'
 }
 
 // ---------------- 保存后 ----------------
 const saved = ref<SavedNote | null>(null)
 const vaultName = computed(() => props.config.vaultPath.split(/[\\/]/).filter(Boolean).at(-1) ?? '收藏库')
+function onEdited(edits: NoteDraft) {
+  if (!job.value) return
+  job.value.edits = edits
+  keepDraft()
+}
 function onSaved(note: SavedNote) {
   saved.value = note
   phase.value = 'saved'
+  dropDraft()
 }
 const openError = ref<string | null>(null)
 async function open() {
@@ -356,6 +375,7 @@ onBeforeUnmount(() => {
     :job="job"
     :existing-tags="existingTags"
     @saved="onSaved"
+    @edited="onEdited"
     @go-settings="emit('goSettings')"
     @discard="next"
   />

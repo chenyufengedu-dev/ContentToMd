@@ -6,6 +6,8 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
 import type { Config } from '../core/config'
 import type { Fetch } from '../core/services'
+import type { Job } from '../core/pipeline'
+import { DRAFT_JSON, toDraft, type DraftData } from '../core/draft'
 
 export const loadConfigJson = () => invoke<string | null>('load_config')
 export const saveConfig = (c: Config) => invoke<void>('save_config', { json: JSON.stringify(c, null, 2) })
@@ -48,6 +50,29 @@ export const writeAttachment = async (vault: string, month: string, name: string
   })
 export const removeAttachment = (vault: string, relPath: string) =>
   invoke<void>('remove_attachment', { vault, relPath })
+
+// 草稿（F10）：draft.json 和图片原文件，见 core/draft.ts
+const putDraftFile = async (name: string, data: Blob) =>
+  invoke<void>('draft_write', new Uint8Array(await data.arrayBuffer()), {
+    headers: { name: encodeURIComponent(name) },
+  })
+/** withFiles：连图片原文件一起存（只在任务刚开始时存一次，之后只更新 draft.json） */
+export async function saveDraft(job: Job, withFiles = false): Promise<void> {
+  const { data, files } = toDraft(job)
+  if (withFiles) for (const f of files) await putDraftFile(f.name, f.blob)
+  await putDraftFile(DRAFT_JSON, new Blob([JSON.stringify(data)]))
+}
+/** 没有草稿时返回 null */
+export async function loadDraft(): Promise<{ data: DraftData; files: Record<string, Blob> } | null> {
+  const names = await invoke<string[]>('draft_list')
+  if (!names.includes(DRAFT_JSON)) return null
+  const read = async (name: string) => new Blob([await invoke<ArrayBuffer>('draft_read', { name })])
+  const data = JSON.parse(await (await read(DRAFT_JSON)).text()) as DraftData
+  const files: Record<string, Blob> = {}
+  for (const n of names.filter((n) => n !== DRAFT_JSON)) files[n] = await read(n)
+  return { data, files }
+}
+export const clearDraft = () => invoke<void>('draft_clear')
 
 // 自绘标题栏用的窗口操作（窗口没有系统标题栏，见 tauri.conf.json 的 decorations）
 export const minimizeWindow = () => getCurrentWindow().minimize()
