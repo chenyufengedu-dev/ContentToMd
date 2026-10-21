@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import {
   type Config,
   type ServiceKind,
@@ -14,9 +14,11 @@ import {
 } from '../core/config'
 import { testService } from '../core/services'
 import { describeError } from '../core/errors'
-import { saveConfig, pickFolder, folderHasNotes, httpFetch } from '../shell/tauri'
+import { saveConfig, pickFolder, folderHasNotes, httpFetch, readUsage } from '../shell/tauri'
+import { formatYuan, keyId, summarize, type UsageRecord } from '../core/cost'
 import SettingCard from '../components/SettingCard.vue'
-import { X } from 'lucide-vue-next'
+import { ChevronRight, X } from 'lucide-vue-next'
+import type { Price } from '../core/cost'
 
 const props = defineProps<{ config: Config; firstRun: boolean }>()
 const emit = defineEmits<{ saved: [Config] }>()
@@ -27,6 +29,53 @@ const saved = ref(JSON.stringify(props.config))
 const dirty = computed(() => JSON.stringify(draft) !== saved.value)
 
 const KINDS = SERVICE_KINDS
+
+// ---- 每把密钥花了多少（F14，设计稿 设计稿/设置页/状态-费用.png）：按 usage.jsonl 里的密钥编号统计 ----
+const usage = ref<UsageRecord[]>([])
+onMounted(() =>
+  readUsage()
+    .then((r) => (usage.value = r))
+    .catch(() => {}),
+)
+const keyIds = ref<Partial<Record<ServiceKind, string>>>({})
+watch(
+  () => KINDS.map((k) => draft.services[k].apiKey),
+  async () => {
+    for (const k of KINDS) {
+      const key = draft.services[k].apiKey.trim()
+      keyIds.value[k] = key ? await keyId(key) : undefined
+    }
+  },
+  { immediate: true },
+)
+// ---- 单价（选填，F14，设计稿 状态-价格收起 / 展开）：平时收起，点“价格（选填）”展开 ----
+const PRICE_FIELDS: { key: keyof Price; label: string }[] = [
+  { key: 'input', label: '输入' },
+  { key: 'cachedInput', label: '缓存命中的输入' },
+  { key: 'output', label: '输出' },
+]
+// 已经填过价格的服务默认展开，免得用户以为没填
+const priceOpen = reactive(
+  Object.fromEntries(KINDS.map((k) => [k, !!props.config.services[k].price])) as Record<ServiceKind, boolean>,
+)
+/** 空着或不是数字就当没填；三项都空时整个价格去掉 */
+function setPrice(k: ServiceKind, f: keyof Price, raw: string) {
+  const v = raw.trim() === '' ? NaN : Number(raw)
+  const price: Price = { ...draft.services[k].price, [f]: Number.isFinite(v) && v >= 0 ? v : undefined }
+  draft.services[k].price = Object.values(price).some((x) => x !== undefined) ? price : undefined
+}
+
+/** 测试连接那一行右边的小字；这把密钥还没用过时不显示 */
+function spendText(k: ServiceKind): string {
+  const id = keyIds.value[k]
+  if (!id) return ''
+  const s = summarize(usage.value, id, new Date())
+  if (!s.calls) return ''
+  // 这把密钥一次都没算过钱（没填价格）：只说用了几次，不显示金额
+  if (s.unknown === s.calls) return `这个密钥：共 ${s.calls} 次`
+  const y = (v: number) => (v === 0 ? ' 0 元' : formatYuan(v))
+  return `这个密钥：本月${y(s.month)} · 累计${y(s.total)} · 共 ${s.calls} 次`
+}
 
 // ---- 抽出来的那张卡片：每次进入设置页都从“都没抽出”开始（页面每次重新创建） ----
 const open = ref<string | null>(null)
@@ -308,8 +357,29 @@ async function save() {
           <button class="soft small" :disabled="test[k].status === 'testing'" @click="runTest(k)">
             {{ test[k].status === 'testing' ? '测试中…' : '测试连接' }}
           </button>
+          <button class="price-toggle" :aria-expanded="priceOpen[k]" @click="priceOpen[k] = !priceOpen[k]">
+            价格（选填）<ChevronRight :size="14" class="chev" :class="{ down: priceOpen[k] }" aria-hidden="true" />
+          </button>
           <span v-if="test[k].status === 'ok'" class="ok">✓ {{ test[k].message }}</span>
           <span v-if="test[k].status === 'fail'" class="err">{{ test[k].message }}</span>
+          <span v-if="spendText(k)" class="spend">{{ spendText(k) }}</span>
+        </div>
+        <div v-if="priceOpen[k]" class="price">
+          <label v-for="f in PRICE_FIELDS" :key="f.key" class="price-field">
+            <span class="price-label">{{ f.label }}</span>
+            <span class="price-input">
+              <input
+                :value="draft.services[k].price?.[f.key] ?? ''"
+                inputmode="decimal"
+                placeholder="未填"
+                @input="setPrice(k, f.key, ($event.target as HTMLInputElement).value)"
+              />
+              <span class="unit">元 / 百万 tokens</span>
+            </span>
+          </label>
+          <p class="price-note">
+            填了才会计算花费，按服务返回的用量估算，以服务商账单为准。价格可在服务商官网的价格页查到。
+          </p>
         </div>
         <details v-if="test[k].status === 'fail' && test[k].detail" class="detail">
           <summary>详细信息</summary>
@@ -419,6 +489,72 @@ h3 {
   gap: var(--sp-2);
   align-items: center;
   flex-wrap: wrap;
+}
+/* 价格（选填）：灰色小字按钮，箭头展开时朝下；展开的一块浅灰底、无边框 */
+.price-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: var(--h-xs);
+  padding: 0 var(--sp-2);
+  border: 0;
+  background: none;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+.price-toggle:hover:not(:disabled) {
+  background: var(--hover);
+}
+.chev {
+  transition: transform var(--ease);
+}
+.chev.down {
+  transform: rotate(90deg);
+}
+.price {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--sp-2) var(--sp-4);
+  margin-top: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--radius-md);
+  background: var(--card-muted);
+}
+.price-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+.price-label {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+.price-input {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.price-input input {
+  width: 96px;
+  height: var(--h-xs);
+  font-size: var(--fs-sm);
+}
+.unit {
+  font-size: var(--fs-xs);
+  color: var(--faint);
+  white-space: nowrap;
+}
+.price-note {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--faint);
+}
+.spend {
+  margin-left: auto;
+  font-size: var(--fs-xs);
+  color: var(--faint);
 }
 .soft {
   border: 0;

@@ -10,6 +10,7 @@ import { decodeText } from '../core/textFile'
 import { describeError, isAppError, type ErrorCode } from '../core/errors'
 import { checkImages, MAX_IMAGES, readPixels, toAiDataUrl } from '../core/image'
 import {
+  appendUsage,
   clearDraft,
   destroyWindow,
   guardClose,
@@ -314,6 +315,8 @@ async function run() {
       toAiUrl: toAiDataUrl,
       readPixels,
       cancel: abort.signal,
+      // 费用记录写不进去不打断处理
+      onUsage: (rec) => void appendUsage(rec).catch(() => {}),
       onUpdate: () => {
         const done = job.value?.steps.filter((s) => s.status === 'done').length ?? 0
         if (done > doneSteps) keepDraft()
@@ -461,7 +464,14 @@ onBeforeUnmount(() => {
   />
 
   <main v-else-if="phase === 'saved' && saved" class="page proc-page">
-    <SavedView :note="saved" :vault-name="vaultName" :open-error="openError" @open="open" @next="next" />
+    <SavedView
+      :cost="job?.costUnknown ? undefined : job?.cost"
+      :note="saved"
+      :vault-name="vaultName"
+      :open-error="openError"
+      @open="open"
+      @next="next"
+    />
   </main>
 
   <!-- 处理中 / 失败 -->

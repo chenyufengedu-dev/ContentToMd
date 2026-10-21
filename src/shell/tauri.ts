@@ -8,6 +8,7 @@ import type { Config } from '../core/config'
 import type { Fetch } from '../core/services'
 import type { Job } from '../core/pipeline'
 import { DRAFT_JSON, toDraft, type DraftData } from '../core/draft'
+import { parseUsage, type UsageRecord } from '../core/cost'
 
 export const loadConfigJson = () => invoke<string | null>('load_config')
 export const saveConfig = (c: Config) => invoke<void>('save_config', { json: JSON.stringify(c, null, 2) })
@@ -73,6 +74,10 @@ export async function loadDraft(): Promise<{ data: DraftData; files: Record<stri
   return { data, files }
 }
 export const clearDraft = () => invoke<void>('draft_clear')
+
+// 费用记录（F14）：usage.jsonl，一次调用一行
+export const appendUsage = (r: UsageRecord) => invoke<void>('usage_append', { line: JSON.stringify(r) })
+export const readUsage = async () => parseUsage(await invoke<string>('usage_read'))
 
 // 自绘标题栏用的窗口操作（窗口没有系统标题栏，见 tauri.conf.json 的 decorations）
 export const minimizeWindow = () => getCurrentWindow().minimize()

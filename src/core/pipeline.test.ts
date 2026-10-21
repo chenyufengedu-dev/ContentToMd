@@ -4,6 +4,7 @@ import { DEFAULT_PROMPTS } from './defaultPrompts'
 import { AppError } from './errors'
 import { newImageJob, newJob, newTextJob, runJob, type Job, type RunContext } from './pipeline'
 import type { Fetch } from './services'
+import type { UsageRecord } from './cost'
 
 const TRANSCRIPT = '🎼商务礼仪的三个重点分享给大家。第一个重点呢叫做摆正位置。第二个重点呢叫做端正态度。'
 const CLEANED = '商务礼仪的三个重点分享给大家。第一个重点呢叫做摆正位置。第二个重点呢叫做端正态度。'
@@ -153,6 +154,41 @@ describe('runJob：图片', () => {
     c.config.services.vision.baseUrl = 'https://vision.example.com/v1'
     await runJob(newImageJob(images(), '要点提炼'), c)
     expect(calls.urls[0]).toBe('https://vision.example.com/v1/chat/completions')
+  })
+
+  it('每次调用记一笔费用：转写免费，整理按用量估算，加到这一条的花费上（F14）', async () => {
+    const usage = { prompt_tokens: 2000, completion_tokens: 1000 }
+    const withUsage = () =>
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { content: JSON.stringify(AI_RESULT) }, finish_reason: 'stop' }],
+          usage,
+        }),
+      )
+    const { fetch } = fakeServices([withUsage])
+    const job = jobAfterExtract()
+    const c = ctx(fetch)
+    c.config.services.text.apiKey = 'sk-test'
+    c.config.services.text.price = { input: 2, output: 8 }
+    const records: UsageRecord[] = []
+    await runJob(job, { ...c, onUsage: (r) => records.push(r) })
+    expect(records.map((r) => r.service)).toEqual(['asr', 'asr', 'text'])
+    expect(records[2]).toMatchObject({ model: 'deepseek-flash', tokens: usage, item: '商务礼仪.mp4' })
+    expect(records[2].keyId).toHaveLength(8)
+    expect(records[2].cost).toBeCloseTo((2000 * 2 + 1000 * 8) / 1e6, 10)
+    // 转写没有按 tokens 的价格，不影响这一条的花费
+    expect(job.cost).toBeCloseTo(records[2].cost!, 10)
+    expect(job.costUnknown).toBeFalsy()
+  })
+
+  it('没填价格：只记用量和次数，这一条的花费不知道（F14）', async () => {
+    const { fetch } = fakeServices([chatOk(AI_RESULT)])
+    const job = jobAfterExtract()
+    const records: UsageRecord[] = []
+    await runJob(job, { ...ctx(fetch), onUsage: (r) => records.push(r) })
+    expect(records.every((r) => r.cost === null)).toBe(true)
+    expect(job.cost).toBeUndefined()
+    expect(job.costUnknown).toBe(true)
   })
 
   it('整理时 429：自动等一会儿再试，成功后不用用户点重试（方案第 8 节）', async () => {

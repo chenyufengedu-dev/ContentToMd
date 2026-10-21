@@ -12,10 +12,37 @@ import { defaultConfig } from '../src/core/config'
 import { DEFAULT_PROMPTS } from '../src/core/defaultPrompts'
 import { newJob } from '../src/core/pipeline'
 import { toDraft } from '../src/core/draft'
+import { keyId, type UsageRecord } from '../src/core/cost'
 
 const query = new URLSearchParams(location.search)
 const p = query.get('p')
 const config = defaultConfig()
+
+// ?p=settings&usage=1：假装填了密钥、用过一阵，看设置页每把密钥的花费
+if (query.has('usage')) {
+  config.services.text.apiKey = config.services.vision.apiKey = 'sk-demo'
+  config.services.asr.apiKey = 'sk-asr'
+  const rec = async (key: string, service: UsageRecord['service'], cost: number, time = new Date()) => ({
+    time: time.toISOString(),
+    service,
+    model: '',
+    keyId: await keyId(key),
+    cost,
+  })
+  Object.assign(window, {
+    __TAURI_INTERNALS__: {
+      invoke: async (cmd: string) => {
+        if (cmd !== 'usage_read') throw new Error('预览里没有外壳')
+        const rs = [
+          await rec('sk-demo', 'text', 0.85, new Date('2026-09-15')),
+          ...(await Promise.all(Array.from({ length: 41 }, () => rec('sk-demo', 'text', 0.35 / 41)))),
+          ...(await Promise.all(Array.from({ length: 40 }, () => rec('sk-asr', 'asr', 0)))),
+        ]
+        return rs.map((r) => JSON.stringify(r)).join('\n')
+      },
+    },
+  })
+}
 
 const SAMPLE_TEXT =
   '商务礼仪三重点：摆正位置、端正态度、分清场合\n商务礼仪的三个重点是摆正位置、端正态度、分清场合。\n摆正位置\n尊重上级是天职，尊重平级是本分，尊重下级是美德。\n一提到尊重领导、尊重上级就排斥反感，这是没有摆正位置。'
@@ -66,6 +93,7 @@ const savedView = () =>
       },
       vaultName: '收藏库',
       openError: null,
+      cost: 0.0123,
     }),
   ])
 

@@ -4,6 +4,7 @@ import type { ServiceConfig, ServiceKind } from './config'
 import { SERVICE_LABELS, checkBaseUrl } from './config'
 import { toWav } from './audio'
 import { AppError } from './errors'
+import type { Usage } from './cost'
 
 export type Fetch = (input: string, init?: RequestInit) => Promise<Response>
 
@@ -132,6 +133,8 @@ export async function chatJson(
   fetch: Fetch,
   cancel?: AbortSignal,
   onText?: (soFar: string) => void,
+  /** 这次调用用了多少 tokens（F14 费用记录）；服务没返回用量时不调用 */
+  onUsage?: (u: Usage) => void,
 ): Promise<unknown> {
   const res = await request(
     kind,
@@ -143,7 +146,7 @@ export async function chatJson(
       body: JSON.stringify({
         model: s.model.trim(),
         response_format: { type: 'json_object' },
-        ...(onText ? { stream: true } : {}),
+        ...(onText ? { stream: true, stream_options: { include_usage: true } } : {}),
         messages: [
           { role: 'system', content: system },
           { role: 'user', content: user },
@@ -155,13 +158,16 @@ export async function chatJson(
   )
   let content: unknown
   let finish: unknown
+  let usage: Usage | undefined
   if (onText && res.body && /event-stream/i.test(res.headers.get('Content-Type') ?? '')) {
-    ;({ content, finish } = await readStream(res.body, onText, cancel))
+    ;({ content, finish, usage } = await readStream(res.body, onText, cancel))
   } else {
     const data = await res.json().catch(() => null)
     content = data?.choices?.[0]?.message?.content
     finish = data?.choices?.[0]?.finish_reason
+    usage = data?.usage
   }
+  if (usage) onUsage?.(usage)
   if (finish === 'length') throw new AppError('truncated', '内容太长，AI 的输出被截断了', 'finish_reason=length')
   try {
     return JSON.parse(String(content))
@@ -175,12 +181,13 @@ async function readStream(
   body: ReadableStream<Uint8Array>,
   onText: (soFar: string) => void,
   cancel?: AbortSignal,
-): Promise<{ content: string; finish: unknown }> {
+): Promise<{ content: string; finish: unknown; usage?: Usage }> {
   const reader = body.getReader()
   const decoder = new TextDecoder()
   let buf = ''
   let content = ''
   let finish: unknown
+  let usage: Usage | undefined
   try {
     for (;;) {
       const { done, value } = await reader.read()
@@ -192,7 +199,9 @@ async function readStream(
       for (const line of lines) {
         const m = /^data:\s*(.*)$/.exec(line.trim())
         if (!m || m[1] === '[DONE]') continue
-        const choice = JSON.parse(m[1])?.choices?.[0]
+        const chunk = JSON.parse(m[1])
+        if (chunk?.usage) usage = chunk.usage // 要了用量时，最后一块单独带 usage
+        const choice = chunk?.choices?.[0]
         if (typeof choice?.delta?.content === 'string') {
           content += choice.delta.content
           changed = true
@@ -206,5 +215,5 @@ async function readStream(
     if (e instanceof SyntaxError) throw new AppError('bad_response', '服务返回的结果格式不对，请点击重试', String(e))
     throw new AppError('network', '网络连接中断，请检查网络后重试', String(e))
   }
-  return { content, finish }
+  return { content, finish, usage }
 }

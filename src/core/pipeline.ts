@@ -1,11 +1,12 @@
 // 一条内容的处理流程。音视频：提取声音 → 转写 → 整理；图片：读取图片 → 看图整理（整理完顺便算出自动裁剪框）。
 // 每一步的结果都留在 job 里，重试时从失败的那一步继续，已经付过费的步骤不再重复（方案第 6.2 节）
 
-import type { Config } from './config'
+import type { Config, ServiceKind } from './config'
 import { decodeTo16kMono, splitChunks, toWav, cleanTranscript, effectiveLength } from './audio'
 import { transcribe, chatJson, type Fetch } from './services'
 import { AppError, isAppError } from './errors'
 import { retryOnRateLimit } from './retry'
+import { estimateCost, keyId, type Usage, type UsageRecord } from './cost'
 import { autoCrop, type Pixels, type Rect } from './image'
 import {
   buildSystemPrompt,
@@ -62,6 +63,9 @@ export interface Job {
   author?: string
   /** 本次要求（F04），空的就按默认规则 */
   request?: string
+  /** 这一条到目前为止的估算花费（元，F14）；有调用不知道价格时 costUnknown */
+  cost?: number
+  costUnknown?: boolean
   /** 确认页里改到一半的内容（标题、属性、正文 Markdown），存进草稿，恢复时接着改（F10） */
   edits?: NoteDraft
   /** 整理时 AI 已经生成的文字（去掉了格式），处理中的预览框一个字一个字显示 */
@@ -100,8 +104,31 @@ export interface RunContext {
   readPixels: (b: Blob) => Promise<Pixels>
   cancel: AbortSignal
   onUpdate: () => void
+  /** 每调用一次服务记一笔费用（F14），由界面写进 usage.jsonl */
+  onUsage?: (r: UsageRecord) => void
   /** 429 重试前的等待；测试里换成不等 */
   sleep?: (ms: number) => Promise<void>
+}
+
+/** 记一笔费用：加到这一条的花费上，再交给界面存起来 */
+async function recordUsage(job: Job, ctx: RunContext, kind: ServiceKind, usage?: Usage) {
+  const s = ctx.config.services[kind]
+  const at = new Date()
+  const cost = estimateCost(s.price, usage)
+  // 转写不按 tokens 计价，不算进这一条的花费；整理、看图没填价格时这一条的花费就不知道
+  if (kind !== 'asr') {
+    if (cost === null) job.costUnknown = true
+    else job.cost = (job.cost ?? 0) + cost
+  }
+  ctx.onUsage?.({
+    time: at.toISOString(),
+    service: kind,
+    model: s.model.trim(),
+    keyId: await keyId(s.apiKey),
+    cost,
+    tokens: usage,
+    item: job.fileName,
+  })
 }
 
 /** 调服务：遇到 429 自动等一会儿再试，等的时候在这一步旁边写“N 秒后自动重试” */
@@ -162,6 +189,7 @@ const STEPS: Record<StepId, (job: Job, ctx: RunContext, step: StepState) => Prom
         ctx.onUpdate()
       }
       const raw = await call(() => transcribe(ctx.config.services.asr, chunks[i], ctx.fetch, ctx.cancel), ctx, step)
+      await recordUsage(job, ctx, 'asr')
       texts.push(cleanTranscript(raw))
     }
     const text = texts.join('\n')
@@ -198,14 +226,25 @@ const STEPS: Record<StepId, (job: Job, ctx: RunContext, step: StepState) => Prom
         )
     // 返回格式不对时自动重试 1 次（方案第 8 节）
     for (let attempt = 0; ; attempt++) {
+      let used: Usage | undefined
+      let answered = false
       try {
         const parsed = parseAiResult(
           await call(
             () =>
-              chatJson(kind, ctx.config.services[kind], system, user, ctx.fetch, ctx.cancel, (soFar) => {
-                job.preview = previewText(soFar)
-                ctx.onUpdate()
-              }),
+              chatJson(
+                kind,
+                ctx.config.services[kind],
+                system,
+                user,
+                ctx.fetch,
+                ctx.cancel,
+                (soFar) => {
+                  job.preview = previewText(soFar)
+                  ctx.onUpdate()
+                },
+                (u) => (used = u),
+              ).then((v) => ((answered = true), v)),
             ctx,
             step,
           ),
@@ -218,6 +257,10 @@ const STEPS: Record<StepId, (job: Job, ctx: RunContext, step: StepState) => Prom
         return
       } catch (e) {
         if (!isAppError(e, 'format') || attempt >= 1) throw e
+      } finally {
+        // 返回格式不对要重试时，这次也已经花了钱，照样记
+        // 服务回了话就记一笔（没带用量时金额记为不知道）；连不上、超时这些没花钱的不记
+        if (used || answered) await recordUsage(job, ctx, kind, used)
       }
     }
   },
