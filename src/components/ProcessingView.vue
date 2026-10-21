@@ -106,14 +106,19 @@ function elapsed(s: { startedAt?: number; endedAt?: number }) {
       </ol>
 
       <template v-if="failed && error">
-        <div class="err-box">
-          <p class="failed-msg">{{ error.message }}</p>
-          <details v-if="error.detail">
-            <summary>详细信息</summary>
-            <pre>{{ error.detail }}</pre>
-          </details>
-        </div>
-        <p v-if="failedStep" class="hint">从“{{ STEP_LABELS[failedStep.id] }}”这一步重新开始，前面的步骤不用重做</p>
+        <!-- 失败：在原来提示语的位置写原因和接下来怎么做，不加底色 -->
+        <p class="hint fail-reason">{{ error.message }}</p>
+        <p v-if="failedStep" class="hint">
+          {{
+            isAuthError
+              ? '到设置里改好密钥后回来点“重试”'
+              : `点“重试”会从“${STEP_LABELS[failedStep.id]}”这一步继续，前面的步骤不用重做`
+          }}
+        </p>
+        <details v-if="error.detail" class="detail">
+          <summary>详细信息</summary>
+          <pre>{{ error.detail }}</pre>
+        </details>
         <div class="buttons">
           <button v-if="isAuthError" class="primary" @click="emit('goSettings')">去设置</button>
           <button v-else class="primary" @click="emit('retry')">重试</button>
@@ -273,6 +278,7 @@ function elapsed(s: { startedAt?: number; endedAt?: number }) {
   min-width: 0;
   display: flex;
   flex-direction: column;
+  justify-content: center; /* 右边的文字和按钮整体在竖直方向上居中 */
 }
 .file {
   display: grid;
@@ -349,29 +355,28 @@ function elapsed(s: { startedAt?: number; endedAt?: number }) {
   font-size: var(--fs-sm);
   color: var(--faint);
 }
-.err-box {
-  margin-top: var(--sp-4);
-  padding: var(--sp-3);
-  border-radius: var(--radius-md);
-  background: var(--card-muted);
-  font-size: var(--fs-sm);
+.fail-reason {
+  color: var(--err);
 }
-.err-box .failed-msg {
-  margin: 0;
-  color: var(--fg-strong);
-}
-.err-box details {
+.hint + .hint {
   margin-top: var(--sp-1);
-  color: var(--muted);
 }
-.err-box pre {
-  white-space: pre-wrap;
+.detail {
+  margin-top: var(--sp-1);
   font-size: var(--fs-xs);
+  color: var(--faint);
 }
-/* 按钮固定在右栏底部 */
+.detail summary {
+  cursor: pointer;
+}
+.detail pre {
+  max-height: 96px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+/* 按钮紧跟在提示语下面 */
 .buttons {
-  margin-top: auto;
-  padding-top: var(--sp-4);
+  margin-top: var(--sp-4);
   display: flex;
   gap: var(--sp-2);
 }
