@@ -2,7 +2,7 @@
 import common from '../prompts/_通用.md?raw'
 import faithful from '../prompts/原文精修.md?raw'
 import points from '../prompts/要点提炼.md?raw'
-import design from '../prompts/设计收藏.md?raw'
+import visual from '../prompts/视觉收藏.md?raw'
 import type { Prompts } from './note'
 
-export const DEFAULT_PROMPTS: Prompts = { _通用: common, 原文精修: faithful, 要点提炼: points, 设计收藏: design }
+export const DEFAULT_PROMPTS: Prompts = { _通用: common, 原文精修: faithful, 要点提炼: points, 视觉收藏: visual }
