@@ -233,10 +233,10 @@ export const GROUPS: Group[] = [
 
 /** 和 src/style.css 默认值一致的那一组 */
 export const DEFAULT_CHOICE: Record<string, string> = {
-  accent: 'indigo',
-  radius: 'l',
+  accent: 'ink',
+  radius: 'm',
   surface: 'layered',
-  weight: 'bold',
-  size: 'm',
-  density: 'normal',
+  weight: 'medium',
+  size: 's',
+  density: 'compact',
 }

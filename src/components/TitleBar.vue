@@ -78,7 +78,7 @@ const emit = defineEmits<{ navigate: ['home' | 'settings'] }>()
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 0 var(--sp-3);
+  padding: 0 var(--px-sm);
   border: 0;
   border-radius: var(--radius-sm);
   background: none;

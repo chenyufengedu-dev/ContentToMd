@@ -1,13 +1,13 @@
 /*
- * 设计令牌（草案）。页面和组件只用这里的变量，不写死颜色、字号、间距、圆角（《代码规范》第 2 节第 4 条）。
+ * 设计令牌（2026-10-20 作者在调节页选定：墨黑 / 圆角中 / 浅灰底白卡片 / 字重适中 / 字号小 / 紧凑）。页面和组件只用这里的变量，不写死颜色、字号、间距、圆角（《代码规范》第 2 节第 4 条）。
  * 分成几组，开发用的“设计调节页”（/dev/tuner.html）会整组替换来比较效果；
  * 作者选定后写进 docs/设计规范.md，再把这里的默认值改成选定的值。
  */
 :root {
   /* ---- 主色（调节页：主色） ---- */
-  --primary: #4b5bd6;
-  --primary-hover: #3e4dc4;
-  --primary-soft: #eef0fc; /* 主色的浅底：选中、高亮、焦点光圈 */
+  --primary: #1f2937;
+  --primary-hover: color-mix(in srgb, #1f2937 86%, black);
+  --primary-soft: color-mix(in srgb, #1f2937 9%, white); /* 主色的浅底：选中、高亮、焦点光圈 */
   --on-primary: #ffffff; /* 主色上的文字 */
 
   /* ---- 中性色与层次（调节页：层次） ---- */
@@ -40,46 +40,51 @@
   --shadow-pop: 0 8px 28px rgb(16 24 40 / 12%), 0 1px 3px rgb(16 24 40 / 6%); /* 下拉菜单、编辑栏、提示气泡 */
 
   /* ---- 圆角（调节页：圆角） ---- */
-  --radius-sm: 8px; /* 小按钮、菜单项 */
-  --radius-md: 12px; /* 输入框、下拉框、按钮 */
-  --panel-radius: 20px; /* 纸面和右栏 */
-  --radius-chip: 999px; /* 标签、关键词 */
+  --radius-sm: 6px; /* 小按钮、菜单项 */
+  --radius-md: 10px; /* 输入框、下拉框、按钮 */
+  --panel-radius: 14px; /* 纸面和右栏 */
+  --radius-chip: 8px; /* 标签、关键词 */
   --radius-num: 50%; /* 小标题序号 */
   --radius-pill: 999px; /* 角标、胶囊 */
 
   /* ---- 字重（调节页：字重） ---- */
-  --fw-title: 700; /* 笔记标题 */
+  --fw-title: 600; /* 笔记标题 */
   --fw-heading: 600; /* 正文小标题、区块标题 */
-  --fw-label: 600; /* 属性名 */
+  --fw-label: 500; /* 属性名 */
 
   /* ---- 字号 ---- */
   --fs-2xs: 11px; /* 角标 */
-  --fs-xs: 12px; /* 辅助信息 */
-  --fs-sm: 13px; /* 标签、说明 */
-  --fs-md: 14px; /* 界面默认：按钮、输入框、属性 */
-  --fs-lg: 16px; /* 正文、摘要 */
-  --fs-xl: 20px; /* 正文小标题 */
-  --fs-2xl: 30px; /* 笔记标题 */
+  --fs-xs: 11px; /* 辅助信息 */
+  --fs-sm: 12px; /* 标签、说明 */
+  --fs-md: 13px; /* 界面默认：按钮、输入框、属性 */
+  --fs-lg: 15px; /* 正文、摘要 */
+  --fs-xl: 18px; /* 正文小标题 */
+  --fs-2xl: 26px; /* 笔记标题 */
   --fs-deco: 32px; /* 装饰用的引号 */
 
   /* ---- 间距：4 的倍数（调节页：疏密 会整组放大或缩小） ---- */
   --sp-1: 4px;
   --sp-2: 8px;
-  --sp-3: 12px;
-  --sp-4: 16px;
-  --sp-5: 24px;
-  --sp-6: 32px;
-  --sp-7: 48px;
+  --sp-3: 8px;
+  --sp-4: 12px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-7: 36px;
+
+  /* ---- 控件左右内边距：按控件高度分两档，文字两边留得够、不挤 ---- */
+  --px-md: 20px; /* 按钮、输入框、下拉框（--h-md） */
+  --px-sm: 12px; /* 标签、关键词、小按钮（--h-sm、--h-xs）；带删除叉时右边减半 */
 
   /* ---- 控件高度 ---- */
   --h-xs: 28px; /* 编辑栏按钮、横排属性里的小控件 */
-  --h-sm: 32px; /* 标签、关键词 */
-  --h-md: 40px; /* 按钮、输入框、下拉框 */
+  --h-sm: 28px; /* 标签、关键词 */
+  --h-md: 36px; /* 按钮、输入框、下拉框 */
 
   --titlebar-h: 44px;
   --ease: 180ms cubic-bezier(0.2, 0, 0, 1);
 
-  font-family: 'Microsoft YaHei UI', 'Microsoft YaHei', system-ui, sans-serif;
+  /* 苹方优先（作者电脑已装），没装的电脑退回微软雅黑 */
+  font-family: 'PingFang SC', '苹方', 'Microsoft YaHei UI', 'Microsoft YaHei', system-ui, sans-serif;
   font-size: var(--fs-md);
   color: var(--fg);
   background: var(--bg);
@@ -98,9 +103,10 @@
     --line: #2a2e36;
     --line-strong: #3a3f49;
     --chip-bg: #242830;
-    --primary: #7c89ff;
-    --primary-hover: #919cff;
-    --primary-soft: #262b4d;
+    --primary: #e5e7eb;
+    --primary-hover: #ffffff;
+    --primary-soft: #2a2e36;
+    --on-primary: #111318;
     --new: #ff6b68;
     --ok: #4cc27f;
     --err: #ff7272;
@@ -115,7 +121,7 @@ body {
 button {
   font: inherit;
   height: var(--h-md);
-  padding: 0 var(--sp-4);
+  padding: 0 var(--px-md);
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   background: var(--card);
@@ -147,6 +153,12 @@ button.link {
 }
 button.link.danger {
   color: var(--err);
+}
+/* 图标（lucide）：线条加粗一点、端点和拐角都是圆的，小尺寸下也显得圆润 */
+.lucide {
+  stroke-width: 2.25;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 /* 细滚动条，和页面的浅色调一致 */
 ::-webkit-scrollbar {

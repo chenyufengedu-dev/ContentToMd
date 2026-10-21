@@ -248,7 +248,7 @@ onBeforeUnmount(() => {
           :source="sourceSummary"
         />
 
-        <!-- 编辑栏的位置一直留着，出现和收起时正文不会跳动 -->
+        <!-- 编辑栏浮在分隔线上方，不占位置：出现和收起时正文不跳动，标题和正文之间也不留空白 -->
         <div class="toolbar-slot">
           <Transition name="toolbar">
             <EditorToolbar v-if="editor && editorFocused" :editor="editor" />
@@ -372,10 +372,11 @@ onBeforeUnmount(() => {
   view-transition-name: paper;
 }
 .paper-inner {
-  max-width: 880px;
+  /* 正文一行约 45 个中文字，读着不累；窗口再宽也只加两边留白 */
+  max-width: 760px;
   margin: 0 auto;
   /* 窄窗口时留白跟着收小 */
-  padding: clamp(var(--sp-5), 3.2vw, var(--sp-7));
+  padding: var(--sp-5) clamp(var(--sp-5), 3.2vw, var(--sp-7)) var(--sp-7);
 }
 
 /* 可直接修改的标题和摘要：悬停时铅笔变深，点进去后出现编辑底色和焦点框 */
@@ -442,13 +443,14 @@ onBeforeUnmount(() => {
   margin-top: var(--sp-4);
 }
 .toolbar-slot {
+  /* 高度为 0，编辑栏向上伸出；吸顶时让出编辑栏自身高度，保证它停在窗口顶部以内 */
   position: sticky;
-  top: var(--sp-2);
+  top: calc(var(--sp-2) + var(--h-xs) + var(--sp-2) * 2 + 2px);
   z-index: 5;
-  height: calc(var(--h-xs) + var(--sp-2) * 2 + 2px);
-  margin-top: var(--sp-3);
+  height: 0;
+  margin-top: var(--sp-5);
   display: flex;
-  align-items: center;
+  align-items: flex-end;
 }
 .toolbar-enter-active,
 .toolbar-leave-active {
@@ -469,7 +471,7 @@ onBeforeUnmount(() => {
 /* ---------------- 正文：所见即所得编辑器里的排版 ---------------- */
 .body {
   font-size: var(--fs-lg);
-  line-height: 1.85;
+  line-height: 1.7;
   color: var(--fg);
 }
 .body :deep(.tiptap) {
@@ -481,7 +483,8 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: var(--sp-4);
-  margin: var(--sp-6) 0 var(--sp-2);
+  /* 小标题属于下文：上方空得多、下方空得少 */
+  margin: calc(var(--sp-6) + var(--sp-1)) 0 var(--sp-2);
   font-size: var(--fs-xl);
   font-weight: var(--fw-heading);
   line-height: 1.4;
@@ -535,7 +538,7 @@ onBeforeUnmount(() => {
 .body :deep(ul > li) {
   position: relative;
   padding-left: 20px;
-  margin: 2px 0;
+  margin: var(--sp-1) 0;
 }
 .body :deep(ul > li)::before {
   content: '';
@@ -677,15 +680,15 @@ onBeforeUnmount(() => {
   gap: var(--sp-3);
 }
 .btn {
+  /* 底部两个按钮等宽，靠颜色区分主次，不靠长短 */
+  flex: 1;
   height: var(--h-md);
-  padding: 0 var(--sp-5);
+  padding: 0 var(--px-md);
   border-radius: var(--radius-md);
   font-size: var(--fs-md);
   white-space: nowrap;
 }
 .btn-primary {
-  flex: 1;
-  max-width: 220px;
   display: inline-flex;
   align-items: center;
   justify-content: center;

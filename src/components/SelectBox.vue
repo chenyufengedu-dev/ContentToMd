@@ -134,13 +134,13 @@ onBeforeUnmount(close)
 }
 .md .trigger {
   height: var(--h-md);
-  padding: 0 var(--sp-3) 0 var(--sp-4);
+  padding: 0 var(--px-sm) 0 var(--px-md);
   border-radius: var(--radius-md);
   font-size: var(--fs-md);
 }
 .sm .trigger {
   height: var(--h-xs);
-  padding: 0 var(--sp-2) 0 var(--sp-3);
+  padding: 0 var(--sp-2) 0 var(--px-sm);
   border-radius: var(--radius-chip);
   font-size: var(--fs-sm);
 }

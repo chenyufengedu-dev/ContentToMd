@@ -198,7 +198,7 @@ const TIPS = {
 }
 .chip-input {
   box-sizing: border-box;
-  padding: 0 var(--sp-3);
+  padding: 0 var(--px-sm);
   border: 1px solid var(--primary);
   border-radius: var(--radius-chip);
   box-shadow: 0 0 0 3px var(--primary-soft);
@@ -221,12 +221,12 @@ const TIPS = {
 }
 .stack .chip {
   height: var(--h-sm);
-  padding: 0 var(--sp-1) 0 var(--sp-3);
+  padding: 0 calc(var(--px-sm) / 2) 0 var(--px-sm);
   font-size: var(--fs-sm);
 }
 .stack .chip-add {
   height: var(--h-sm);
-  padding: 0 var(--sp-3);
+  padding: 0 var(--px-sm);
   font-size: var(--fs-sm);
 }
 .stack .chip-input {
@@ -275,7 +275,7 @@ const TIPS = {
 }
 .inline .chip {
   height: var(--h-xs);
-  padding: 0 2px 0 var(--sp-2);
+  padding: 0 calc(var(--px-sm) / 2 - 2px) 0 calc(var(--px-sm) - 2px);
   font-size: var(--fs-sm);
 }
 .inline .chip-x {
