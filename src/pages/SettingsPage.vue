@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import {
   type Config,
+  type Domain,
   type ServiceKind,
   SERVICE_KINDS,
   checkBaseUrl,
@@ -33,6 +34,8 @@ import {
 import { formatYuan, keyId, summarize, type Price, type UsageRecord } from '../core/cost'
 import SettingCard from '../components/SettingCard.vue'
 import SelectBox from '../components/SelectBox.vue'
+import NoticeDialog from '../components/NoticeDialog.vue'
+import { toast } from '../components/useToast'
 import { Check, ChevronRight, Circle, CircleCheck, X } from 'lucide-vue-next'
 
 const props = defineProps<{ config: Config; firstRun: boolean }>()
@@ -69,10 +72,8 @@ const PRICE_FIELDS: { key: keyof Price; label: string }[] = [
   { key: 'cachedInput', label: '缓存命中的输入' },
   { key: 'output', label: '输出' },
 ]
-// 已经填过价格的服务默认展开，免得用户以为没填
-const priceOpen = reactive(
-  Object.fromEntries(KINDS.map((k) => [k, !!props.config.services[k].price])) as Record<ServiceKind, boolean>,
-)
+// 价格区进入设置页时都收起；填过价格的，按钮上写“已填”
+const priceOpen = reactive(Object.fromEntries(KINDS.map((k) => [k, false])) as Record<ServiceKind, boolean>)
 /** 价格 → 三个输入框里的文字 */
 const priceTexts = (p?: Price) => Object.fromEntries(PRICE_FIELDS.map((f) => [f.key, String(p?.[f.key] ?? '')]))
 /** 输入框里的原样文字：打到一半的“0.”不能被换成 0 或清空，所以不直接显示解析后的数字 */
@@ -255,7 +256,7 @@ watch(
   },
   { immediate: true },
 )
-const NOT_VAULT = '这个文件夹不是 Obsidian 仓库（里面没有 .obsidian 文件夹）'
+const NOT_VAULT = '这个文件夹不是 Obsidian 仓库（里面没有 .obsidian 文件夹）。'
 const vaultName = computed(() => draft.vaultPath.split(/[\\/]/).filter(Boolean).at(-1) ?? '')
 const connected = computed(() => draft.vault.kind === 'obsidian' && !!draft.vaultPath && pathIsVault.value === true)
 
@@ -397,7 +398,7 @@ async function runTest(k: ServiceKind) {
   applyKey(k)
   const s = draft.services[k]
   if (!isServiceConfigured(s)) {
-    test[k] = { status: 'fail', message: checkBaseUrl(s.baseUrl) ?? '请先填写接口地址、模型名和密钥' }
+    test[k] = { status: 'fail', message: checkBaseUrl(s.baseUrl) ?? '请先填写接口地址、模型名和密钥。' }
     return
   }
   test[k] = { status: 'testing' }
@@ -444,6 +445,8 @@ function finishRename() {
   editingId.value = null
 }
 
+/** 点 × 先问一句；这里的删除只是把领域从列表里去掉，收藏库里的同名文件夹不会被删 */
+const askRemove = ref<Domain | null>(null)
 async function removeDomain(id: number) {
   const d = draft.domains.find((x) => x.id === id)
   if (!d) return
@@ -452,8 +455,20 @@ async function removeDomain(id: number) {
     domainError.value = `“${d.name}”里还有笔记，请先把这些笔记移走再删除`
     return
   }
-  draft.domains = draft.domains.filter((x) => x.id !== id)
   domainError.value = null
+  askRemove.value = d
+}
+
+function confirmRemove() {
+  const d = askRemove.value
+  askRemove.value = null
+  if (!d) return
+  const at = draft.domains.findIndex((x) => x.id === d.id)
+  if (at < 0) return
+  draft.domains.splice(at, 1)
+  toast(`已删除领域「${d.name}」。`, {
+    action: { label: '撤销', run: () => draft.domains.splice(Math.min(at, draft.domains.length), 0, d) },
+  })
 }
 
 // ---- 保存 ----
@@ -483,7 +498,7 @@ async function save() {
   const priceChanged = KINDS.filter(priceDirty)
   saveError.value = null
   if (draft.vault.kind === 'obsidian') {
-    if (!connected.value) return (saveError.value = '请先选一个 Obsidian 仓库')
+    if (!connected.value) return (saveError.value = '请先选一个 Obsidian 仓库。')
     if (subfolderError.value) return (saveError.value = subfolderError.value)
   }
   saving.value = true
@@ -659,7 +674,12 @@ async function save() {
             {{ test[k].status === 'testing' ? '测试中…' : '测试连接' }}
           </button>
           <button class="price-toggle" :aria-expanded="priceOpen[k]" @click="priceOpen[k] = !priceOpen[k]">
-            价格（选填）<ChevronRight :size="14" class="chev" :class="{ down: priceOpen[k] }" aria-hidden="true" />
+            价格（{{ draft.services[k].price ? '已填' : '选填' }}）<ChevronRight
+              :size="14"
+              class="chev"
+              :class="{ down: priceOpen[k] }"
+              aria-hidden="true"
+            />
             <span v-if="!priceOpen[k] && priceDirty(k)" class="dot" title="价格改了还没保存" />
           </button>
           <Transition name="fade">
@@ -732,6 +752,19 @@ async function save() {
       </div>
       <p v-if="domainError" class="err">{{ domainError }}</p>
     </SettingCard>
+
+    <NoticeDialog
+      v-if="askRemove"
+      :title="`删除领域「${askRemove.name}」？`"
+      tone="error"
+      danger
+      cancel-text="取消"
+      ok-text="删除"
+      @cancel="askRemove = null"
+      @ok="confirmRemove"
+    >
+      <p>只是把它从领域列表里去掉，收藏库里的同名文件夹不会被删除。删除后几秒内可以撤销。</p>
+    </NoticeDialog>
 
     <SettingCard
       id="privacy"

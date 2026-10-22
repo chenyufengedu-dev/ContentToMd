@@ -2,7 +2,7 @@
 // 收藏库页（F21，设计稿：设计稿/收藏库页/基准.webp）：左边按领域、标签筛选，顶部搜索，右边方块卡片。
 // 只显示设置里选中的存放文件夹里、各领域文件夹下的笔记。方块和列表两种显示，记住上次选的
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { CircleAlert, Inbox, LayoutGrid, List, Search, X } from 'lucide-vue-next'
+import { CircleAlert, Folder, Hash, Inbox, LayoutGrid, List, Search, X } from 'lucide-vue-next'
 import { type Config, notesRoot } from '../core/config'
 import { domainCounts, filterNotes, tagCounts, type LibraryNote } from '../core/library'
 import { listNotes } from '../shell/tauri'
@@ -52,6 +52,16 @@ function chooseDomain(d: string | null) {
   // 换了领域，那边没有的标签不再算在筛选里
   const left = new Set(tagList.value.map((t) => t.name))
   tags.value = tags.value.filter((t) => left.has(t))
+}
+/** 搜索框里空着时按退格：先去掉最后一个标签条件，没有标签了再去掉领域 */
+function onBackspace() {
+  if (query.value) return
+  if (tags.value.length) tags.value = tags.value.slice(0, -1)
+  else if (domain.value !== null) chooseDomain(null)
+}
+function clearFilters() {
+  domain.value = null
+  tags.value = []
 }
 function toggleTag(t: string) {
   tags.value = tags.value.includes(t) ? tags.value.filter((x) => x !== t) : [...tags.value, t]
@@ -137,7 +147,34 @@ defineExpose({ load })
       <div class="toolbar">
         <label class="search">
           <Search :size="16" aria-hidden="true" />
-          <input v-model="query" placeholder="搜索标题、关键词、正文" aria-label="搜索收藏" spellcheck="false" />
+          <!-- 正在用的筛选条件：领域和标签颜色不同，点 × 取消这个条件 -->
+          <span v-if="domain !== null" class="chip chip-domain">
+            <Folder :size="13" aria-hidden="true" />{{ domain }}
+            <button type="button" :aria-label="`取消领域筛选：${domain}`" @click.prevent="chooseDomain(null)">
+              <X :size="12" aria-hidden="true" />
+            </button>
+          </span>
+          <span v-for="t in tags" :key="t" class="chip chip-tag">
+            <Hash :size="12" aria-hidden="true" />{{ t }}
+            <button type="button" :aria-label="`取消标签筛选：${t}`" @click.prevent="toggleTag(t)">
+              <X :size="12" aria-hidden="true" />
+            </button>
+          </span>
+          <input
+            v-model="query"
+            :placeholder="domain !== null || tags.length ? '' : '搜索标题、关键词、正文'"
+            aria-label="搜索收藏"
+            spellcheck="false"
+            @keydown.delete="onBackspace"
+          />
+          <button
+            v-if="(domain !== null ? 1 : 0) + tags.length >= 2"
+            type="button"
+            class="clear-all"
+            @click.prevent="clearFilters"
+          >
+            清除条件
+          </button>
           <button v-if="query" class="clear" aria-label="清除搜索" @click="query = ''">
             <X :size="14" aria-hidden="true" />
           </button>
@@ -202,6 +239,7 @@ defineExpose({ load })
 
 <style scoped>
 .library {
+  --tag: #2b8577; /* 标签的颜色（青绿），领域用强调色；设计规范里还没有，待登记 */
   display: grid;
   grid-template-columns: 180px minmax(0, 1fr);
   gap: var(--sp-7);
@@ -278,8 +316,8 @@ hr {
 }
 .tag[aria-pressed='true'],
 .tag[aria-pressed='true']:hover:not(:disabled) {
-  background: var(--accent-soft);
-  color: var(--accent);
+  background: color-mix(in srgb, var(--tag) 14%, transparent);
+  color: var(--tag);
 }
 
 /* ---- 右边 ---- */
@@ -292,10 +330,11 @@ hr {
 .search {
   flex: 1;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--sp-2);
-  height: var(--h-md);
-  padding: 0 var(--px-sm);
+  min-height: var(--h-md);
+  padding: 4px var(--px-sm);
   border-radius: var(--radius-md);
   background: var(--card);
   color: var(--faint);
@@ -308,7 +347,8 @@ hr {
 }
 .search input {
   flex: 1;
-  min-width: 0;
+  min-width: 8em;
+  height: 24px;
   border: 0;
   outline: none;
   background: none;
@@ -317,6 +357,52 @@ hr {
 }
 .search input::placeholder {
   color: var(--faint);
+}
+/* 筛选条件：领域是雾靛蓝，标签是青绿，和左边栏选中的颜色一一对应 */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 4px 0 var(--sp-3);
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
+.chip-domain {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.chip-tag {
+  background: color-mix(in srgb, var(--tag) 14%, transparent);
+  color: var(--tag);
+}
+.chip button {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: none;
+  color: inherit;
+  opacity: 0.7;
+}
+.chip button:hover {
+  opacity: 1;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+}
+.clear-all {
+  height: 24px;
+  padding: 0 var(--sp-3);
+  border: 0;
+  background: none;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+.clear-all:hover {
+  color: var(--fg);
 }
 .clear {
   display: grid;

@@ -15,6 +15,8 @@ const props = defineProps<{ config: Config; path: string }>()
 const emit = defineEmits<{
   /** deleted：笔记已经删了，收藏库页要重新读 */
   back: [changed: boolean]
+  /** 删除成功：笔记和图片已放进回收站，由外面给“撤销”的提示 */
+  deleted: [info: { path: string; images: string[] }]
   configChanged: [Config]
   goSettings: []
   dirty: [boolean]
@@ -143,8 +145,8 @@ const deleteError = ref('')
 async function remove() {
   deleteError.value = ''
   try {
-    await deleteNote(root.value, path.value)
-    emit('back', true)
+    const images = await deleteNote(root.value, path.value)
+    emit('deleted', { path: path.value, images })
   } catch (e) {
     deleteError.value = String(e)
   }

@@ -11,6 +11,7 @@ import CollectPage from '../src/pages/CollectPage.vue'
 import ProcessingView from '../src/components/ProcessingView.vue'
 import SavedView from '../src/components/SavedView.vue'
 import TitleBar from '../src/components/TitleBar.vue'
+import ToastHost from '../src/components/ToastHost.vue'
 import { defaultConfig } from '../src/core/config'
 import { DEFAULT_PROMPTS } from '../src/core/defaultPrompts'
 import { newJob } from '../src/core/pipeline'
@@ -178,6 +179,7 @@ createApp({
       onlySettings: false,
     }),
     body(),
+    h(ToastHost),
   ],
 }).mount('#app')
 

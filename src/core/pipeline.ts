@@ -71,6 +71,9 @@ export interface Job {
   edits?: NoteDraft
   /** 整理时 AI 已经生成的文字（去掉了格式），处理中的预览框一个字一个字显示 */
   preview?: string
+  /** 长文分块精修时已经精修好的块（按块号），失败重试时只补没做完的；整理完成后清掉 */
+  chunkResults?: Record<number, { draft: NoteDraft; domainFallback: boolean }>
+  chunkTotal?: number
 }
 
 export function newJob(fileName: string, type: SourceType, mode: Mode): Job {
@@ -194,7 +197,7 @@ const STEPS: Record<StepId, (job: Job, ctx: RunContext, step: StepState) => Prom
       texts.push(cleanTranscript(raw))
     }
     const text = texts.join('\n')
-    if (effectiveLength(text) < 20) throw new AppError('no_speech', '没有识别到语音，可以改为提供截图')
+    if (effectiveLength(text) < 20) throw new AppError('no_speech', '没有识别到语音，可以改为提供截图。')
     job.transcript = text
     job.wavChunks = undefined // 音频用完就丢掉，不长期保存（方案第 10.5 节）
   },
@@ -285,7 +288,7 @@ async function askOnce(
       ),
       ctx.config.domains,
     )
-    if (!parsed) throw new AppError('format', 'AI 返回的结果缺少标题或正文，请点击重试')
+    if (!parsed) throw new AppError('format', 'AI 返回的结果缺少标题或正文，请点击重试。')
     return parsed
   } finally {
     if (used || answered) await recordUsage(job, ctx, kind, used)
@@ -305,8 +308,15 @@ async function organizeInChunks(
   onText: (soFar: string) => void,
 ) {
   const chunks = splitTextChunks(job.transcript!)
-  let done = 0
-  const parts = await mapPool(chunks, CONCURRENCY, async (chunk, i) => {
+  // 失败后重试：已经精修好的块留着，只补没做完的（内容变了、块数不一样时从头来）
+  if (job.chunkTotal !== chunks.length) {
+    job.chunkResults = {}
+    job.chunkTotal = chunks.length
+  }
+  const results = job.chunkResults!
+  let done = Object.keys(results).length
+  await mapPool(chunks, CONCURRENCY, async (chunk, i) => {
+    if (results[i]) return
     const user = buildUserMessage(
       `${sourceDesc(job)}，长文的第 ${i + 1}/${chunks.length} 段，只整理这一段（标题、摘要按这一段写，小标题接着前文）`,
       chunk,
@@ -317,14 +327,16 @@ async function organizeInChunks(
         // 打字机预览只跟第一块
         const parsed = await askOnce(job, ctx, step, 'text', system, user, i === 0 ? onText : undefined)
         if (attempt === 0 && isCondensed(chunk.length, parsed.draft.body.length)) continue
+        results[i] = { draft: parsed.draft, domainFallback: parsed.domainFallback }
         step.note = `已完成 ${++done}/${chunks.length} 段`
         ctx.onUpdate()
-        return parsed
+        return
       } catch (e) {
         if (!isAppError(e, 'format') || attempt >= 1) throw e
       }
     }
   })
+  const parts = chunks.map((_, i) => results[i])
   const first = parts[0]
   job.draft = {
     ...first.draft,
@@ -333,6 +345,8 @@ async function organizeInChunks(
     body: parts.map((p) => p.draft.body).join('\n\n'),
   }
   job.domainFallback = first.domainFallback
+  job.chunkResults = undefined
+  job.chunkTotal = undefined
 }
 
 /** 自动裁剪（F29）：读不出像素时那张图就不裁，不让整条失败 */

@@ -777,20 +777,65 @@ fn unused_attachments(root: &std::path::Path, rel: &str) -> Result<Vec<String>, 
         .collect())
 }
 
-/// 删除笔记：笔记和只被它用的图片放进 Windows 回收站（方案 US10），返回一起删掉的图片数
-#[tauri::command]
-fn delete_note(root: String, rel_path: String) -> Result<usize, String> {
-    let root = PathBuf::from(root);
-    let note = inside_root(&root, &rel_path)?;
-    let images = unused_attachments(&root, &rel_path)?;
+/// 删除笔记：笔记和只被它用的图片放进 Windows 回收站（方案 US10），返回一起放进去的图片（相对存放文件夹），撤销时要用
+fn delete_note_at(root: &std::path::Path, rel: &str) -> Result<Vec<String>, String> {
+    let note = inside_root(root, rel)?;
+    let images = unused_attachments(root, rel)?;
     trash::delete(&note).map_err(|e| format!("无法放进回收站：{e}"))?;
-    let mut n = 0;
+    Ok(images
+        .into_iter()
+        .filter(|a| trash::delete(root.join(a)).is_ok())
+        .collect())
+}
+
+#[tauri::command]
+fn delete_note(root: String, rel_path: String) -> Result<Vec<String>, String> {
+    delete_note_at(&PathBuf::from(root), &rel_path)
+}
+
+/// 比较回收站里记的原位置：回收站记的是完整的长路径，所以先把还在的上级文件夹换成完整路径；
+/// 不分大小写，斜杠反斜杠一样
+fn norm_path(p: &std::path::Path) -> String {
+    let full = match (
+        p.parent().and_then(|d| d.canonicalize().ok()),
+        p.file_name(),
+    ) {
+        (Some(dir), Some(name)) => dir.join(name),
+        _ => p.to_path_buf(),
+    };
+    let s = full.to_string_lossy().replace('/', "\\").to_lowercase();
+    // canonicalize 在 Windows 上会加 \\?\ 前缀，去掉后和回收站里记的写法一样
+    s.strip_prefix(r"\\?\").map(str::to_string).unwrap_or(s)
+}
+
+/// 撤销删除：把刚放进回收站的笔记和图片还原到原来的位置。回收站里同一个位置有好几份时取最近删的那份；
+/// 原位置已经有同名文件时不覆盖，报错
+fn restore_note_at(root: &std::path::Path, rel: &str, images: &[String]) -> Result<(), String> {
+    let mut wanted = vec![inside_root(root, rel)?];
     for a in images {
-        if trash::delete(root.join(&a)).is_ok() {
-            n += 1;
+        wanted.push(inside_root(root, a)?);
+    }
+    let items = trash::os_limited::list().map_err(|e| format!("读不了回收站：{e}"))?;
+    let mut chosen = Vec::new();
+    for w in &wanted {
+        let key = norm_path(w);
+        if let Some(it) = items
+            .iter()
+            .filter(|i| norm_path(&i.original_path()) == key)
+            .max_by_key(|i| i.time_deleted)
+        {
+            chosen.push(it.clone());
         }
     }
-    Ok(n)
+    if chosen.is_empty() {
+        return Err("回收站里找不到这条笔记了，可能已经被清空或还原过".into());
+    }
+    trash::os_limited::restore_all(chosen).map_err(|e| format!("无法还原：{e}"))
+}
+
+#[tauri::command]
+fn restore_note(root: String, rel_path: String, images: Vec<String>) -> Result<(), String> {
+    restore_note_at(&PathBuf::from(root), &rel_path, &images)
 }
 
 #[derive(serde::Serialize)]
@@ -944,6 +989,7 @@ fn main() {
             read_note,
             save_note,
             delete_note,
+            restore_note,
             draft_write,
             draft_list,
             draft_read,
@@ -1106,6 +1152,34 @@ cover: \"../附件/2026-10/a.png\"
             attachment_refs(text),
             vec!["附件/2026-10/a.png", "附件/2026-10/b c.png"]
         );
+    }
+
+    #[test]
+    fn 删除笔记_进回收站后能原样还原_图片也回来() {
+        let v = TempVault::new("trash-restore");
+        let root = PathBuf::from(v.path());
+        fs::create_dir_all(root.join("附件/2026-10")).unwrap();
+        fs::write(root.join("附件/2026-10/还原测试.png"), b"img").unwrap();
+        write(
+            &v,
+            "其他",
+            "还原测试笔记",
+            "![](../附件/2026-10/还原测试.png)
+
+正文",
+        )
+        .unwrap();
+        let images = delete_note_at(&root, "其他/还原测试笔记.md").unwrap();
+        assert_eq!(images, vec!["附件/2026-10/还原测试.png".to_string()]);
+        assert!(!root.join("其他/还原测试笔记.md").exists());
+        assert!(!root.join("附件/2026-10/还原测试.png").exists());
+        restore_note_at(&root, "其他/还原测试笔记.md", &images).unwrap();
+        assert!(root.join("其他/还原测试笔记.md").is_file());
+        assert_eq!(
+            fs::read(root.join("附件/2026-10/还原测试.png")).unwrap(),
+            b"img"
+        );
+        assert!(restore_note_at(&root, "../外面.md", &[]).is_err());
     }
 
     #[test]

@@ -31,6 +31,7 @@ import SourcePanel from '../components/SourcePanel.vue'
 import EditorToolbar from '../components/EditorToolbar.vue'
 import CropDialog from '../components/CropDialog.vue'
 import NoticeDialog from '../components/NoticeDialog.vue'
+import { toast } from '../components/useToast'
 
 /** 打开已有笔记修改（F22）：和确认页是同一个界面，保存时改原来的文件，不是新建 */
 export interface EditInfo {
@@ -303,6 +304,7 @@ async function confirmNewDomain() {
   emit('configChanged', r.config)
   form.domainId = r.domain.id
   newDomain.open = false
+  toast(`已新增领域「${r.domain.name}」。`)
 }
 
 const domainName = computed(() => props.config.domains.find((x) => x.id === form.domainId)?.name ?? '其他')
@@ -358,6 +360,14 @@ async function saveEdit(e: EditInfo) {
     const rel = await saveNote(notesRoot(props.config), e.path, domainName.value, stem, md)
     savedTitle = form.title.trim()
     baseline.value = snapshot()
+    // 点完保存告诉用户结果：改了领域就说移到了哪里，改了文件名就说新名字
+    toast(
+      rel.split('/')[0] !== e.path.split('/')[0]
+        ? `已保存，笔记已移到「${domainName.value}」文件夹。`
+        : stem !== e.stem
+          ? `已保存，文件名已改为「${stem}」。`
+          : '已保存。',
+    )
     emit('updated', rel)
   } catch (err) {
     saveError.value = saveFailure(String(err))
@@ -464,7 +474,7 @@ onBeforeUnmount(() => {
           />
           <Pencil class="edit-hint" :size="20" aria-hidden="true" />
         </label>
-        <p v-if="titleMissing" class="field-error">标题不能为空</p>
+        <p v-if="titleMissing" class="field-error">标题不能为空。</p>
 
         <label class="editable summary" style="view-transition-name: note-summary">
           <textarea v-model="form.summary" rows="1" aria-label="这条讲什么" placeholder="一句话说清这条讲什么" />

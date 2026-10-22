@@ -17,7 +17,8 @@ import { decodeText } from '../core/textFile'
 import FileTypeIcon from '../components/FileTypeIcon.vue'
 import { kindOfName, type FileKind } from '../components/fileKind'
 import { isScanned, LONG_TEXT_CHARS, readDocx, readPdf, setPdfWorker } from '../core/docText'
-import { lengthProblem, MAX_CHARS } from '../core/longText'
+import { estimateWait, lengthProblem, MAX_CHARS } from '../core/longText'
+import { importFailed } from '../core/importMessages'
 import pdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
 import { describeError, isAppError, type ErrorCode } from '../core/errors'
 import { checkImages, MAX_IMAGES, readPixels, toAiDataUrl } from '../core/image'
@@ -29,7 +30,6 @@ import {
   httpFetch,
   listVaultTags,
   loadDraft,
-  openNote,
   saveDraft,
 } from '../shell/tauri'
 import { fromDraft, type DraftData } from '../core/draft'
@@ -40,7 +40,7 @@ import ProcessingView from '../components/ProcessingView.vue'
 import { CircleAlert, Clock, FilePlus2, FileText, Image as ImageIcon, Link2, PenLine, Plus, X } from 'lucide-vue-next'
 
 const props = defineProps<{ config: Config; prompts: Prompts }>()
-const emit = defineEmits<{ goSettings: []; configChanged: [Config] }>()
+const emit = defineEmits<{ goSettings: []; configChanged: [Config]; openNote: [path: string] }>()
 
 type Phase = 'drop' | 'processing' | 'failed' | 'confirm' | 'saved'
 const phase = ref<Phase>('drop')
@@ -102,18 +102,18 @@ function accept(files: File[]) {
   const pics = files.filter((f) => f.type.startsWith('image/'))
   if (media.length) {
     if (pics.length || images.value.length || media.length > 1) {
-      errors.value.push('一次只能放一个文件，或者几张图片，不能混在一起')
+      errors.value.push('一次只能放一个文件，或者几张图片，不能混在一起。')
       return
     }
     acceptFile(media[0])
     return
   }
   if (file.value || textFile.value) {
-    errors.value.push('已经放了一个文件，要放图片请先移除它')
+    errors.value.push('已经放了一个文件。要放图片，请先移除它。')
     return
   }
   const { accepted, rejected } = checkImages(images.value.length, pics)
-  for (const r of rejected) errors.value.push(`“${r.name}”没有加入：${r.reason}`)
+  for (const r of rejected) errors.value.push(importFailed(r.name, r.reason))
   if (!accepted.length) return
   images.value.push(...accepted.map((f) => ({ file: f, url: URL.createObjectURL(f) })))
   mode.value = preselectMode('图片')
@@ -132,12 +132,12 @@ function acceptFile(f: File) {
   const type: SourceType | null = VIDEO.includes(ext) ? '视频' : AUDIO.includes(ext) ? '音频' : null
   if (!type) {
     errors.value.push(
-      `暂不支持 .${ext || '（无扩展名）'} 文件。支持：图片、mp3 / m4a / wav、mp4 / mov、md / txt、pdf / docx`,
+      `不支持 .${ext || '（无扩展名）'} 文件。目前支持：图片、mp3 / m4a / wav、mp4 / mov、md / txt、pdf / docx。`,
     )
     return
   }
   if (f.size > MAX_BYTES) {
-    errors.value.push(`“${f.name}”超过 1GB，请压缩或截取后再放入`)
+    errors.value.push(importFailed(f.name, '文件太大，超过了 1GB 的上限。请压缩或截取后再放入。'))
     return
   }
   file.value = f
@@ -150,16 +150,16 @@ function acceptFile(f: File) {
 /** MD / TXT：认不出编码或是空文件时不加入（方案第 8 节） */
 async function acceptText(f: File) {
   if (f.size > MAX_TEXT_BYTES) {
-    errors.value.push(`“${f.name}”超过 10MB，请截取后再放入`)
+    errors.value.push(importFailed(f.name, '文件太大，超过了 10MB 的上限。请截取后再放入。'))
     return
   }
   const decoded = decodeText(await f.arrayBuffer())
   if (!decoded) {
-    errors.value.push(`${f.name} 没有加入：文件编码无法识别，请另存为 UTF-8 后重试`)
+    errors.value.push(importFailed(f.name, '无法识别文件编码。请另存为 UTF-8 后重试。'))
     return
   }
   if (!decoded.text.trim()) {
-    errors.value.push(`${f.name} 没有加入：无法读取，可能已损坏或内容为空`)
+    errors.value.push(importFailed(f.name, '文件无法读取，可能已损坏或内容为空。'))
     return
   }
   if (tooLongToAccept(f.name, decoded.text)) return
@@ -170,7 +170,7 @@ async function acceptText(f: File) {
 /** 超过要点提炼的上限（8 万字）的内容哪种方式都装不下，不加入 */
 function tooLongToAccept(name: string, text: string): boolean {
   const problem = lengthProblem('要点提炼', text.length)
-  if (problem) errors.value.push(`${name} 没有加入：${problem}`)
+  if (problem) errors.value.push(importFailed(name, problem))
   return !!problem
 }
 
@@ -181,7 +181,7 @@ const defaultMode = (type: SourceType, chars: number): Mode =>
 /** PDF / Word：只取文字（F15、F16）；扫描版、有密码、读不出的不加入（方案 US7） */
 async function acceptDoc(f: File, ext: string) {
   if (f.size > MAX_DOC_BYTES) {
-    errors.value.push(`“${f.name}”超过 50MB，请截取后再放入`)
+    errors.value.push(importFailed(f.name, '文件太大，超过了 50MB 的上限。请截取后再放入。'))
     return
   }
   try {
@@ -189,11 +189,11 @@ async function acceptDoc(f: File, ext: string) {
     const buf = await f.arrayBuffer()
     const doc = await (ext === 'pdf' ? readPdf(buf) : readDocx(buf))
     if (ext === 'pdf' && isScanned(doc)) {
-      errors.value.push(`${f.name} 没有加入：这个 PDF 里没有文字，可以截图后放入`)
+      errors.value.push(importFailed(f.name, '这是扫描版 PDF，里面没有可读的文字。可以截图后放入。'))
       return
     }
     if (!doc.text.trim()) {
-      errors.value.push(`${f.name} 没有加入：无法读取，可能已损坏或内容为空`)
+      errors.value.push(importFailed(f.name, '文件无法读取，可能已损坏或内容为空。'))
       return
     }
     if (tooLongToAccept(f.name, doc.text)) return
@@ -202,7 +202,9 @@ async function acceptDoc(f: File, ext: string) {
   } catch (e) {
     const locked = e instanceof Error && e.name === 'PasswordException'
     errors.value.push(
-      locked ? `${f.name} 没有加入：这个文件有密码，请先取消密码再放入` : `${f.name} 没有加入：无法读取，可能已损坏`,
+      locked
+        ? importFailed(f.name, '文件有密码。请先取消密码再放入。')
+        : importFailed(f.name, '文件无法读取，可能已损坏。'),
     )
   }
 }
@@ -337,6 +339,9 @@ const summary = computed(() => {
 /** 选中的整理方式装不下这份文字时的说明（原文精修最多 2 万字），有的话不能开始 */
 const lengthNotice = computed(() => (textFile.value ? lengthProblem(mode.value, textFile.value.text.length) : null))
 
+/** 内容比较长时的等待时间提示（不挡着开始） */
+const waitNotice = computed(() => (textFile.value ? estimateWait(mode.value, textFile.value.text.length) : null))
+
 /** 文字超过 8000 字时先问一句（方案 US7），确认过就不再问 */
 const askLong = ref(false)
 let longOk = false
@@ -453,7 +458,7 @@ async function resumeDraft() {
       : null
   request.value = j.request ?? ''
   if (needsFile) {
-    errors.value.push(`上次的 ${j.fileName} 还没转写完，请重新放入这个文件`)
+    errors.value.push(`上次的「${j.fileName}」还没转写完，请重新放入这个文件。`)
     dropDraft()
     return
   }
@@ -492,13 +497,8 @@ function onSaved(note: SavedNote) {
   phase.value = 'saved'
   dropDraft()
 }
-const openError = ref<string | null>(null)
-async function open() {
-  openError.value = null
-  await openNote(notesRoot(props.config), saved.value!.path, props.config.vault.kind === 'obsidian').catch(
-    (e) => (openError.value = String(e)),
-  )
-}
+/** 保存成功页的「打开文档」：进软件里的笔记页（F22），不再用 Obsidian 或别的程序 */
+const open = () => emit('openNote', saved.value!.path)
 function next() {
   clearContent()
   phase.value = 'drop'
@@ -548,7 +548,6 @@ onBeforeUnmount(() => {
       :cost="job?.costUnknown ? undefined : job?.cost"
       :note="saved"
       :location="storeLabel(config)"
-      :open-error="openError"
       @open="open"
       @next="next"
     />
@@ -685,7 +684,7 @@ onBeforeUnmount(() => {
         <span class="input textarea">
           <textarea
             v-model="request"
-            rows="3"
+            rows="2"
             :maxlength="REQUEST_MAX"
             placeholder="比如：重点写可借鉴的做法 / 只要三句话总结"
           />
@@ -696,8 +695,11 @@ onBeforeUnmount(() => {
       <p v-if="lengthNotice" class="notice">
         <CircleAlert :size="15" aria-hidden="true" /><span>{{ lengthNotice }}</span>
       </p>
+      <p v-else-if="waitNotice" class="notice info">
+        <Clock :size="15" aria-hidden="true" /><span>{{ waitNotice }}</span>
+      </p>
       <p v-if="missingService && hasContent" class="notice">
-        <CircleAlert :size="15" aria-hidden="true" /><span>还没有配置{{ missingService }}，请先到设置中填写</span>
+        <CircleAlert :size="15" aria-hidden="true" /><span>还没有配置{{ missingService }}，请先到设置中填写。</span>
         <button class="link" @click="emit('goSettings')">去设置</button>
       </p>
 
@@ -716,7 +718,7 @@ onBeforeUnmount(() => {
     @cancel="askLong = false"
     @ok="((askLong = false), (longOk = true), start())"
   >
-    <p>这份内容有 {{ textFile?.text.length.toLocaleString() }} 字，整理可能需要更久、花费更多。</p>
+    <p>这份内容有 {{ textFile?.text.length.toLocaleString() }} 字，整理可能需要更久、花费更多。{{ waitNotice }}</p>
   </NoticeDialog>
   <NoticeDialog
     v-if="askClose"
@@ -735,10 +737,10 @@ onBeforeUnmount(() => {
 .page {
   max-width: 680px;
   margin: 0 auto;
-  padding: var(--sp-7) var(--sp-5) var(--sp-5);
+  padding: var(--sp-5) var(--sp-5) var(--sp-4);
 }
 .card {
-  padding: var(--sp-6);
+  padding: var(--sp-5);
   background: var(--card);
   border: 1px solid var(--panel-border);
   border-radius: var(--panel-radius);
@@ -786,7 +788,7 @@ onBeforeUnmount(() => {
 .drop {
   width: 100%;
   height: auto;
-  min-height: 168px;
+  min-height: 112px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -931,7 +933,8 @@ onBeforeUnmount(() => {
 /* ---- 一行提示（没加入的文件、没配置的服务）：没有底色和边框 ---- */
 .notice {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  line-height: 1.6;
   gap: var(--sp-2);
   margin: var(--sp-3) 0 0;
   font-size: var(--fs-sm);
@@ -939,7 +942,11 @@ onBeforeUnmount(() => {
 }
 .notice > svg:first-child {
   flex: none;
+  margin-top: calc((1.6em - 15px) / 2);
   color: var(--warn);
+}
+.notice.info > svg:first-child {
+  color: var(--muted);
 }
 .notice span {
   flex: 1;
@@ -952,7 +959,7 @@ onBeforeUnmount(() => {
 /* ---- 表单：灰色小标题，输入框浅灰底无边框，获得焦点时一圈淡靛蓝 ---- */
 .field {
   display: block;
-  margin-top: var(--sp-5);
+  margin-top: var(--sp-4);
 }
 .field-label {
   display: block;
@@ -1062,7 +1069,7 @@ onBeforeUnmount(() => {
 .actions {
   display: flex;
   justify-content: flex-end;
-  margin-top: var(--sp-5);
+  margin-top: var(--sp-4);
 }
 .muted-on-primary {
   margin-left: var(--sp-1);

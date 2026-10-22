@@ -15,15 +15,15 @@ export function saveFailure(raw: string): SaveFailure {
   const missing = raw.match(/收藏库文件夹“(.+)”找不到了/)
   if (missing)
     return {
-      reason: `收藏库文件夹不存在：${missing[1]}`,
+      reason: `收藏库文件夹不存在：${missing[1]}。`,
       next: `到设置里重新选择文件夹后再保存。${KEEP}`,
       toSettings: true,
     }
   if (raw.includes('没有权限'))
-    return { reason: '没有权限写入收藏库文件夹', next: `到设置里换一个文件夹后再保存。${KEEP}`, toSettings: true }
+    return { reason: '没有权限写入收藏库文件夹。', next: `到设置里换一个文件夹后再保存。${KEEP}`, toSettings: true }
   if (raw.includes('磁盘空间不足'))
-    return { reason: '磁盘空间不足', next: `清理一些空间后点“重新保存”。${KEEP}`, toSettings: false }
+    return { reason: '磁盘空间不足。', next: `清理一些空间后点“重新保存”。${KEEP}`, toSettings: false }
   if (raw.includes('正在被其他程序使用'))
-    return { reason: '同名文件正在被其他程序使用', next: `关掉那个程序后点“重新保存”。${KEEP}`, toSettings: false }
-  return { reason: raw, next: `可以点“重新保存”再试一次。${KEEP}`, toSettings: false }
+    return { reason: '同名文件正在被其他程序使用。', next: `关掉那个程序后点“重新保存”。${KEEP}`, toSettings: false }
+  return { reason: raw.endsWith('。') ? raw : `${raw}。`, next: `可以点“重新保存”再试一次。${KEEP}`, toSettings: false }
 }

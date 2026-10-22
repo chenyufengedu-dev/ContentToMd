@@ -139,7 +139,8 @@ export function installLibraryShell(mode: string | null) {
           const a = args as unknown as { domain: string; stem: string }
           return `${a.domain}/${a.stem}.md`
         }
-        if (cmd === 'delete_note') return 1
+        if (cmd === 'delete_note') return ['附件/2026-10/dashboard.png']
+        if (cmd === 'restore_note') return null
         if (cmd === 'list_vault_tags') return ['提示词', '配色', '仪表盘']
         throw new Error('预览里没有外壳')
       },

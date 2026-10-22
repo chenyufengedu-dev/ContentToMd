@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { type Config, parseConfig, isConfigComplete, notesRoot } from './core/config'
-import { loadConfigJson, dirExists, ensurePrompts } from './shell/tauri'
+import { loadConfigJson, dirExists, ensurePrompts, restoreNote } from './shell/tauri'
 import type { Prompts } from './core/note'
 import { DEFAULT_PROMPTS } from './core/defaultPrompts'
 import SettingsPage from './pages/SettingsPage.vue'
@@ -10,6 +10,8 @@ import TitleBar, { type Page } from './components/TitleBar.vue'
 import LibraryPage from './pages/LibraryPage.vue'
 import NotePage from './pages/NotePage.vue'
 import NoticeDialog from './components/NoticeDialog.vue'
+import ToastHost from './components/ToastHost.vue'
+import { toast } from './components/useToast'
 
 const config = ref<Config | null>(null)
 const prompts = ref<Prompts | null>(null)
@@ -26,6 +28,31 @@ function closeNote(changed: boolean) {
   notePath.value = null
   noteDirty.value = false
   if (changed) void library.value?.load()
+}
+/** 笔记删除了：回到收藏库，提示条上给「撤销」（从回收站还原笔记和图片） */
+function onNoteDeleted(info: { path: string; images: string[] }) {
+  closeNote(true)
+  const n = info.images.length
+  toast(`已删除，笔记${n ? `和 ${n} 张图片` : ''}已放进回收站。`, {
+    action: {
+      label: '撤销',
+      run: async () => {
+        try {
+          await restoreNote(notesRoot(config.value!), info.path, info.images)
+          toast('已恢复这条笔记。')
+          void library.value?.load()
+        } catch (e) {
+          const msg = String(e)
+          toast(`没能撤销：${msg.endsWith('。') ? msg : `${msg}。`}`, { kind: 'error' })
+        }
+      },
+    },
+  })
+}
+/** 保存成功页的「打开文档」：进收藏库里这条笔记的笔记页 */
+function openSavedNote(path: string) {
+  page.value = 'library'
+  notePath.value = path
 }
 /** 标题栏点别的页：笔记有改动没保存时先问；点“收藏库”回到列表 */
 const pendingPage = ref<Page | null>(null)
@@ -92,6 +119,7 @@ async function onSaved(c: Config) {
           :config="config"
           :path="notePath"
           @back="closeNote"
+          @deleted="onNoteDeleted"
           @dirty="(v) => (noteDirty = v)"
           @go-settings="page = 'settings'"
           @config-changed="(c) => (config = c)"
@@ -106,9 +134,11 @@ async function onSaved(c: Config) {
           :prompts="prompts"
           @go-settings="page = 'settings'"
           @config-changed="(c) => (config = c)"
+          @open-note="openSavedNote"
         />
       </div>
     </div>
+    <ToastHost />
     <NoticeDialog
       v-if="pendingPage"
       title="有修改还没保存"
