@@ -4,7 +4,8 @@
 import { onBeforeUnmount, onMounted } from 'vue'
 import { CircleAlert, Info } from 'lucide-vue-next'
 
-defineProps<{ title: string; tone?: 'error' | 'info'; cancelText: string; okText: string }>()
+/** danger：确认的是删除这类不可恢复的操作，确认按钮用红色 */
+defineProps<{ title: string; tone?: 'error' | 'info'; cancelText: string; okText: string; danger?: boolean }>()
 const emit = defineEmits<{ cancel: []; ok: [] }>()
 
 function onKey(e: KeyboardEvent) {
@@ -23,7 +24,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
       <div class="body"><slot /></div>
       <div class="buttons">
         <button class="soft" @click="emit('cancel')">{{ cancelText }}</button>
-        <button class="primary" @click="emit('ok')">{{ okText }}</button>
+        <button :class="danger ? 'danger' : 'primary'" @click="emit('ok')">{{ okText }}</button>
       </div>
     </section>
   </div>
@@ -76,6 +77,14 @@ h2.error {
 }
 .buttons button {
   padding: 0 var(--px-md);
+}
+.danger {
+  border: 0;
+  background: var(--err);
+  color: var(--on-primary);
+}
+.danger:hover:not(:disabled) {
+  filter: brightness(0.92);
 }
 .soft {
   border: 0;

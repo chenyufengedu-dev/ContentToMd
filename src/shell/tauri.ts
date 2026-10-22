@@ -10,6 +10,7 @@ import type { Job } from '../core/pipeline'
 import { DRAFT_JSON, toDraft, type DraftData } from '../core/draft'
 import { parseUsage, type UsageRecord } from '../core/cost'
 import { parseNoteList } from '../core/library'
+import { parseNoteFile } from '../core/note'
 
 export const loadConfigJson = () => invoke<string | null>('load_config')
 export const saveConfig = (c: Config) => invoke<void>('save_config', { json: JSON.stringify(c, null, 2) })
@@ -49,6 +50,12 @@ export const listObsidianVaults = () => invoke<{ name: string; path: string }[]>
 export const listNotes = async (root: string) => parseNoteList(await invoke<unknown>('list_notes', { root }))
 export const readCover = async (root: string, relPath: string) =>
   new Blob([await invoke<ArrayBuffer>('read_cover', { root, relPath })])
+// 笔记查看和编辑（F22）：保存时领域或文件名变了，外壳会把文件挪过去；删除放进回收站，返回一起删掉的图片数
+export const readNote = async (root: string, relPath: string) =>
+  parseNoteFile(await invoke<unknown>('read_note', { root, relPath }))
+export const saveNote = (root: string, relPath: string, domain: string, stem: string, content: string) =>
+  invoke<string>('save_note', { root, relPath, domain, stem, content })
+export const deleteNote = (root: string, relPath: string) => invoke<number>('delete_note', { root, relPath })
 export const listSubfolders = (vault: string) => invoke<string[]>('list_subfolders', { vault })
 export const ensureSubfolder = (vault: string, sub: string) => invoke<void>('ensure_subfolder', { vault, sub })
 export const writeNote = (vault: string, domain: string, title: string, date: string, content: string) =>
@@ -92,12 +99,24 @@ export const readUsage = async () => parseUsage(await invoke<string>('usage_read
 export const minimizeWindow = () => getCurrentWindow().minimize()
 export const toggleMaximizeWindow = () => getCurrentWindow().toggleMaximize()
 export const closeWindow = () => getCurrentWindow().close()
-/** 关窗口前问一句（F10）：shouldAsk 返回 true 时拦下关闭，交给 ask 弹确认框。返回取消监听的函数 */
-export const guardClose = (shouldAsk: () => boolean, ask: () => void) =>
-  getCurrentWindow().onCloseRequested((e) => {
-    if (!shouldAsk()) return
+/**
+ * 关窗口前问一句（F10、F22）：shouldAsk 返回 true 时拦下关闭，交给 ask 弹确认框。返回取消登记的函数。
+ * 只向窗口注册一个监听：Tauri 里每个监听在自己没拦下时都会直接关掉窗口，多个页面各注册一个的话，
+ * 前面一个说“不用问”就把后面要问的盖掉了
+ */
+const closeGuards = new Set<{ shouldAsk: () => boolean; ask: () => void }>()
+let closeListener: Promise<unknown> | undefined
+export const guardClose = async (shouldAsk: () => boolean, ask: () => void) => {
+  const guard = { shouldAsk, ask }
+  closeGuards.add(guard)
+  closeListener ??= getCurrentWindow().onCloseRequested((e) => {
+    const hit = [...closeGuards].find((g) => g.shouldAsk())
+    if (!hit) return
     e.preventDefault()
-    ask()
+    hit.ask()
   })
+  await closeListener
+  return () => void closeGuards.delete(guard)
+}
 /** 确认后真正关闭，不再触发上面的询问 */
 export const destroyWindow = () => getCurrentWindow().destroy()

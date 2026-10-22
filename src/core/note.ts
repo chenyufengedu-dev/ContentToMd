@@ -97,6 +97,8 @@ export interface NoteMeta {
   author: string
   created: string // YYYY-MM-DD
   cover: string
+  /** 打开已有笔记再保存时，原来属性里别的程序加的行（比如 Obsidian 的 aliases），原样带回去 */
+  extra?: string
 }
 
 /**
@@ -154,6 +156,7 @@ export function buildMarkdown(d: NoteDraft, m: NoteMeta, images: NoteImage[] = [
     `created: ${m.created}`,
     `cover: ${q(m.cover)}`,
     'schema: 1',
+    ...(m.extra ? [m.extra] : []),
     '---',
   ]
   const parts = [fm.join('\n')]
@@ -164,6 +167,66 @@ export function buildMarkdown(d: NoteDraft, m: NoteMeta, images: NoteImage[] = [
   for (const i of images) parts.push(imageLine(i))
   parts.push(d.body)
   return parts.join('\n\n') + '\n'
+}
+
+const SOURCE_TYPES: SourceType[] = ['文字', '图片', '音频', '视频', '文档']
+
+const NoteFileSchema = z.object({
+  title: z.string(),
+  domain: z.string(),
+  stem: z.string(),
+  kind: z.string().catch(''),
+  mode: z.string().catch(''),
+  tags: z.array(z.string()).catch([]),
+  keywords: z.array(z.string()).catch([]),
+  source: z.string().catch(''),
+  platform: z.string().catch(''),
+  author: z.string().catch(''),
+  created: z.string().catch(''),
+  cover: z.string().catch(''),
+  extra: z.string().catch(''),
+  content: z.string().catch(''),
+})
+
+/** 外壳 read_note 的结果。类型、整理方式不认识（别的程序写的笔记）时按文字、要点提炼算 */
+export function parseNoteFile(raw: unknown) {
+  const f = NoteFileSchema.parse(raw)
+  return {
+    ...f,
+    kind: SOURCE_TYPES.find((t) => t === f.kind) ?? ('文字' as SourceType),
+    mode: MODES.find((m) => m === f.mode) ?? ('要点提炼' as Mode),
+  }
+}
+export type NoteFile = ReturnType<typeof parseNoteFile>
+
+const IMAGE_LINE = /^!\[([^\]]*)\]\((<[^>]+>|[^)\s]+)\)$/
+
+/**
+ * 打开已有笔记：把 buildMarkdown 写出的正文拆回摘要、开头的图片和正文（来源说明那一行丢掉，保存时按类型再加）。
+ * 只认正文最前面连着的这几块，别处的图片留在正文里
+ */
+export function parseNoteBody(content: string): { summary: string; images: NoteImage[]; body: string } {
+  const blocks = content.trim().split(/\n\s*\n/)
+  let summary = ''
+  const images: NoteImage[] = []
+  let i = 0
+  for (; i < blocks.length; i++) {
+    const b = blocks[i].trim()
+    const lines = b.split('\n')
+    if (b.startsWith('> [!summary]') && !summary) {
+      summary = lines
+        .slice(1)
+        .map((l) => l.replace(/^>\s?/, ''))
+        .join(' ')
+        .trim()
+    } else if (b === '> [!note] 内容来自语音转写，没有分析画面。' || b === '> [!note] 仅根据图片整理。') {
+      continue
+    } else if (lines.length === 1 && IMAGE_LINE.test(b)) {
+      const m = IMAGE_LINE.exec(b)!
+      images.push({ caption: m[1], path: m[2].replace(/^<|>$/g, '') })
+    } else break
+  }
+  return { summary, images, body: blocks.slice(i).join('\n\n').trim() }
 }
 
 /** 文件名：非法字符换成“-”，截短到 60 字以内（方案第 8 节） */
