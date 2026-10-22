@@ -5,12 +5,12 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { CircleAlert, Inbox, LayoutGrid, List, Search, X } from 'lucide-vue-next'
 import { type Config, notesRoot } from '../core/config'
 import { domainCounts, filterNotes, tagCounts, type LibraryNote } from '../core/library'
-import { listNotes, openNote } from '../shell/tauri'
+import { listNotes } from '../shell/tauri'
 import NoteCard from '../components/NoteCard.vue'
 import NoteRow from '../components/NoteRow.vue'
 
 const props = defineProps<{ config: Config }>()
-const emit = defineEmits<{ goHome: []; goSettings: [] }>()
+const emit = defineEmits<{ goHome: []; goSettings: []; open: [path: string] }>()
 
 const root = computed(() => notesRoot(props.config))
 const notes = ref<LibraryNote[]>([])
@@ -94,11 +94,9 @@ function setView(v: View) {
   }
 }
 
-const openError = ref('')
-async function open(n: LibraryNote) {
-  openError.value = ''
-  await openNote(root.value, n.path, props.config.vault.kind === 'obsidian').catch((e) => (openError.value = String(e)))
-}
+/** 点一条笔记：进软件里的笔记页（F22） */
+const open = (n: LibraryNote) => emit('open', n.path)
+defineExpose({ load })
 </script>
 
 <template>
@@ -195,7 +193,6 @@ async function open(n: LibraryNote) {
         <div v-if="limit < shown.length" ref="sentinel" class="sentinel" />
       </template>
 
-      <p v-if="openError" class="foot err">{{ openError }}</p>
       <p v-if="failed.length" class="foot" :title="failed.join('\n')">
         <CircleAlert :size="14" aria-hidden="true" />有 {{ failed.length }} 个文件无法读取，已跳过
       </p>

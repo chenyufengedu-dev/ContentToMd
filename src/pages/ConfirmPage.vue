@@ -12,14 +12,18 @@ import {
   CalendarDays,
   Image as ImageIcon,
   Link2,
+  Trash2,
+  ExternalLink,
+  ChevronLeft,
+  ImageOff,
 } from 'lucide-vue-next'
 import { type Config, addDomain, notesRoot, storeLabel } from '../core/config'
 import type { Job } from '../core/pipeline'
-import { buildMarkdown, safeFileTitle, today, type NoteDraft, type NoteImage } from '../core/note'
+import { buildMarkdown, safeFileTitle, today, type NoteDraft, type NoteImage, type NoteMeta } from '../core/note'
 import { cropForSave, type Rect } from '../core/image'
 import { saveFailure, type SaveFailure } from '../core/saveFailure'
 import { matchToSource } from '../core/sourceMatch'
-import { removeAttachment, saveConfig, writeAttachment, writeNote } from '../shell/tauri'
+import { removeAttachment, saveConfig, saveNote, writeAttachment, writeNote } from '../shell/tauri'
 import { editorExtensions, fixCallouts } from '../editor/extensions'
 import { linkedBlockKey } from '../editor/linkedBlock'
 import NoteProps from '../components/NoteProps.vue'
@@ -28,7 +32,23 @@ import EditorToolbar from '../components/EditorToolbar.vue'
 import CropDialog from '../components/CropDialog.vue'
 import NoticeDialog from '../components/NoticeDialog.vue'
 
-const props = defineProps<{ config: Config; job: Job; existingTags: string[] }>()
+/** 打开已有笔记修改（F22）：和确认页是同一个界面，保存时改原来的文件，不是新建 */
+export interface EditInfo {
+  /** 笔记相对存放文件夹的路径 */
+  path: string
+  /** 文件名（不含 .md） */
+  stem: string
+  /** 原来的属性：类型、整理方式、来源、收藏日期这些界面上不改的，保存时原样写回 */
+  meta: NoteMeta
+  /** 正文前面的图片，保存时原样写回 */
+  images: NoteImage[]
+  /** 读不到的图片数，在图片的位置提示“图片文件不存在” */
+  missing: number
+  /** 连的是 Obsidian 仓库时才有“在 Obsidian 中打开” */
+  canOpen: boolean
+}
+
+const props = defineProps<{ config: Config; job: Job; existingTags: string[]; edit?: EditInfo }>()
 /** 保存成功页要用的：笔记相对收藏库的路径、没写进去的图片（比如“第 2 张”），以及左边预览框的文字 */
 export interface SavedNote {
   path: string
@@ -44,6 +64,11 @@ const emit = defineEmits<{
   goSettings: []
   edited: [NoteDraft]
   configChanged: [Config]
+  updated: [string]
+  back: []
+  remove: []
+  open: []
+  dirty: [boolean]
 }>()
 
 const d = props.job.draft!
@@ -56,7 +81,7 @@ const form = reactive({
   keywords: [...start.keywords],
   summary: start.summary,
 })
-const created = today()
+const created = props.edit?.meta.created || today()
 const transcript = props.job.transcript ?? ''
 
 // ---------------- 图片（F29）----------------
@@ -103,12 +128,30 @@ const editor = useEditor({
   extensions: editorExtensions(),
   content: start.body,
   contentType: 'markdown',
-  onUpdate: () => rememberEdits(),
+  onUpdate: () => {
+    bodyTick.value++
+    rememberEdits()
+  },
 })
+
+// ---------------- 打开已有笔记：有没有改动 ----------------
+const bodyTick = ref(0)
+const snapshot = () =>
+  JSON.stringify([form.title, form.domainId, form.tags, form.keywords, form.summary]) +
+  (editor.value ? fixCallouts(editor.value.getMarkdown()) : '')
+const baseline = ref<string | null>(null)
+// 编辑器读进去再导出的 Markdown 可能和文件里写的有细微差别，所以以刚读好时的为准
+watch(editor, (e) => e && props.edit && baseline.value === null && (baseline.value = snapshot()), { immediate: true })
+// 正文每改一次 bodyTick 加一，让这里重新比对（编辑器里的内容本身不是响应式的）
+const dirty = computed(
+  () => !!props.edit && baseline.value !== null && bodyTick.value >= 0 && snapshot() !== baseline.value,
+)
+watch(dirty, (v) => emit('dirty', v))
 
 // 改动停下来 0.8 秒后存进草稿，软件意外关掉也不丢（F10）
 let draftTimer: number | undefined
 function rememberEdits() {
+  if (props.edit) return // 打开已有笔记不存草稿
   clearTimeout(draftTimer)
   draftTimer = window.setTimeout(() => {
     if (!editor.value) return
@@ -290,10 +333,46 @@ async function writeImages(title: string): Promise<{ images: NoteImage[]; writte
   return { images, written, failed }
 }
 
+let savedTitle = start.title.trim()
+/** 打开已有笔记再保存：改原来的文件；领域或文件名变了，外壳会把它挪到新位置（不覆盖别的笔记） */
+async function saveEdit(e: EditInfo) {
+  if (!editor.value) return
+  const md = buildMarkdown(
+    {
+      title: form.title.trim(),
+      domainId: form.domainId,
+      tags: form.tags,
+      keywords: form.keywords,
+      summary: form.summary.trim(),
+      body: fixCallouts(editor.value.getMarkdown()).trim(),
+      image_captions: [],
+    },
+    { ...e.meta, domain: domainName.value },
+    e.images,
+  )
+  try {
+    // 文件名跟着标题走；标题没改过就不动文件名（笔记可能重名时加过日期，或在 Obsidian 里改过名）
+    const stem = form.title.trim() === savedTitle ? e.stem : safeFileTitle(form.title)
+    const rel = await saveNote(notesRoot(props.config), e.path, domainName.value, stem, md)
+    savedTitle = form.title.trim()
+    baseline.value = snapshot()
+    emit('updated', rel)
+  } catch (err) {
+    saveError.value = saveFailure(String(err))
+    failDialog.value = true
+  }
+}
+
 async function save() {
   if (saving.value || titleMissing.value || !editor.value) return
+  if (props.edit && !dirty.value) return
   saving.value = true
   saveError.value = null
+  if (props.edit) {
+    await saveEdit(props.edit)
+    saving.value = false
+    return
+  }
   const title = form.title.trim()
   const { images, written, failed } = await writeImages(title)
   const md = buildMarkdown(
@@ -367,6 +446,9 @@ onBeforeUnmount(() => {
   <main ref="confirmEl" class="confirm" :class="{ comparing }">
     <article ref="paperEl" class="paper" @scroll="updateLink">
       <div class="paper-inner">
+        <button v-if="edit" class="back" @click="emit('back')">
+          <ChevronLeft :size="16" aria-hidden="true" />收藏库
+        </button>
         <label class="editable title-line" style="view-transition-name: note-title">
           <textarea
             v-model="form.title"
@@ -415,12 +497,17 @@ onBeforeUnmount(() => {
                 @load="onPicLoad(i, $event)"
               />
             </div>
-            <div class="pic-tools">
+            <div v-if="!edit" class="pic-tools">
               <button @click="cropping = i">调整裁剪</button>
               <button v-if="p.crop" @click="p.crop = null">恢复原图</button>
             </div>
           </figure>
-          <p v-if="cropNote" class="pic-note">{{ cropNote }}</p>
+          <p v-if="cropNote && !edit" class="pic-note">{{ cropNote }}</p>
+        </div>
+        <div v-if="edit && edit.missing" class="pics">
+          <div v-for="n in edit.missing" :key="n" class="pic-missing">
+            <ImageOff :size="22" aria-hidden="true" />图片文件不存在
+          </div>
         </div>
 
         <div class="toolbar-row">
@@ -469,9 +556,17 @@ onBeforeUnmount(() => {
               <dt><ImageIcon :size="16" />图片</dt>
               <dd>{{ pics.length }} 张</dd>
             </div>
-            <div v-else class="fact">
+            <div v-else-if="!edit" class="fact">
               <dt><Video :size="16" />{{ job.type }}文件</dt>
               <dd class="file">{{ job.fileName }}</dd>
+            </div>
+            <div v-if="edit && edit.meta.platform" class="fact">
+              <dt><Video :size="16" />平台</dt>
+              <dd>{{ edit.meta.platform }}</dd>
+            </div>
+            <div v-if="edit && edit.meta.author" class="fact">
+              <dt><Mic :size="16" />作者</dt>
+              <dd class="file">{{ edit.meta.author }}</dd>
             </div>
             <div v-if="duration" class="fact">
               <dt><Clock :size="16" />时长</dt>
@@ -481,13 +576,15 @@ onBeforeUnmount(() => {
               <dt><FileText :size="16" />整理方式</dt>
               <dd>{{ job.mode }}</dd>
             </div>
-            <div v-if="!pics.length" class="fact">
+            <div v-if="!pics.length && !edit" class="fact">
               <dt><Mic :size="16" />内容来自</dt>
               <dd>语音转写</dd>
             </div>
-            <div v-if="job.source" class="fact">
+            <div v-if="job.source || edit?.meta.source" class="fact">
               <dt><Link2 :size="16" />来源链接</dt>
-              <dd class="file link-text" :title="job.source">{{ job.source }}</dd>
+              <dd class="file link-text" :title="edit?.meta.source ?? job.source">
+                {{ edit?.meta.source ?? job.source }}
+              </dd>
             </div>
             <div class="fact">
               <dt><CalendarDays :size="16" />收藏日期</dt>
@@ -495,6 +592,9 @@ onBeforeUnmount(() => {
             </div>
           </dl>
         </div>
+        <button v-if="edit?.canOpen" class="btn btn-secondary open-obsidian" @click="emit('open')">
+          <ExternalLink :size="14" aria-hidden="true" />在 Obsidian 中打开
+        </button>
       </div>
 
       <SourcePanel
@@ -520,7 +620,15 @@ onBeforeUnmount(() => {
         <p v-else-if="!confirmingDiscard" class="save-to" :title="`${storeLabel(config)} / ${domainName}`">
           <Folder :size="14" aria-hidden="true" /><span>存到：{{ storeLabel(config) }} / {{ domainName }}</span>
         </p>
-        <template v-if="confirmingDiscard">
+        <div v-if="edit" class="action-row">
+          <button class="btn btn-secondary btn-delete" @click="emit('remove')">
+            <Trash2 :size="16" aria-hidden="true" />删除
+          </button>
+          <button class="btn btn-primary" :disabled="saving || titleMissing || !dirty" @click="save">
+            {{ saving ? '保存中…' : saveError ? '重新保存' : '保存修改' }}<span class="kbd">Ctrl+S</span>
+          </button>
+        </div>
+        <template v-else-if="confirmingDiscard">
           <p class="discard-ask">确定放弃这一条吗？已整理的内容不会保存。</p>
           <div class="action-row">
             <button class="btn btn-secondary" @click="confirmingDiscard = false">取消</button>
@@ -1215,5 +1323,49 @@ onBeforeUnmount(() => {
   margin-top: var(--sp-2);
   font-size: var(--fs-sm);
   color: var(--err);
+}
+
+/* ---------------- 打开已有笔记（F22）---------------- */
+.back {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin: 0 0 var(--sp-3) calc(-1 * var(--sp-1));
+  padding: var(--sp-1) var(--sp-2) var(--sp-1) var(--sp-1);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.back:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+.pic-missing {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  width: 240px;
+  height: 160px;
+  border-radius: var(--radius-md);
+  background: var(--card-muted);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+.open-obsidian {
+  margin-top: var(--sp-5);
+}
+.open-obsidian svg {
+  margin-right: var(--sp-2);
+}
+.btn-delete {
+  color: var(--err);
+}
+.action-row .btn svg {
+  margin-right: var(--sp-1);
 }
 </style>

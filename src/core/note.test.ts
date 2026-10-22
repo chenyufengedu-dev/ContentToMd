@@ -5,6 +5,8 @@ import {
   buildSystemPrompt,
   buildUserMessage,
   parseAiResult,
+  parseNoteBody,
+  parseNoteFile,
   preselectMode,
   previewText,
   safeFileTitle,
@@ -199,5 +201,102 @@ describe('previewText：从生成到一半的结果里取出可读的文字，�
   it('还没生成出正文时只显示已有的部分；带转义的引号还原', () => {
     expect(previewText('{"title":"他说\\"好\\"')).toBe('他说"好"')
     expect(previewText('{"tit')).toBe('')
+  })
+})
+
+describe('parseNoteBody', () => {
+  const draft = parseAiResult(aiResult, domains)!.draft
+  const meta = {
+    domain: '为人处世',
+    type: '图片' as const,
+    mode: '视觉收藏' as const,
+    source: '',
+    platform: '',
+    author: '',
+    created: '2026-10-20',
+    cover: '../附件/2026-10/a.png',
+  }
+  const images = [
+    { path: '../附件/2026-10/a.png', caption: '第一张' },
+    { path: '../附件/2026-10/b c.png', caption: '' },
+  ]
+
+  it('把 buildMarkdown 写出的正文拆回摘要、图片和正文，再拼回去和原来一样', () => {
+    const md = buildMarkdown(draft, meta, images)
+    const content = md.slice(md.indexOf('---\n', 4) + 4).trim()
+    const r = parseNoteBody(content)
+    expect(r.summary).toBe(draft.summary)
+    expect(r.images).toEqual(images)
+    expect(r.body).toBe(draft.body)
+    expect(buildMarkdown({ ...draft, summary: r.summary, body: r.body }, meta, r.images)).toBe(md)
+  })
+
+  it('音视频的来源说明不算正文（保存时由程序再加）', () => {
+    const md = buildMarkdown(draft, { ...meta, type: '视频' })
+    const r = parseNoteBody(md.slice(md.indexOf('---\n', 4) + 4).trim())
+    expect(r.body).toBe(draft.body)
+  })
+
+  it('没有摘要和图片的笔记：全部是正文', () => {
+    expect(parseNoteBody('随手写的一段\n\n第二段')).toEqual({ summary: '', images: [], body: '随手写的一段\n\n第二段' })
+  })
+
+  it('正文中间的图片留在正文里', () => {
+    const r = parseNoteBody('开头\n\n![](../附件/x.png)\n\n结尾')
+    expect(r.images).toEqual([])
+    expect(r.body).toContain('![](../附件/x.png)')
+  })
+})
+
+describe('buildMarkdown 保留别的程序加的属性', () => {
+  it('extra 原样放在 schema 后面', () => {
+    const draft = parseAiResult(aiResult, domains)!.draft
+    const md = buildMarkdown(
+      draft,
+      {
+        domain: '为人处世',
+        type: '文字',
+        mode: '要点提炼',
+        source: '',
+        platform: '',
+        author: '',
+        created: '2026-10-20',
+        cover: '',
+        extra: 'aliases:\n  - 别名',
+      },
+      [],
+    )
+    expect(md).toContain('schema: 1\naliases:\n  - 别名\n---')
+  })
+})
+
+describe('parseNoteFile', () => {
+  const raw = {
+    title: '配色',
+    domain: '设计UI',
+    stem: '配色',
+    kind: '图片',
+    mode: '视觉收藏',
+    tags: ['a'],
+    keywords: [],
+    source: '',
+    platform: '',
+    author: '',
+    created: '2026-10-20',
+    cover: '',
+    extra: '',
+    content: '正文',
+  }
+
+  it('外壳返回的结果原样认下', () => {
+    const f = parseNoteFile(raw)
+    expect(f.kind).toBe('图片')
+    expect(f.mode).toBe('视觉收藏')
+  })
+
+  it('类型和整理方式不认识（别的程序写的笔记）时按文字、要点提炼算', () => {
+    const f = parseNoteFile({ ...raw, kind: '随笔', mode: '' })
+    expect(f.kind).toBe('文字')
+    expect(f.mode).toBe('要点提炼')
   })
 })

@@ -91,7 +91,56 @@ export function installLibraryShell(mode: string | null) {
           if (mode === 'missing') throw new Error('找不到文件夹')
           return { notes, failed: mode === 'fail' ? ['设计UI/坏的.md', '其他/乱码.md'] : [] }
         }
-        if (cmd === 'read_cover') return fakeCover(args!.relPath!)
+        if (cmd === 'read_cover') {
+          if (mode === 'imgmiss' && args!.relPath!.includes('outfit')) throw new Error('找不到图片')
+          return fakeCover(args!.relPath!)
+        }
+        // 笔记页（?p=note）：读到的是第 3 条（有封面图）。&note=gone 笔记已经不在；&note=imgmiss 有一张图读不到
+        if (cmd === 'read_note') {
+          if (mode === 'gone') throw new Error('找不到这条笔记了')
+          const n = notes[2]
+          return {
+            title: n.title,
+            domain: n.domain,
+            stem: n.title,
+            kind: '视频',
+            mode: '要点提炼',
+            tags: n.tags,
+            keywords: ['仪表盘', '配色'],
+            source: 'https://v.douyin.com/abcdef/',
+            platform: '抖音',
+            author: '设计师小王',
+            created: n.created,
+            cover: n.cover,
+            extra: '',
+            content: `
+> [!summary] 这条讲什么
+> 浅色底、卡片式分区，主色只用在数据高亮上。
+
+> [!note] 内容来自语音转写，没有分析画面。
+
+![仪表盘](${n.cover})
+
+![穿搭](../附件/2026-10/outfit.png)
+
+## 配色
+
+- 浅灰底，白色卡片
+- 主色只用在数据高亮
+
+## 布局
+
+卡片之间留白宽一点，数据放在左上。
+`,
+          }
+        }
+        if (cmd === 'save_note') {
+          ;(window as unknown as { __saved: unknown }).__saved = args
+          const a = args as unknown as { domain: string; stem: string }
+          return `${a.domain}/${a.stem}.md`
+        }
+        if (cmd === 'delete_note') return 1
+        if (cmd === 'list_vault_tags') return ['提示词', '配色', '仪表盘']
         throw new Error('预览里没有外壳')
       },
     },

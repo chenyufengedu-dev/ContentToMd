@@ -506,6 +506,293 @@ fn read_cover(root: String, rel_path: String) -> Result<tauri::ipc::Response, St
     Ok(tauri::ipc::Response::new(cover_bytes(&root, &rel_path)?))
 }
 
+// ---------------- 笔记查看和编辑（F22） ----------------
+
+/// 打开一条笔记：属性拆开给界面，`extra` 是属性里别的程序加的行（Obsidian 的 aliases 等），保存时原样带回去
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NoteFile {
+    title: String,
+    domain: String,
+    stem: String,
+    kind: String,
+    mode: String,
+    tags: Vec<String>,
+    keywords: Vec<String>,
+    source: String,
+    platform: String,
+    author: String,
+    created: String,
+    cover: String,
+    extra: String,
+    content: String,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct NoteHead {
+    #[serde(default)]
+    title: String,
+    #[serde(default, rename = "type")]
+    kind: String,
+    #[serde(default)]
+    mode: String,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    keywords: Vec<String>,
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    platform: String,
+    #[serde(default)]
+    author: String,
+    #[serde(default)]
+    created: String,
+    #[serde(default)]
+    cover: String,
+}
+
+const KNOWN_KEYS: [&str; 12] = [
+    "title", "domain", "type", "mode", "tags", "keywords", "source", "platform", "author",
+    "created", "cover", "schema",
+];
+
+/// 笔记开头 `---` 之间的属性原文。没有属性时返回 None
+fn split_frontmatter(text: &str) -> Option<&str> {
+    let rest = text.trim_start_matches('\u{feff}').strip_prefix("---")?;
+    let rest = rest
+        .strip_prefix("\r\n")
+        .or_else(|| rest.strip_prefix('\n'))?;
+    let mut pos = 0;
+    for l in rest.split_inclusive('\n') {
+        if l.trim_end() == "---" {
+            return Some(&rest[..pos]);
+        }
+        pos += l.len();
+    }
+    None
+}
+
+/// 属性里不是本软件写的那些行（连同它们下面缩进的内容），原样返回
+fn extra_frontmatter(fm: &str) -> String {
+    let mut keep = false;
+    let mut out: Vec<&str> = Vec::new();
+    for line in fm.lines() {
+        let top = !line.starts_with([' ', '\t', '-', '#']) && !line.is_empty();
+        if top {
+            let key = line.split(':').next().unwrap_or("").trim();
+            keep = !KNOWN_KEYS.contains(&key);
+        }
+        if keep {
+            out.push(line);
+        }
+    }
+    out.join("\n").trim_end().to_string()
+}
+
+/// 相对存放文件夹的路径必须落在存放文件夹里面（不能有“..”、不能是绝对路径）
+fn inside_root(root: &std::path::Path, rel: &str) -> Result<PathBuf, String> {
+    let r = std::path::Path::new(rel);
+    if rel.is_empty()
+        || r.is_absolute()
+        || r.components()
+            .any(|c| !matches!(c, std::path::Component::Normal(_)))
+    {
+        return Err("笔记的位置不合法".into());
+    }
+    Ok(root.join(r))
+}
+
+fn read_note_at(root: &std::path::Path, rel: &str) -> Result<NoteFile, String> {
+    let path = inside_root(root, rel)?;
+    if !path.is_file() {
+        return Err("找不到这条笔记了".into());
+    }
+    let text = fs::read_to_string(&path).map_err(|e| io_msg(&path, e))?;
+    let parsed = gray_matter::Matter::<gray_matter::engine::YAML>::new().parse::<NoteHead>(&text);
+    let (head, content) = match parsed {
+        Ok(m) => (m.data.unwrap_or_default(), m.content),
+        Err(_) => (NoteHead::default(), text.clone()),
+    };
+    let rel_path = std::path::Path::new(rel);
+    let stem = rel_path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let domain = rel_path
+        .parent()
+        .and_then(|p| p.file_name())
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let clean = |v: Vec<String>| -> Vec<String> {
+        v.into_iter()
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .collect()
+    };
+    Ok(NoteFile {
+        title: if head.title.trim().is_empty() {
+            stem.clone()
+        } else {
+            head.title.trim().to_string()
+        },
+        domain,
+        stem,
+        kind: head.kind,
+        mode: head.mode,
+        tags: clean(head.tags),
+        keywords: clean(head.keywords),
+        source: head.source,
+        platform: head.platform,
+        author: head.author,
+        created: head.created,
+        cover: head.cover,
+        extra: split_frontmatter(&text)
+            .map(extra_frontmatter)
+            .unwrap_or_default(),
+        content,
+    })
+}
+
+#[tauri::command]
+fn read_note(root: String, rel_path: String) -> Result<NoteFile, String> {
+    read_note_at(&PathBuf::from(root), &rel_path)
+}
+
+/// 保存修改：领域和文件名都没变就覆盖原文件；变了就写到新位置再删旧的，新位置已有同名笔记时拒绝，
+/// 两边都不动（方案第 10.4 节：绝不覆盖）。先写临时文件再改名。返回新的相对路径
+fn save_note_at(
+    root: &std::path::Path,
+    rel: &str,
+    domain: &str,
+    stem: &str,
+    content: &str,
+) -> Result<String, String> {
+    check_segment(domain)?;
+    check_segment(stem)?;
+    let old = inside_root(root, rel)?;
+    if !old.is_file() {
+        return Err("找不到这条笔记了，可能已经被移走或删除".into());
+    }
+    let dir = root.join(domain);
+    let target = dir.join(format!("{stem}.md"));
+    let same = target.exists()
+        && matches!((target.canonicalize(), old.canonicalize()), (Ok(a), Ok(b)) if a == b);
+    if target.exists() && !same {
+        return Err(format!(
+            "“{domain}”里已经有叫“{stem}”的笔记了，请换个文件名或领域"
+        ));
+    }
+    fs::create_dir_all(&dir).map_err(|e| io_msg(&dir, e))?;
+    let tmp = dir.join(format!(".{stem}.md.tmp"));
+    fs::write(&tmp, content).map_err(|e| io_msg(&tmp, e))?;
+    if let Err(e) = fs::rename(&tmp, &target) {
+        let _ = fs::remove_file(&tmp);
+        return Err(io_msg(&target, e));
+    }
+    if !same {
+        fs::remove_file(&old).map_err(|e| io_msg(&old, e))?;
+    }
+    Ok(format!("{domain}/{stem}.md"))
+}
+
+#[tauri::command]
+fn save_note(
+    root: String,
+    rel_path: String,
+    domain: String,
+    stem: String,
+    content: String,
+) -> Result<String, String> {
+    save_note_at(&PathBuf::from(root), &rel_path, &domain, &stem, &content)
+}
+
+/// 笔记里引用的收藏库内图片（相对存放文件夹，如 附件/2026-10/a.png）：认标准图片写法和属性里的 cover，
+/// 写法里的 ../ 去掉；网址和别处的图不算
+fn attachment_refs(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut add = |raw: &str| {
+        let p = raw.trim().trim_matches(['<', '>', '"']);
+        let p = p.trim_start_matches("../").trim_start_matches("./");
+        if p.starts_with("附件/") && !p.contains("..") && !out.iter().any(|x| x == p) {
+            out.push(p.to_string());
+        }
+    };
+    let mut rest = text;
+    while let Some(i) = rest.find("](") {
+        rest = &rest[i + 2..];
+        if let Some(j) = rest.find(')') {
+            add(&rest[..j]);
+        }
+    }
+    if let Some(fm) = split_frontmatter(text) {
+        for l in fm.lines() {
+            if let Some(v) = l.strip_prefix("cover:") {
+                add(v);
+            }
+        }
+    }
+    out
+}
+
+/// 各领域文件夹下所有 .md 的相对路径（和收藏库页读的范围一样）
+fn all_note_paths(root: &std::path::Path) -> Vec<String> {
+    let mut v = Vec::new();
+    let Ok(domains) = fs::read_dir(root) else {
+        return v;
+    };
+    for d in domains.flatten().filter(|d| d.path().is_dir()) {
+        let domain = d.file_name().to_string_lossy().into_owned();
+        if domain.starts_with('.') || domain == "附件" {
+            continue;
+        }
+        let Ok(files) = fs::read_dir(d.path()) else {
+            continue;
+        };
+        for f in files.flatten() {
+            if f.path()
+                .extension()
+                .is_some_and(|x| x.eq_ignore_ascii_case("md"))
+            {
+                v.push(format!("{domain}/{}", f.file_name().to_string_lossy()));
+            }
+        }
+    }
+    v
+}
+
+/// 删除这条笔记时该一起删的图片：它引用的、文件还在、别的笔记都没用到的
+fn unused_attachments(root: &std::path::Path, rel: &str) -> Result<Vec<String>, String> {
+    let path = inside_root(root, rel)?;
+    let text = fs::read_to_string(&path).map_err(|e| io_msg(&path, e))?;
+    let others: Vec<String> = all_note_paths(root)
+        .into_iter()
+        .filter(|p| p != rel)
+        .filter_map(|p| fs::read_to_string(root.join(&p)).ok())
+        .collect();
+    Ok(attachment_refs(&text)
+        .into_iter()
+        .filter(|a| root.join(a).is_file())
+        .filter(|a| !others.iter().any(|o| attachment_refs(o).contains(a)))
+        .collect())
+}
+
+/// 删除笔记：笔记和只被它用的图片放进 Windows 回收站（方案 US10），返回一起删掉的图片数
+#[tauri::command]
+fn delete_note(root: String, rel_path: String) -> Result<usize, String> {
+    let root = PathBuf::from(root);
+    let note = inside_root(&root, &rel_path)?;
+    let images = unused_attachments(&root, &rel_path)?;
+    trash::delete(&note).map_err(|e| format!("无法放进回收站：{e}"))?;
+    let mut n = 0;
+    for a in images {
+        if trash::delete(root.join(&a)).is_ok() {
+            n += 1;
+        }
+    }
+    Ok(n)
+}
+
 #[derive(serde::Serialize)]
 struct ObsidianVault {
     name: String,
@@ -654,6 +941,9 @@ fn main() {
             list_subfolders,
             list_notes,
             read_cover,
+            read_note,
+            save_note,
+            delete_note,
             draft_write,
             draft_list,
             draft_read,
@@ -725,6 +1015,119 @@ mod tests {
         );
         // 不留下临时文件
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 3);
+    }
+
+    #[test]
+    fn 读笔记_拆出属性和别的程序加的行() {
+        let v = TempVault::new("read-note");
+        write(
+            &v,
+            "设计UI",
+            "配色",
+            "---
+title: \"配色\"
+type: 图片
+mode: 视觉收藏
+tags: [\"a\"]
+source: \"\"
+created: 2026-10-20
+cover: \"\"
+schema: 1
+aliases:
+  - 别名
+---
+
+正文
+",
+        )
+        .unwrap();
+        let n = read_note_at(&PathBuf::from(v.path()), "设计UI/配色.md").unwrap();
+        assert_eq!(n.title, "配色");
+        assert_eq!(n.domain, "设计UI");
+        assert_eq!(n.kind, "图片");
+        assert_eq!(n.stem, "配色");
+        assert_eq!(
+            n.extra,
+            "aliases:
+  - 别名"
+        );
+        assert_eq!(n.content.trim(), "正文");
+    }
+
+    #[test]
+    fn 保存笔记_同位置覆盖_换领域和文件名会挪动() {
+        let v = TempVault::new("save-note");
+        let root = PathBuf::from(v.path());
+        write(&v, "其他", "旧名", "旧").unwrap();
+        let r = save_note_at(&root, "其他/旧名.md", "其他", "旧名", "新").unwrap();
+        assert_eq!(r, "其他/旧名.md");
+        assert_eq!(fs::read_to_string(root.join("其他/旧名.md")).unwrap(), "新");
+        let r = save_note_at(&root, "其他/旧名.md", "设计UI", "新名", "更新").unwrap();
+        assert_eq!(r, "设计UI/新名.md");
+        assert!(!root.join("其他/旧名.md").exists());
+        assert_eq!(
+            fs::read_to_string(root.join("设计UI/新名.md")).unwrap(),
+            "更新"
+        );
+    }
+
+    #[test]
+    fn 保存笔记_目标已有同名笔记时拒绝_两边都不动() {
+        let v = TempVault::new("save-conflict");
+        let root = PathBuf::from(v.path());
+        write(&v, "其他", "甲", "甲的内容").unwrap();
+        write(&v, "设计UI", "甲", "别人的").unwrap();
+        let e = save_note_at(&root, "其他/甲.md", "设计UI", "甲", "覆盖").unwrap_err();
+        assert!(e.contains("已经有"), "{e}");
+        assert_eq!(
+            fs::read_to_string(root.join("其他/甲.md")).unwrap(),
+            "甲的内容"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("设计UI/甲.md")).unwrap(),
+            "别人的"
+        );
+        assert!(save_note_at(&root, "其他/甲.md", "..", "甲", "x").is_err());
+        assert!(save_note_at(&root, "../外面.md", "其他", "甲", "x").is_err());
+    }
+
+    #[test]
+    fn 笔记里引用的附件_认出各种写法() {
+        let text = "---
+cover: \"../附件/2026-10/a.png\"
+---
+
+![](../附件/2026-10/a.png)
+
+![说明](<../附件/2026-10/b c.png>)
+
+![网图](https://x.com/y.png)";
+        assert_eq!(
+            attachment_refs(text),
+            vec!["附件/2026-10/a.png", "附件/2026-10/b c.png"]
+        );
+    }
+
+    #[test]
+    fn 删除笔记_只被它用的图片一起删_别的笔记也在用的留下() {
+        let v = TempVault::new("delete-note");
+        let root = PathBuf::from(v.path());
+        fs::create_dir_all(root.join("附件/2026-10")).unwrap();
+        fs::write(root.join("附件/2026-10/own.png"), b"1").unwrap();
+        fs::write(root.join("附件/2026-10/shared.png"), b"2").unwrap();
+        write(
+            &v,
+            "其他",
+            "甲",
+            "![](../附件/2026-10/own.png)
+
+![](../附件/2026-10/shared.png)",
+        )
+        .unwrap();
+        write(&v, "设计UI", "乙", "![](../附件/2026-10/shared.png)").unwrap();
+        let gone = unused_attachments(&root, "其他/甲.md").unwrap();
+        assert_eq!(gone, vec!["附件/2026-10/own.png".to_string()]);
+        assert!(unused_attachments(&root, "../外面.md").is_err());
     }
 
     #[test]

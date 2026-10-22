@@ -1,10 +1,11 @@
 // 设置页、投放页预览（只在开发时用：npx vite 后打开 /dev/pages.html）。
-// ?p=library 收藏库页（&lib=empty|fail|many|missing）；?p=settings 设置页（&freeze=卡片id:毫秒 点开这张卡片并把动画停在第几毫秒，逐帧检查动画用）；?p=proc 处理中（出字前），&typing=1 模拟逐字生成，&failed=1 处理失败；?p=saved 保存成功，&imgfail=1 有图片没写入。；?drop=video|images|txt|bad|draft 投放页放入内容后的样子。
+// ?p=library 收藏库页（&lib=empty|fail|many|missing）；?p=note 笔记页（&note=gone|imgmiss，&obs=1）；?p=settings 设置页（&freeze=卡片id:毫秒 点开这张卡片并把动画停在第几毫秒，逐帧检查动画用）；?p=proc 处理中（出字前），&typing=1 模拟逐字生成，&failed=1 处理失败；?p=saved 保存成功，&imgfail=1 有图片没写入。；?drop=video|images|txt|bad|draft 投放页放入内容后的样子。
 // 不连外壳，点保存、选文件夹会报错，只用来对照样式
 import { createApp, h, reactive, ref } from 'vue'
 import '../src/style.css'
 import SettingsPage from '../src/pages/SettingsPage.vue'
 import LibraryPage from '../src/pages/LibraryPage.vue'
+import NotePage from '../src/pages/NotePage.vue'
 import { installLibraryShell } from './library'
 import CollectPage from '../src/pages/CollectPage.vue'
 import ProcessingView from '../src/components/ProcessingView.vue'
@@ -129,9 +130,10 @@ const savedView = () =>
     }),
   ])
 
-if (p === 'library') {
+if (p === 'library' || p === 'note') {
   config.vaultPath = 'D:/测试收藏库'
-  installLibraryShell(query.get('lib'))
+  if (query.get('obs')) config.vault = { ...config.vault, kind: 'obsidian' } // ?p=note&obs=1 连的是 Obsidian：显示“在 Obsidian 中打开”
+  installLibraryShell(p === 'note' ? query.get('note') : query.get('lib'))
   // &view=list 列表显示（收藏库页把显示方式记在 localStorage）
   localStorage.setItem('library-view', query.get('view') === 'list' ? 'list' : 'grid')
 }
@@ -139,13 +141,15 @@ if (p === 'library') {
 const body =
   p === 'library'
     ? () => h(LibraryPage, { config })
-    : p === 'saved'
-      ? savedView
-      : p === 'settings'
-        ? () => h(SettingsPage, { config, firstRun: true })
-        : p === 'proc'
-          ? procView()
-          : () => h(CollectPage, { config, prompts: DEFAULT_PROMPTS })
+    : p === 'note'
+      ? () => h(NotePage, { config, path: '设计UI/Dribbble 卡片式仪表盘的配色和布局-2.md' })
+      : p === 'saved'
+        ? savedView
+        : p === 'settings'
+          ? () => h(SettingsPage, { config, firstRun: true })
+          : p === 'proc'
+            ? procView()
+            : () => h(CollectPage, { config, prompts: DEFAULT_PROMPTS })
 
 // ?drop=draft：假装上次留下一条整理完没保存的草稿，看投放页最上面那行提示
 if (query.get('drop') === 'draft') {
@@ -167,7 +171,10 @@ if (query.get('drop') === 'draft') {
 
 createApp({
   render: () => [
-    h(TitleBar, { page: p === 'settings' ? 'settings' : p === 'library' ? 'library' : 'home', onlySettings: false }),
+    h(TitleBar, {
+      page: p === 'settings' ? 'settings' : p === 'library' || p === 'note' ? 'library' : 'home',
+      onlySettings: false,
+    }),
     body(),
   ],
 }).mount('#app')

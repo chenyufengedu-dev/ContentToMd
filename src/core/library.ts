@@ -86,13 +86,12 @@ export function previewLines(body: string, max: number): string[] {
 }
 
 /**
- * 封面图相对存放文件夹的路径。笔记里的 cover 和正文里的图片一样，是相对笔记所在文件夹写的
- * （比如 ../附件/2026-10/a.png），这里换算过来交给外壳读；跳出存放文件夹的不认，返回空
+ * 笔记里写的图片路径（相对笔记所在文件夹，比如 ../附件/2026-10/a.png）换成相对存放文件夹的路径，交给外壳读；
+ * 跳出存放文件夹的不认，返回空
  */
-export function coverPath(n: LibraryNote): string {
-  if (!n.cover) return ''
-  const parts = n.path.split('/').slice(0, -1)
-  for (const seg of n.cover.split(/[\\/]/)) {
+export function resolveAttachment(notePath: string, rel: string): string {
+  const parts = notePath.split('/').slice(0, -1)
+  for (const seg of rel.split(/[\\/]/)) {
     if (seg === '..') {
       if (!parts.length) return ''
       parts.pop()
@@ -100,6 +99,9 @@ export function coverPath(n: LibraryNote): string {
   }
   return parts.join('/')
 }
+
+/** 封面图相对存放文件夹的路径；没有封面时为空 */
+export const coverPath = (n: LibraryNote): string => (n.cover ? resolveAttachment(n.path, n.cover) : '')
 
 /** 卡片上的日期：今年的写“10-18”，往年的写全 */
 export function cardDate(created: string, thisYear = new Date().getFullYear()): string {
