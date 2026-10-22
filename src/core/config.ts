@@ -128,10 +128,10 @@ const ILLEGAL = /[\\/:*?"<>|]/
 /** 检查领域名；没问题时返回 null */
 export function checkDomainName(name: string, domains: Domain[], selfId?: number): string | null {
   const n = name.trim()
-  if (!n) return '领域名不能为空'
-  if (ILLEGAL.test(n)) return '领域名里不能有 \\ / : * ? " < > | 这些字符'
-  if (n.length > 20) return '领域名不要超过 20 个字'
-  if (domains.some((d) => d.name === n && d.id !== selfId)) return '已经有这个领域了'
+  if (!n) return '领域名不能为空。'
+  if (ILLEGAL.test(n)) return '领域名里不能有 \\ / : * ? " < > | 这些字符。'
+  if (n.length > 20) return '领域名不要超过 20 个字。'
+  if (domains.some((d) => d.name === n && d.id !== selfId)) return '已经有这个领域了。'
   return null
 }
 
@@ -159,19 +159,19 @@ export function checkSubfolder(sub: string): string | null {
   const t = sub.trim()
   if (!t) return null
   const parts = t.split(/[\\/]/)
-  if (parts.some((p) => p.trim() === '.' || p.trim() === '..')) return '子文件夹名里不能有“..”'
-  if (/[:*?"<>|]/.test(t)) return '子文件夹名里不能有 : * ? " < > | 这些字符'
-  if (parts.some((p) => !p.trim())) return '子文件夹名不能有空的一层'
+  if (parts.some((p) => p.trim() === '.' || p.trim() === '..')) return '子文件夹名里不能有“..”。'
+  if (/[:*?"<>|]/.test(t)) return '子文件夹名里不能有 : * ? " < > | 这些字符。'
+  if (parts.some((p) => !p.trim())) return '子文件夹名不能有空的一层。'
   return null
 }
 
 /** 设置页“新建文件夹”：只建一层，在仓库最外层；existing 是仓库里已有的文件夹（list_subfolders 的结果）。没问题时返回 null */
 export function checkNewFolderName(name: string, existing: string[]): string | null {
   const n = name.trim()
-  if (!n) return '文件夹名不能为空'
-  if (ILLEGAL.test(n)) return '文件夹名里不能有 \\ / : * ? " < > | 这些字符'
-  if (n === '.' || n === '..') return '文件夹名不能是“.”或“..”'
-  if (existing.includes(n)) return `仓库里已经有“${n}”文件夹了，可以直接在上面选`
+  if (!n) return '文件夹名不能为空。'
+  if (ILLEGAL.test(n)) return '文件夹名里不能有 \\ / : * ? " < > | 这些字符。'
+  if (n === '.' || n === '..') return '文件夹名不能是“.”或“..”。'
+  if (existing.includes(n)) return `仓库里已经有“${n}”文件夹了，可以直接在上面选。`
   return null
 }
 

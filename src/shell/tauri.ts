@@ -55,7 +55,11 @@ export const readNote = async (root: string, relPath: string) =>
   parseNoteFile(await invoke<unknown>('read_note', { root, relPath }))
 export const saveNote = (root: string, relPath: string, domain: string, stem: string, content: string) =>
   invoke<string>('save_note', { root, relPath, domain, stem, content })
-export const deleteNote = (root: string, relPath: string) => invoke<number>('delete_note', { root, relPath })
+/** 返回一起放进回收站的图片（相对存放文件夹），撤销时要把它们一起交回来 */
+export const deleteNote = (root: string, relPath: string) => invoke<string[]>('delete_note', { root, relPath })
+/** 撤销删除：把刚放进回收站的笔记和图片还原到原位置 */
+export const restoreNote = (root: string, relPath: string, images: string[]) =>
+  invoke<void>('restore_note', { root, relPath, images })
 export const listSubfolders = (vault: string) => invoke<string[]>('list_subfolders', { vault })
 export const ensureSubfolder = (vault: string, sub: string) => invoke<void>('ensure_subfolder', { vault, sub })
 export const writeNote = (vault: string, domain: string, title: string, date: string, content: string) =>

@@ -1,17 +1,35 @@
 import { describe, expect, it } from 'vitest'
-import { isCondensed, lengthProblem, mapPool, MAX_CHARS, splitTextChunks } from './longText'
+import { estimateWait, isCondensed, lengthProblem, mapPool, MAX_CHARS, splitTextChunks } from './longText'
 
 const para = (n: number, c = '字') => c.repeat(n - 1) + '。'
 
 describe('lengthProblem', () => {
-  it('要点提炼最多 8 万字，原文精修最多 2 万字，超过时说清楚怎么办', () => {
-    expect(MAX_CHARS).toEqual({ 要点提炼: 80000, 原文精修: 20000, 视觉收藏: 80000 })
-    expect(lengthProblem('要点提炼', 80000)).toBeNull()
-    expect(lengthProblem('要点提炼', 80001)).toContain('8 万字')
-    expect(lengthProblem('原文精修', 20000)).toBeNull()
-    const m = lengthProblem('原文精修', 20001)
-    expect(m).toContain('2 万字')
-    expect(m).toContain('要点提炼')
+  it('要点提炼最多 10 万字，原文精修最多 5 万字，超过时说清楚怎么办，句子带句号', () => {
+    expect(MAX_CHARS).toEqual({ 要点提炼: 100000, 原文精修: 50000, 视觉收藏: 100000 })
+    expect(lengthProblem('要点提炼', 100000)).toBeNull()
+    expect(lengthProblem('要点提炼', 100001)).toBe('这份内容有 100,001 字，超过 10 万字的上限。请拆成几份再放入。')
+    expect(lengthProblem('原文精修', 50000)).toBeNull()
+    expect(lengthProblem('原文精修', 50001)).toBe(
+      '「原文精修」一次最多处理 5 万字，这份有 50,001 字。请改用「要点提炼」（最多 10 万字），或拆成几份再放入。',
+    )
+  })
+})
+
+describe('estimateWait', () => {
+  it('不算长的内容不提示', () => {
+    expect(estimateWait('原文精修', 20000)).toBeNull()
+    expect(estimateWait('要点提炼', 50000)).toBeNull()
+  })
+
+  it('原文精修：按每块 3000 字、同时 3 块、每轮约 30 秒估，说明要等多久', () => {
+    // 5 万字 = 17 块 = 6 轮，约 3 分钟
+    expect(estimateWait('原文精修', 50000)).toBe('预计要 3 分钟左右，请耐心等待。')
+    // 2.1 万字 = 7 块 = 3 轮，约 1.5 分钟，取整到 2 分钟
+    expect(estimateWait('原文精修', 21000)).toBe('预计要 2 分钟左右，请耐心等待。')
+  })
+
+  it('要点提炼：一次装整段，5 万字以上约 1～2 分钟', () => {
+    expect(estimateWait('要点提炼', 60000)).toBe('预计要 1～2 分钟，请耐心等待。')
   })
 })
 

@@ -86,7 +86,7 @@ describe('长文的整理', () => {
   it('超过上限的内容整理时直接报错，不调用服务', async () => {
     let calls = 0
     const fetch: Fetch = async () => (calls++, reply(AI_RESULT))
-    await expect(runJob(newTextJob('太长.txt', '长'.repeat(20001), '原文精修'), ctx(fetch))).rejects.toMatchObject({
+    await expect(runJob(newTextJob('太长.txt', '长'.repeat(50001), '原文精修'), ctx(fetch))).rejects.toMatchObject({
       code: 'too_long',
     })
     expect(calls).toBe(0)
@@ -97,5 +97,31 @@ describe('长文的整理', () => {
     const fetch: Fetch = async () => (calls++, reply(AI_RESULT))
     await runJob(newTextJob('长.txt', '长'.repeat(30000), '要点提炼'), ctx(fetch))
     expect(calls).toBe(1)
+  })
+})
+
+describe('长文精修失败后重试', () => {
+  const para = (c: string) => c.repeat(999) + '。'
+  const LONG = ['甲', '乙', '丙', '丁', '戊', '己'].map(para).join('\n')
+
+  it('已经精修好的块留着，重试时只补失败的那一块', async () => {
+    const seen: number[] = []
+    let failSecond = true
+    const fetch: Fetch = async (_url, init) => {
+      const msg = (JSON.parse(String(init?.body)) as { messages: { content: string }[] }).messages[1].content
+      const n = Number(/第 (\d+)\/\d+ 段/.exec(msg)![1])
+      seen.push(n)
+      if (n === 2 && failSecond) return new Response('', { status: 500 })
+      return reply({ ...AI_RESULT, title: `第${n}段标题`, tags: [`标签${n}`], body: `正文${n}`.padEnd(2900, '。') })
+    }
+    const job = newTextJob('长文.pdf', LONG, '原文精修', '文档')
+    await expect(runJob(job, ctx(fetch))).rejects.toMatchObject({ code: 'unavailable' })
+    expect([...seen].sort()).toEqual([1, 2, 3])
+    seen.length = 0
+    failSecond = false
+    await runJob(job, ctx(fetch))
+    expect(seen).toEqual([2])
+    expect(job.draft?.tags).toEqual(['标签1', '标签2', '标签3'])
+    expect(job.draft?.body.indexOf('正文3')).toBeGreaterThan(job.draft!.body.indexOf('正文2'))
   })
 })

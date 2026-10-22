@@ -77,15 +77,15 @@ describe('checkImages', () => {
     const r = checkImages(existing.length, [f('big.png', MAX_IMAGE_BYTES + 1), f('ok.png', 10), f('more.png', 10)])
     expect(r.accepted.map((x) => x.name)).toEqual(['ok.png'])
     expect(r.rejected).toEqual([
-      { name: 'big.png', reason: '超过 20MB' },
-      { name: 'more.png', reason: '一次最多 9 张' },
+      { name: 'big.png', reason: '图片超过 20MB 的上限。' },
+      { name: 'more.png', reason: '一次最多放 9 张图片。' },
     ])
   })
 
   it('不是图片的文件不收', () => {
     const r = checkImages(0, [f('a.txt', 10, 'text/plain')])
     expect(r.accepted).toEqual([])
-    expect(r.rejected[0].reason).toBe('不是图片')
+    expect(r.rejected[0].reason).toBe('这不是图片文件。')
   })
 })
 

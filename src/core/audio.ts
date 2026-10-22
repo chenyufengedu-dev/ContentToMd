@@ -13,7 +13,7 @@ export async function decodeTo16kMono(data: ArrayBuffer): Promise<{ samples: Flo
   try {
     decoded = await ctx.decodeAudioData(data)
   } catch {
-    throw new AppError('decode', '无法读取这个文件的声音，请转换为 mp4 或 mp3 后重试')
+    throw new AppError('decode', '无法读取这个文件的声音，请转换为 mp4 或 mp3 后重试。')
   } finally {
     void ctx.close()
   }

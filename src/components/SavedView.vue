@@ -10,7 +10,6 @@ const props = defineProps<{
   note: SavedNote
   /** 存放位置（storeLabel）：仓库名 / 子文件夹，或普通文件夹名 */
   location: string
-  openError: string | null
   /** 这一条的估算花费（元，F14）；没填价格、算不出来时不显示 */
   cost?: number
 }>()
@@ -61,7 +60,6 @@ const lines = computed(() =>
         <button class="primary" @click="emit('next')">继续收藏</button>
       </div>
       <p class="kbd-hint">Ctrl+Enter 继续收藏</p>
-      <p v-if="openError" class="open-err">{{ openError }}</p>
     </div>
   </div>
 </template>

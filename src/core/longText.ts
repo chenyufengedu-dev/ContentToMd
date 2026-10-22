@@ -1,9 +1,9 @@
 // 长文的处理策略（2026-10-22 用《三体》片段实测后定的，见 docs/进度.md）：
-// 要点提炼一次装整段，最多 8 万字；原文精修要把全文重写一遍，一次装太长会被 AI 悄悄改成摘要，
-// 所以分成每块约 3000 字、同时最多 3 块并行精修，最多 2 万字（等太久用户受不了）
+// 要点提炼一次装整段，最多 10 万字；原文精修要把全文重写一遍，一次装太长会被 AI 悄悄改成摘要，
+// 所以分成每块约 3000 字、同时最多 3 块并行精修，最多 5 万字（更长的要等太久）
 import type { Mode } from './note'
 
-export const MAX_CHARS: Record<Mode, number> = { 要点提炼: 80000, 原文精修: 20000, 视觉收藏: 80000 }
+export const MAX_CHARS: Record<Mode, number> = { 要点提炼: 100000, 原文精修: 50000, 视觉收藏: 100000 }
 
 /** 原文精修：不超过这个字数就一次整理，超过了才分块 */
 export const REFINE_SINGLE_MAX = 4000
@@ -20,8 +20,18 @@ export function lengthProblem(mode: Mode, chars: number): string | null {
   if (chars <= max) return null
   const n = chars.toLocaleString()
   if (mode === '原文精修')
-    return `这份内容有 ${n} 字，超过「原文精修」最多 ${wan(max)}的上限，请改用「要点提炼」（最多 ${wan(MAX_CHARS.要点提炼)}），或拆成几份再放入`
-  return `这份内容有 ${n} 字，超过一次最多 ${wan(max)}的上限，请拆成几份再放入`
+    return `「原文精修」一次最多处理 ${wan(max)}，这份有 ${n} 字。请改用「要点提炼」（最多 ${wan(MAX_CHARS.要点提炼)}），或拆成几份再放入。`
+  return `这份内容有 ${n} 字，超过 ${wan(max)}的上限。请拆成几份再放入。`
+}
+
+/** 内容比较长时，告诉用户要等多久；不长就不提示。原文精修按每块 3000 字、同时 3 块、每轮约 30 秒估 */
+export function estimateWait(mode: Mode, chars: number): string | null {
+  if (mode === '原文精修' && chars > 20000) {
+    const rounds = Math.ceil(Math.ceil(chars / REFINE_CHUNK) / CONCURRENCY)
+    return `预计要 ${Math.max(1, Math.round((rounds * 30) / 60))} 分钟左右，请耐心等待。`
+  }
+  if (mode === '要点提炼' && chars > 50000) return '预计要 1～2 分钟，请耐心等待。'
+  return null
 }
 
 /** 一整段特别长时在句子结尾拆开，攒到不超过 target；一句就超过 target 的硬切 */
