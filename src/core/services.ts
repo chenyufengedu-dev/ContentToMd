@@ -24,14 +24,29 @@ async function request(
   const name = SERVICE_LABELS[kind]
   const insecure = checkBaseUrl(url)
   if (insecure) throw new AppError('insecure_url', insecure, url)
+  if (cancel?.aborted) throw new AppError('cancelled', '已取消') // 分段转写时，取消后不再发下一段
   const ctrl = new AbortController()
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs)
-  const onCancel = () => ctrl.abort()
+  // 取消、超时都立刻结束等待：有的请求通道（Tauri 的 http 插件，转写走这条）上传中不理会中止信号，
+  // 不能等它自己停下来
+  let stop: (e: AppError) => void = () => {}
+  const stopped = new Promise<never>((_, reject) => {
+    stop = (e) => {
+      ctrl.abort()
+      reject(e)
+    }
+  })
+  stopped.catch(() => {}) // 没取消、没超时时这个 Promise 一直挂着，不算未处理的错误
+  const timer = setTimeout(
+    () => stop(new AppError('timeout', '服务响应超时，请检查网络后重试', `超过 ${timeoutMs / 1000} 秒`)),
+    timeoutMs,
+  )
+  const onCancel = () => stop(new AppError('cancelled', '已取消'))
   cancel?.addEventListener('abort', onCancel)
   let res: Response
   try {
-    res = await fetch(url, { ...init, signal: ctrl.signal })
+    res = await Promise.race([fetch(url, { ...init, signal: ctrl.signal }), stopped])
   } catch (e) {
+    if (e instanceof AppError) throw e // 上面的取消、超时
     if (cancel?.aborted) throw new AppError('cancelled', '已取消')
     const timedOut = ctrl.signal.aborted
     throw timedOut
@@ -188,9 +203,13 @@ async function readStream(
   let content = ''
   let finish: unknown
   let usage: Usage | undefined
+  // 点取消时停止读取（这时请求已经回了话，request() 里的取消管不到这里）
+  const onCancel = () => void reader.cancel().catch(() => {})
+  cancel?.addEventListener('abort', onCancel)
   try {
     for (;;) {
       const { done, value } = await reader.read()
+      if (cancel?.aborted) throw new AppError('cancelled', '已取消')
       if (done) break
       buf += decoder.decode(value, { stream: true })
       const lines = buf.split('\n')
@@ -214,6 +233,8 @@ async function readStream(
     if (cancel?.aborted) throw new AppError('cancelled', '已取消')
     if (e instanceof SyntaxError) throw new AppError('bad_response', '服务返回的结果格式不对，请点击重试', String(e))
     throw new AppError('network', '网络连接中断，请检查网络后重试', String(e))
+  } finally {
+    cancel?.removeEventListener('abort', onCancel)
   }
   return { content, finish, usage }
 }

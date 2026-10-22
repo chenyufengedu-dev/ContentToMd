@@ -416,6 +416,15 @@ onBeforeUnmount(() => {
       </div>
 
       <div v-if="!comparing" class="side-main props-area" style="view-transition-name: props-card">
+        <!-- 文件名就是标题：两边改的是同一个东西（文件名里不允许的字符保存时换成“-”） -->
+        <label class="file-field">
+          <h3>文件名</h3>
+          <span class="name-input">
+            <input v-model="form.title" spellcheck="false" aria-label="文件名" />
+            <span class="ext">.md</span>
+          </span>
+        </label>
+
         <NoteProps
           v-model:domain-id="form.domainId"
           v-model:tags="form.tags"
@@ -910,9 +919,40 @@ onBeforeUnmount(() => {
   font-weight: var(--fw-label);
   box-shadow: inset 0 -2px 0 var(--accent);
 }
+/* 文件名（右栏第一行）：和下面的属性一样的小标题，下面一个输入框，后缀 .md 淡色 */
+.file-field {
+  display: block;
+  margin-bottom: var(--sp-5);
+}
+.name-input {
+  display: flex;
+  align-items: center;
+  height: var(--h-md);
+  padding: 0 var(--px-sm);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--card);
+}
+.name-input:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.name-input input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: none;
+  font: inherit;
+  color: var(--fg);
+}
+.ext {
+  color: var(--faint);
+}
 .source {
   margin-top: var(--sp-6);
 }
+.file-field h3,
 .source h3 {
   margin: 0 0 var(--sp-2);
   font-size: var(--fs-md);

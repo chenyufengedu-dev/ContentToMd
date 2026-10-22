@@ -45,8 +45,11 @@ if (query.has('usage')) {
   })
 }
 
+// 处理中预览用的长一点的文字，能看到打满一框后往上滚
 const SAMPLE_TEXT =
   '商务礼仪三重点：摆正位置、端正态度、分清场合\n商务礼仪的三个重点是摆正位置、端正态度、分清场合。\n摆正位置\n尊重上级是天职，尊重平级是本分，尊重下级是美德。\n一提到尊重领导、尊重上级就排斥反感，这是没有摆正位置。'
+
+const LONG_TEXT = [SAMPLE_TEXT, SAMPLE_TEXT, SAMPLE_TEXT].join('\n')
 
 function procView() {
   const job = reactive(newJob('商务礼仪.mp4', '视频', '要点提炼'))
@@ -59,9 +62,9 @@ function procView() {
     // 模拟 AI 一段一段地返回
     let n = 0
     const timer = setInterval(() => {
-      n = Math.min(SAMPLE_TEXT.length, n + 6)
-      job.preview = SAMPLE_TEXT.slice(0, n)
-      if (n >= SAMPLE_TEXT.length || failed) clearInterval(timer)
+      n = Math.min(LONG_TEXT.length, n + 6)
+      job.preview = LONG_TEXT.slice(0, n)
+      if (n >= LONG_TEXT.length || failed) clearInterval(timer)
     }, 120)
   } else {
     job.steps[1] = { ...job.steps[1], status: 'running', startedAt: t0 }
