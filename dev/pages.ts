@@ -32,6 +32,7 @@ if (query.has('usage')) {
   Object.assign(window, {
     __TAURI_INTERNALS__: {
       invoke: async (cmd: string) => {
+        if (cmd === 'save_config') return // 假装存好了
         if (cmd !== 'usage_read') throw new Error('预览里没有外壳')
         const rs = [
           await rec('sk-demo', 'text', 0.85, new Date('2026-09-15')),
@@ -196,4 +197,40 @@ if (drop) {
       put([new File([new Uint8Array(300).map((_, i) => (i * 37 + 129) % 256)], '旧笔记.txt', { type: 'text/plain' })])
     }
   }, 300)
+}
+
+// ?p=settings&usage=1&pricetest=1：自动展开文字整理的价格、填 2、点确定，看收起后浮起的保存条
+if (query.has('pricetest')) {
+  setTimeout(async () => {
+    const wait = (t: number) => new Promise((r) => setTimeout(r, t))
+    document.querySelector<HTMLElement>('[data-card=services] input')?.click()
+    await wait(600)
+    document.querySelector<HTMLElement>('.price-toggle')?.click()
+    await wait(100)
+    const i = document.querySelector<HTMLInputElement>('.price input')!
+    i.value = '2'
+    i.dispatchEvent(new Event('input'))
+    await wait(100)
+    document.querySelector<HTMLElement>('.price-actions .primary')?.click() // 完成：只收起，保存条浮起来
+  }, 800)
+}
+
+// ?p=settings&usage=1&savetest=1：改一个字、点底部“保存设置”，看保存条左边的“已保存”
+if (query.has('savetest')) {
+  setTimeout(async () => {
+    const wait = (t: number) => new Promise((r) => setTimeout(r, t))
+    const i = document.querySelector<HTMLInputElement>('[data-card=services] input')!
+    i.value += '/'
+    i.dispatchEvent(new Event('input'))
+    await wait(100)
+    const btn = document.querySelector<HTMLButtonElement>('.save-bar .primary')!
+    const disabledBeforeClick = btn.disabled
+    btn.click()
+    await wait(300)
+    // 写进页面，无界面浏览器用 --dump-dom 读
+    document.body.dataset.result = JSON.stringify({
+      disabledBeforeClick,
+      afterSave: document.querySelector<HTMLElement>('.save-bar')?.innerText,
+    })
+  }, 800)
 }
