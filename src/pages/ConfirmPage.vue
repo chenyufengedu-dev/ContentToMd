@@ -82,6 +82,8 @@ const form = reactive({
   summary: start.summary,
 })
 const created = props.edit?.meta.created || today()
+/** 内容来自语音转写（只有音频、视频）；文字、文档、图片不是 */
+const fromSpeech = props.job.type === '音频' || props.job.type === '视频'
 const transcript = props.job.transcript ?? ''
 
 // ---------------- 图片（F29）----------------
@@ -482,7 +484,7 @@ onBeforeUnmount(() => {
           <span class="meta-sep" aria-hidden="true" />
           <span class="meta meta-source"
             ><Video :size="14" aria-hidden="true" /><span>{{
-              [job.fileName, duration, '语音转写', created].filter(Boolean).join(' · ')
+              [job.fileName, duration, fromSpeech && '语音转写', created].filter(Boolean).join(' · ')
             }}</span></span
           >
         </button>
@@ -576,7 +578,7 @@ onBeforeUnmount(() => {
               <dt><FileText :size="16" />整理方式</dt>
               <dd>{{ job.mode }}</dd>
             </div>
-            <div v-if="!pics.length && !edit" class="fact">
+            <div v-if="fromSpeech && !edit" class="fact">
               <dt><Mic :size="16" />内容来自</dt>
               <dd>语音转写</dd>
             </div>

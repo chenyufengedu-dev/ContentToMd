@@ -15,6 +15,7 @@ export type ErrorCode =
   | 'cancelled' // 用户点了取消
   | 'decode' // 音视频解不出声音
   | 'no_speech' // 没有识别到语音
+  | 'too_long' // 文字太长，这种整理方式装不下
 
 /** message 是给用户看的大白话，detail 放进默认收起的“详细信息”（方案第 8 节） */
 export class AppError extends Error {

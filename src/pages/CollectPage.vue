@@ -14,6 +14,11 @@ import { type Mode, MODES, type NoteDraft, type Prompts, type SourceType, presel
 import { type Job, newImageJob, newJob, newTextJob, runJob } from '../core/pipeline'
 import { parseShareText, type ShareInfo } from '../core/shareText'
 import { decodeText } from '../core/textFile'
+import FileTypeIcon from '../components/FileTypeIcon.vue'
+import { kindOfName, type FileKind } from '../components/fileKind'
+import { isScanned, LONG_TEXT_CHARS, readDocx, readPdf, setPdfWorker } from '../core/docText'
+import { lengthProblem, MAX_CHARS } from '../core/longText'
+import pdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
 import { describeError, isAppError, type ErrorCode } from '../core/errors'
 import { checkImages, MAX_IMAGES, readPixels, toAiDataUrl } from '../core/image'
 import {
@@ -32,18 +37,7 @@ import NoticeDialog from '../components/NoticeDialog.vue'
 import ConfirmPage, { type SavedNote } from './ConfirmPage.vue'
 import SavedView from '../components/SavedView.vue'
 import ProcessingView from '../components/ProcessingView.vue'
-import {
-  CircleAlert,
-  Clock,
-  FilePlus2,
-  FileText,
-  FileAudio,
-  Image as ImageIcon,
-  Link2,
-  PenLine,
-  Plus,
-  X,
-} from 'lucide-vue-next'
+import { CircleAlert, Clock, FilePlus2, FileText, Image as ImageIcon, Link2, PenLine, Plus, X } from 'lucide-vue-next'
 
 const props = defineProps<{ config: Config; prompts: Prompts }>()
 const emit = defineEmits<{ goSettings: []; configChanged: [Config] }>()
@@ -55,6 +49,16 @@ const phase = ref<Phase>('drop')
 const AUDIO = ['mp3', 'm4a', 'wav']
 const VIDEO = ['mp4', 'mov']
 const TEXT = ['md', 'txt']
+const DOC = ['pdf', 'docx']
+const MAX_DOC_BYTES = 50 * 1024 ** 2
+/** 投放区底下列出的支持类型 */
+const SUPPORTED: { kind: FileKind; label: string }[] = [
+  { kind: 'video', label: '音视频' },
+  { kind: 'image', label: '截图' },
+  { kind: 'md', label: 'md / txt' },
+  { kind: 'pdf', label: 'pdf' },
+  { kind: 'docx', label: 'docx' },
+]
 const MAX_BYTES = 1024 ** 3 // 音视频 ≤ 1GB（方案第 11 节）
 const MAX_TEXT_BYTES = 10 * 1024 ** 2
 const MODE_ICONS = { 要点提炼: FileText, 原文精修: PenLine, 视觉收藏: ImageIcon }
@@ -66,8 +70,14 @@ const fileType = ref<SourceType | null>(null)
 /** 音视频的本地地址（缩略图取第一帧）和时长 */
 const fileUrl = ref('')
 const duration = ref<number | null>(null)
-/** 放入的 MD / TXT：放入时就解出文字（F07），认不出编码的不加入 */
-const textFile = shallowRef<{ name: string; text: string; encoding: string } | null>(null)
+/** 放入的 MD / TXT / PDF / Word：放入时就解出文字（F07、F15、F16），认不出的不加入 */
+const textFile = shallowRef<{
+  name: string
+  text: string
+  type: SourceType
+  encoding?: string
+  pages?: number
+} | null>(null)
 /** 放入的图片；url 是缩略图用的本地地址，移除时释放 */
 const images = ref<{ file: File; url: string }[]>([])
 /** 来源框里显示的文字；粘贴分享文字后换成认出的链接（F02） */
@@ -82,7 +92,7 @@ const dragging = ref(false)
 const fileInput = ref<HTMLInputElement>()
 
 const kind = computed<SourceType | null>(() =>
-  images.value.length ? '图片' : textFile.value ? '文字' : fileType.value,
+  images.value.length ? '图片' : textFile.value ? textFile.value.type : fileType.value,
 )
 const hasContent = computed(() => !!kind.value)
 
@@ -115,9 +125,15 @@ function acceptFile(f: File) {
     void acceptText(f)
     return
   }
+  if (DOC.includes(ext)) {
+    void acceptDoc(f, ext)
+    return
+  }
   const type: SourceType | null = VIDEO.includes(ext) ? '视频' : AUDIO.includes(ext) ? '音频' : null
   if (!type) {
-    errors.value.push(`暂不支持 .${ext || '（无扩展名）'} 文件。支持：图片、mp3 / m4a / wav、mp4 / mov、md / txt`)
+    errors.value.push(
+      `暂不支持 .${ext || '（无扩展名）'} 文件。支持：图片、mp3 / m4a / wav、mp4 / mov、md / txt、pdf / docx`,
+    )
     return
   }
   if (f.size > MAX_BYTES) {
@@ -146,8 +162,49 @@ async function acceptText(f: File) {
     errors.value.push(`${f.name} 没有加入：无法读取，可能已损坏或内容为空`)
     return
   }
-  textFile.value = { name: f.name, text: decoded.text, encoding: decoded.encoding }
-  mode.value = preselectMode('文字')
+  if (tooLongToAccept(f.name, decoded.text)) return
+  textFile.value = { name: f.name, text: decoded.text, type: '文字', encoding: decoded.encoding }
+  mode.value = defaultMode('文字', decoded.text.length)
+}
+
+/** 超过要点提炼的上限（8 万字）的内容哪种方式都装不下，不加入 */
+function tooLongToAccept(name: string, text: string): boolean {
+  const problem = lengthProblem('要点提炼', text.length)
+  if (problem) errors.value.push(`${name} 没有加入：${problem}`)
+  return !!problem
+}
+
+/** 预选整理方式；文字超过原文精修的上限（2 万字）时改选要点提炼 */
+const defaultMode = (type: SourceType, chars: number): Mode =>
+  chars > MAX_CHARS.原文精修 ? '要点提炼' : preselectMode(type)
+
+/** PDF / Word：只取文字（F15、F16）；扫描版、有密码、读不出的不加入（方案 US7） */
+async function acceptDoc(f: File, ext: string) {
+  if (f.size > MAX_DOC_BYTES) {
+    errors.value.push(`“${f.name}”超过 50MB，请截取后再放入`)
+    return
+  }
+  try {
+    setPdfWorker(pdfWorker)
+    const buf = await f.arrayBuffer()
+    const doc = await (ext === 'pdf' ? readPdf(buf) : readDocx(buf))
+    if (ext === 'pdf' && isScanned(doc)) {
+      errors.value.push(`${f.name} 没有加入：这个 PDF 里没有文字，可以截图后放入`)
+      return
+    }
+    if (!doc.text.trim()) {
+      errors.value.push(`${f.name} 没有加入：无法读取，可能已损坏或内容为空`)
+      return
+    }
+    if (tooLongToAccept(f.name, doc.text)) return
+    textFile.value = { name: f.name, text: doc.text, type: '文档', pages: doc.pages }
+    mode.value = defaultMode('文档', doc.text.length)
+  } catch (e) {
+    const locked = e instanceof Error && e.name === 'PasswordException'
+    errors.value.push(
+      locked ? `${f.name} 没有加入：这个文件有密码，请先取消密码再放入` : `${f.name} 没有加入：无法读取，可能已损坏`,
+    )
+  }
 }
 
 /** 来源框粘贴：是分享文字就换成链接，平台、作者显示在下面（F02）。只在本地拆文字，不联网 */
@@ -204,6 +261,7 @@ function removeImage(i: number) {
 }
 /** keepDraftFile：从草稿恢复前清空界面时，不能把草稿也删了 */
 function clearContent(keepDraftFile = false) {
+  longOk = false
   images.value.forEach((x) => URL.revokeObjectURL(x.url))
   images.value = []
   if (fileUrl.value) URL.revokeObjectURL(fileUrl.value)
@@ -233,6 +291,7 @@ const itemInfo = computed(() =>
   textFile.value
     ? [
         `${textFile.value.text.length.toLocaleString()} 字`,
+        textFile.value.pages && `${textFile.value.pages} 页`,
         textFile.value.encoding && `${textFile.value.encoding} 编码`,
       ]
         .filter(Boolean)
@@ -247,7 +306,8 @@ const itemInfo = computed(() =>
 
 // 开始前检查需要的服务（方案第 8 节“没有配置所需服务”）
 const missingService = computed<string | null>(() => {
-  const need: ServiceKind[] = kind.value === '图片' ? ['vision'] : kind.value === '文字' ? ['text'] : ['asr', 'text']
+  const need: ServiceKind[] =
+    kind.value === '图片' ? ['vision'] : kind.value === '文字' || kind.value === '文档' ? ['text'] : ['asr', 'text']
   const k = need.find((k) => !isServiceConfigured(props.config.services[k]))
   return k ? SERVICE_LABELS[k] : null
 })
@@ -274,8 +334,18 @@ const summary = computed(() => {
   return null
 })
 
+/** 选中的整理方式装不下这份文字时的说明（原文精修最多 2 万字），有的话不能开始 */
+const lengthNotice = computed(() => (textFile.value ? lengthProblem(mode.value, textFile.value.text.length) : null))
+
+/** 文字超过 8000 字时先问一句（方案 US7），确认过就不再问 */
+const askLong = ref(false)
+let longOk = false
 async function start() {
-  if (!hasContent.value || missingService.value || phase.value !== 'drop') return
+  if (!hasContent.value || missingService.value || lengthNotice.value || phase.value !== 'drop') return
+  if (textFile.value && textFile.value.text.length > LONG_TEXT_CHARS && !longOk) {
+    askLong.value = true
+    return
+  }
   // 取消后再开始：同样的内容、同一种整理方式时沿用已完成的步骤
   const same = job.value && job.value.mode === mode.value
   if (!same) {
@@ -286,7 +356,7 @@ async function start() {
             mode.value,
           )
         : textFile.value
-          ? newTextJob(textFile.value.name, textFile.value.text, mode.value)
+          ? newTextJob(textFile.value.name, textFile.value.text, mode.value, textFile.value.type)
           : newJob(file.value!.name, fileType.value!, mode.value),
     ) as Job
   }
@@ -388,7 +458,8 @@ async function resumeDraft() {
     return
   }
   if (j.images) images.value = j.images.map((i) => ({ file: i.file, url: URL.createObjectURL(i.file) }))
-  else if (j.type === '文字') textFile.value = { name: j.fileName, text: j.transcript ?? '', encoding: '' }
+  else if (j.type === '文字' || j.type === '文档')
+    textFile.value = { name: j.fileName, text: j.transcript ?? '', type: j.type }
   job.value = reactive(j) as Job
   existingTags.value = await listVaultTags(notesRoot(props.config)).catch(() => [])
   if (atConfirm) phase.value = 'confirm'
@@ -540,7 +611,7 @@ onBeforeUnmount(() => {
           @loadedmetadata="duration = ($event.target as HTMLVideoElement).duration"
         />
         <span v-else class="thumb thumb-icon">
-          <component :is="textFile ? FileText : FileAudio" :size="22" aria-hidden="true" />
+          <FileTypeIcon :kind="textFile ? kindOfName(textFile.name) : 'audio'" :size="32" />
         </span>
         <span class="item-text">
           <span class="item-name">{{ textFile?.name ?? file!.name }}</span>
@@ -552,13 +623,17 @@ onBeforeUnmount(() => {
       <button v-else class="drop" :class="{ dragging }" @click="fileInput?.click()">
         <FilePlus2 :size="26" aria-hidden="true" />
         <span class="big">拖入或粘贴内容</span>
-        <span class="hint">支持音视频、截图、md / txt</span>
+        <span class="kinds" aria-label="支持音视频、截图、md / txt、pdf / docx">
+          <span v-for="k in SUPPORTED" :key="k.label" class="kind">
+            <FileTypeIcon :kind="k.kind" :size="18" />{{ k.label }}
+          </span>
+        </span>
       </button>
       <input
         ref="fileInput"
         type="file"
         multiple
-        accept=".mp4,.mov,.mp3,.m4a,.wav,.md,.txt,image/*"
+        accept=".mp4,.mov,.mp3,.m4a,.wav,.md,.txt,.pdf,.docx,image/*"
         hidden
         @change="onPick"
       />
@@ -618,18 +693,31 @@ onBeforeUnmount(() => {
         </span>
       </label>
 
+      <p v-if="lengthNotice" class="notice">
+        <CircleAlert :size="15" aria-hidden="true" /><span>{{ lengthNotice }}</span>
+      </p>
       <p v-if="missingService && hasContent" class="notice">
         <CircleAlert :size="15" aria-hidden="true" /><span>还没有配置{{ missingService }}，请先到设置中填写</span>
         <button class="link" @click="emit('goSettings')">去设置</button>
       </p>
 
       <div class="actions">
-        <button class="primary start" :disabled="!hasContent || !!missingService" @click="start">
+        <button class="primary start" :disabled="!hasContent || !!missingService || !!lengthNotice" @click="start">
           开始处理 <span class="muted-on-primary">Ctrl+Enter</span>
         </button>
       </div>
     </div>
   </main>
+  <NoticeDialog
+    v-if="askLong"
+    title="内容较长"
+    cancel-text="取消"
+    ok-text="继续整理"
+    @cancel="askLong = false"
+    @ok="((askLong = false), (longOk = true), start())"
+  >
+    <p>这份内容有 {{ textFile?.text.length.toLocaleString() }} 字，整理可能需要更久、花费更多。</p>
+  </NoticeDialog>
   <NoticeDialog
     v-if="askClose"
     title="还有 1 条没有保存"
@@ -741,7 +829,25 @@ onBeforeUnmount(() => {
 .thumb-icon {
   display: grid;
   place-items: center;
+  background: var(--card-muted);
+}
+.kinds {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+  font-size: var(--fs-sm);
   color: var(--muted);
+}
+.kind {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: 32px;
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--card);
 }
 .item-text {
   flex: 1;

@@ -6,6 +6,7 @@ import { decodeTo16kMono, splitChunks, toWav, cleanTranscript, effectiveLength }
 import { transcribe, chatJson, type Fetch } from './services'
 import { AppError, isAppError } from './errors'
 import { retryOnRateLimit } from './retry'
+import { CONCURRENCY, isCondensed, lengthProblem, mapPool, REFINE_SINGLE_MAX, splitTextChunks } from './longText'
 import { estimateCost, keyId, type Usage, type UsageRecord } from './cost'
 import { autoCrop, type Pixels, type Rect } from './image'
 import {
@@ -77,9 +78,9 @@ export function newJob(fileName: string, type: SourceType, mode: Mode): Job {
   return { fileName, type, mode, steps: ids.map((id) => ({ id, status: 'pending' })) }
 }
 
-/** MD / TXT（F07）：放入时已经解出文字，只剩整理一步；文字放在 transcript，确认页的原文对照照常用 */
-export function newTextJob(fileName: string, text: string, mode: Mode): Job {
-  return { fileName, type: '文字', mode, steps: [{ id: 'organize', status: 'pending' }], transcript: text }
+/** MD / TXT（F07）、PDF / Word（F15、F16，type 为“文档”）：放入时已经解出文字，只剩整理一步；文字放在 transcript，确认页的原文对照照常用 */
+export function newTextJob(fileName: string, text: string, mode: Mode, type: SourceType = '文字'): Job {
+  return { fileName, type, mode, steps: [{ id: 'organize', status: 'pending' }], transcript: text }
 }
 
 export function newImageJob(files: File[], mode: Mode): Job {
@@ -207,6 +208,17 @@ const STEPS: Record<StepId, (job: Job, ctx: RunContext, step: StepState) => Prom
     const images = job.images
     const kind = images ? 'vision' : 'text'
     const extra = { shareText: job.shareText, request: job.request }
+    const onText = (soFar: string) => {
+      job.preview = previewText(soFar)
+      ctx.onUpdate()
+    }
+    if (!images) {
+      const problem = lengthProblem(job.mode, job.transcript!.length)
+      if (problem) throw new AppError('too_long', problem)
+      // 原文精修要把全文重写一遍，太长时一次装不稳（会被悄悄改成摘要），分块并行精修
+      if (job.mode === '原文精修' && job.transcript!.length > REFINE_SINGLE_MAX)
+        return organizeInChunks(job, ctx, step, system, extra, onText)
+    }
     const user = images
       ? [
           {
@@ -219,51 +231,108 @@ const STEPS: Record<StepId, (job: Job, ctx: RunContext, step: StepState) => Prom
           },
           ...images.map((i) => ({ type: 'image_url', image_url: { url: i.aiUrl! } })),
         ]
-      : buildUserMessage(
-          job.type === '文字' ? `文字文件（${job.fileName}）` : `${job.type}（语音转写）`,
-          job.transcript!,
-          extra,
-        )
+      : buildUserMessage(sourceDesc(job), job.transcript!, extra)
     // 返回格式不对时自动重试 1 次（方案第 8 节）
     for (let attempt = 0; ; attempt++) {
-      let used: Usage | undefined
-      let answered = false
       try {
-        const parsed = parseAiResult(
-          await call(
-            () =>
-              chatJson(
-                kind,
-                ctx.config.services[kind],
-                system,
-                user,
-                ctx.fetch,
-                ctx.cancel,
-                (soFar) => {
-                  job.preview = previewText(soFar)
-                  ctx.onUpdate()
-                },
-                (u) => (used = u),
-              ).then((v) => ((answered = true), v)),
-            ctx,
-            step,
-          ),
-          ctx.config.domains,
-        )
-        if (!parsed) throw new AppError('format', 'AI 返回的结果缺少标题或正文，请点击重试')
+        const parsed = await askOnce(job, ctx, step, kind, system, user, onText)
         job.draft = parsed.draft
         job.domainFallback = parsed.domainFallback
         if (images) await cropAll(images, parsed.imageRegions, ctx)
         return
       } catch (e) {
         if (!isAppError(e, 'format') || attempt >= 1) throw e
-      } finally {
-        // 返回格式不对要重试时，这次也已经花了钱，照样记
-        // 服务回了话就记一笔（没带用量时金额记为不知道）；连不上、超时这些没花钱的不记
-        if (used || answered) await recordUsage(job, ctx, kind, used)
       }
     }
   },
+}
+
+/** 发给 AI 的“来源”一行：文字文件、文档、音视频的语音转写 */
+const sourceDesc = (job: Job) =>
+  job.type === '文字' || job.type === '文档'
+    ? `${job.type === '文字' ? '文字文件' : '文档'}（${job.fileName}）`
+    : `${job.type}（语音转写）`
+
+/** 调一次整理服务并校验结果。服务回了话就记一笔费用（没带用量时金额记为不知道），连不上、超时这些没花钱的不记；
+ * 返回格式不对要重试时，这次也已经花了钱，照样记 */
+async function askOnce(
+  job: Job,
+  ctx: RunContext,
+  step: StepState,
+  kind: 'text' | 'vision',
+  system: string,
+  user: string | unknown[],
+  onText?: (soFar: string) => void,
+) {
+  let used: Usage | undefined
+  let answered = false
+  try {
+    const parsed = parseAiResult(
+      await call(
+        () =>
+          chatJson(
+            kind,
+            ctx.config.services[kind],
+            system,
+            user,
+            ctx.fetch,
+            ctx.cancel,
+            onText,
+            (u) => (used = u),
+          ).then((v) => ((answered = true), v)),
+        ctx,
+        step,
+      ),
+      ctx.config.domains,
+    )
+    if (!parsed) throw new AppError('format', 'AI 返回的结果缺少标题或正文，请点击重试')
+    return parsed
+  } finally {
+    if (used || answered) await recordUsage(job, ctx, kind, used)
+  }
+}
+
+/**
+ * 长文的原文精修：切成每块约 3000 字，同时最多 3 块一起精修，按顺序拼起来（依据：docs/进度.md 的长文实测）。
+ * 标题、摘要、领域取第一块，标签和关键词各块合并。某一块的输出比原文短了四成以上（被改成摘要）时自动重试一次
+ */
+async function organizeInChunks(
+  job: Job,
+  ctx: RunContext,
+  step: StepState,
+  system: string,
+  extra: { shareText?: string; request?: string },
+  onText: (soFar: string) => void,
+) {
+  const chunks = splitTextChunks(job.transcript!)
+  let done = 0
+  const parts = await mapPool(chunks, CONCURRENCY, async (chunk, i) => {
+    const user = buildUserMessage(
+      `${sourceDesc(job)}，长文的第 ${i + 1}/${chunks.length} 段，只整理这一段（标题、摘要按这一段写，小标题接着前文）`,
+      chunk,
+      extra,
+    )
+    for (let attempt = 0; ; attempt++) {
+      try {
+        // 打字机预览只跟第一块
+        const parsed = await askOnce(job, ctx, step, 'text', system, user, i === 0 ? onText : undefined)
+        if (attempt === 0 && isCondensed(chunk.length, parsed.draft.body.length)) continue
+        step.note = `已完成 ${++done}/${chunks.length} 段`
+        ctx.onUpdate()
+        return parsed
+      } catch (e) {
+        if (!isAppError(e, 'format') || attempt >= 1) throw e
+      }
+    }
+  })
+  const first = parts[0]
+  job.draft = {
+    ...first.draft,
+    tags: [...new Set(parts.flatMap((p) => p.draft.tags))].slice(0, 8),
+    keywords: [...new Set(parts.flatMap((p) => p.draft.keywords))].slice(0, 12),
+    body: parts.map((p) => p.draft.body).join('\n\n'),
+  }
+  job.domainFallback = first.domainFallback
 }
 
 /** 自动裁剪（F29）：读不出像素时那张图就不裁，不让整条失败 */
