@@ -215,4 +215,14 @@ describe('runJob：图片', () => {
     expect(user).toContain('<<<材料开始>>>\n决定下周上线')
     expect(job.draft?.title).toBe('商务礼仪三重点')
   })
+
+  it('PDF / Word（文档）：来源标成“文档”，不当成语音转写（F15、F16）', async () => {
+    const { fetch, calls } = fakeServices([chatOk(AI_RESULT)])
+    const job = newTextJob('合同.pdf', '第一条 甲方', '原文精修', '文档')
+    await runJob(job, ctx(fetch))
+    expect(job.type).toBe('文档')
+    const user = (calls.bodies[0] as { messages: { content: string }[] }).messages[1].content
+    expect(user).toContain('文档（合同.pdf）')
+    expect(user).not.toContain('语音转写')
+  })
 })

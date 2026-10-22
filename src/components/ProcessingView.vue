@@ -3,7 +3,8 @@
 // 左边一个缩略图大小的预览框：整理前是笔记骨架加一道很淡的光泽；整理时 AI 生成的文字一个字一个字打出来，
 // 骨架被文字挤下去。右边是文件信息和步骤：已完成绿色虚线小圆环，进行中灰色虚线小圆环在转，没开始的不转
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { FileText, FileVideo, Image as ImageIcon } from 'lucide-vue-next'
+import FileTypeIcon from './FileTypeIcon.vue'
+import { kindOfName, type FileKind } from './fileKind'
 import { type Job, STEP_LABELS } from '../core/pipeline'
 import type { ErrorCode } from '../core/errors'
 
@@ -15,6 +16,17 @@ const props = defineProps<{
   now: number
 }>()
 const emit = defineEmits<{ cancel: []; retry: []; back: []; goSettings: [] }>()
+
+/** 右边文件那一行的小图标：图片、文字类按文件名认，音频、视频各一个 */
+const fileKind = computed<FileKind>(() =>
+  props.job.images
+    ? 'image'
+    : props.job.type === '音频'
+      ? 'audio'
+      : props.job.type === '视频'
+        ? 'video'
+        : kindOfName(props.job.fileName),
+)
 
 // ---- 打字机：显示的字数追着 AI 已生成的字数走，匀速约每秒 25 字，看得清、有“正在写”的感觉；落后超过 800 字才加快，免得和真实进度差太远 ----
 const shown = ref(0)
@@ -65,7 +77,7 @@ const visibleSteps = computed(() => {
 })
 const isAuthError = computed(() => props.error?.code === 'auth')
 /** 文件本身的问题（读不出声音、没有语音），重试多少次都一样，只给“返回修改” */
-const canRetry = computed(() => !['decode', 'no_speech'].includes(props.error?.code ?? ''))
+const canRetry = computed(() => !['decode', 'no_speech', 'too_long'].includes(props.error?.code ?? ''))
 function elapsed(s: { startedAt?: number; endedAt?: number }) {
   if (!s.startedAt) return ''
   return `${Math.round(((s.endedAt ?? props.now) - s.startedAt) / 1000)} 秒`
@@ -98,12 +110,7 @@ function elapsed(s: { startedAt?: number; endedAt?: number }) {
     <!-- 右：文件和步骤 -->
     <div class="status">
       <div class="file">
-        <component
-          :is="job.images ? ImageIcon : job.type === '文字' ? FileText : FileVideo"
-          class="file-icon"
-          :size="16"
-          aria-hidden="true"
-        />
+        <FileTypeIcon class="file-icon" :kind="fileKind" :size="16" />
         <span class="file-name">{{ summary.name }}</span>
         <span class="file-info">{{ summary.info }}</span>
       </div>

@@ -20,6 +20,8 @@ import { keyId, type UsageRecord } from '../src/core/cost'
 const query = new URLSearchParams(location.search)
 const p = query.get('p')
 const config = defaultConfig()
+// ?keys=1 假装三项服务都填好了（看“内容较长”这类要点开始才出现的提示）
+if (query.get('keys')) for (const k of ['text', 'vision', 'asr'] as const) config.services[k].apiKey = 'sk-test'
 
 // ?p=settings&vault=obsidian|pick|none|folder：假装电脑上有两个 Obsidian 仓库，看收藏库卡片（F31）；pick 是刚切到 Obsidian、还没选仓库，none 是电脑上没有仓库
 const vaultDemo = query.get('vault')
