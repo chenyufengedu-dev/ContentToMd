@@ -8,7 +8,8 @@ import { formatYuan } from '../core/cost'
 
 const props = defineProps<{
   note: SavedNote
-  vaultName: string
+  /** 存放位置（storeLabel）：仓库名 / 子文件夹，或普通文件夹名 */
+  location: string
   openError: string | null
   /** 这一条的估算花费（元，F14）；没填价格、算不出来时不显示 */
   cost?: number
@@ -17,7 +18,7 @@ const emit = defineEmits<{ open: []; next: [] }>()
 
 const parts = computed(() => props.note.path.split(/[\\/]/))
 const fileName = computed(() => parts.value.at(-1) ?? '')
-const folder = computed(() => [props.vaultName, ...parts.value.slice(0, -1)].join(' / '))
+const folder = computed(() => [props.location, ...parts.value.slice(0, -1)].join(' / '))
 /** 正文前几行；框里放不下的由渐隐遮住 */
 const lines = computed(() =>
   props.note.text
@@ -56,7 +57,7 @@ const lines = computed(() =>
       </div>
 
       <div class="buttons">
-        <button class="soft" @click="emit('open')"><ExternalLink :size="14" aria-hidden="true" />打开笔记</button>
+        <button class="soft" @click="emit('open')"><ExternalLink :size="14" aria-hidden="true" />打开文档</button>
         <button class="primary" @click="emit('next')">继续收藏</button>
       </div>
       <p class="kbd-hint">Ctrl+Enter 继续收藏</p>

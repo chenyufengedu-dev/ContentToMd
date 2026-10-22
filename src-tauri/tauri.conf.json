@@ -13,8 +13,9 @@
     "windows": [
       {
         "title": "收藏整理工具",
-        "width": 1280,
-        "height": 800,
+        "width": 1080,
+        "height": 720,
+        "center": true,
         "minWidth": 960,
         "minHeight": 640,
         "dragDropEnabled": false,

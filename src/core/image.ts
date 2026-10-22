@@ -139,3 +139,39 @@ export async function cropForSave(blob: Blob, crop: Rect | null): Promise<Blob> 
     ? canvas.convertToBlob({ type: 'image/jpeg', quality: 0.95 })
     : canvas.convertToBlob({ type: 'image/png' })
 }
+
+/** 按宽度等比缩小到 maxW 以内；原图本来就小时不放大 */
+export function scaledSize(width: number, height: number, maxW: number): { w: number; h: number } {
+  const w = Math.min(width, maxW)
+  return { w, h: Math.max(1, Math.round((height * w) / width)) }
+}
+
+/** 收藏库卡片用的缩略图宽度：卡片约 190 宽，400 够高清屏用 */
+export const THUMB_W = 400
+/** 模糊图：200 宽、模糊半径 4（和卡片差不多大，显示时基本不拉伸，不会出马赛克） */
+export const BLUR_W = 200
+const BLUR_RADIUS = 4
+
+/**
+ * 收藏库卡片的封面（F21）：一张缩略图、一张已经模糊好的图。只在内存里用，不写进收藏库。
+ * 列表里不放原图（原图长边上千像素，每次显示都要缩小重画）；模糊在这里画一次，显示时不再用模糊滤镜
+ */
+export async function coverThumbs(blob: Blob): Promise<{ thumb: Blob; blurred: Blob }> {
+  const bmp = await createImageBitmap(blob)
+  const make = (maxW: number, blur = 0) => {
+    const { w, h } = scaledSize(bmp.width, bmp.height, maxW)
+    const canvas = new OffscreenCanvas(w, h)
+    const g = canvas.getContext('2d')!
+    g.imageSmoothingQuality = 'high'
+    if (blur) g.filter = `blur(${blur}px)`
+    // 模糊会让四边变透明：画得比画布大一圈盖住
+    const m = blur * 2
+    g.drawImage(bmp, -m, -m, w + 2 * m, h + 2 * m)
+    return canvas.convertToBlob({ type: 'image/webp', quality: 0.85 })
+  }
+  try {
+    return { thumb: await make(THUMB_W), blurred: await make(BLUR_W, BLUR_RADIUS) }
+  } finally {
+    bmp.close()
+  }
+}

@@ -1,5 +1,6 @@
 <script setup lang="ts" generic="T extends string | number">
-// 自绘下拉框：系统自带的下拉列表样式改不了，和页面格格不入。支持键盘：上下选择、回车确定、Esc 关闭
+// 自绘下拉框：系统自带的下拉列表样式改不了，和页面格格不入。支持键盘：上下选择、回车确定、Esc 关闭。
+// 列表挂到页面最外层、按按钮的位置浮出来：放在卡片里时不会被卡片边缘切掉，也不会被下一张卡片盖住
 import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
 import { Check, ChevronDown } from 'lucide-vue-next'
 
@@ -14,10 +15,26 @@ const open = ref(false)
 const highlighted = ref(0)
 const root = ref<HTMLElement>()
 const list = ref<HTMLElement>()
+/** 列表的位置（相对窗口）：按钮下面放得下就放下面，否则放上面 */
+const menuStyle = ref<Record<string, string>>({})
 const current = computed(() => props.options.find((o) => o.value === model.value)?.label ?? '')
+
+// 列表打开期间每一帧都跟着按钮放：卡片正在展开挪位置、页面滚动时，列表也贴着按钮
+let frame = 0
+function follow(below: boolean) {
+  const r = root.value?.getBoundingClientRect()
+  if (r)
+    menuStyle.value = {
+      left: `${r.left}px`,
+      minWidth: `${r.width}px`,
+      ...(below ? { top: `${r.bottom}px` } : { bottom: `${window.innerHeight - r.top}px` }),
+    }
+  frame = requestAnimationFrame(() => follow(below))
+}
 
 async function toggle() {
   if (open.value) return close()
+  follow(true)
   open.value = true
   highlighted.value = Math.max(
     0,
@@ -25,10 +42,18 @@ async function toggle() {
   )
   document.addEventListener('pointerdown', onOutside, true)
   await nextTick()
+  // 量出列表实际多高再定往上还是往下（只定这一次，免得跟着按钮移动时跳来跳去）
+  const r = root.value!.getBoundingClientRect()
+  const h = list.value?.offsetHeight ?? 0
+  if (r.bottom + h > window.innerHeight && r.top > window.innerHeight - r.bottom) {
+    cancelAnimationFrame(frame)
+    follow(false)
+  }
   list.value?.children[highlighted.value]?.scrollIntoView({ block: 'nearest' })
 }
 function close() {
   open.value = false
+  cancelAnimationFrame(frame)
   document.removeEventListener('pointerdown', onOutside, true)
 }
 function choose(i: number) {
@@ -36,7 +61,8 @@ function choose(i: number) {
   close()
 }
 function onOutside(e: PointerEvent) {
-  if (!root.value?.contains(e.target as Node)) close()
+  const t = e.target as Node
+  if (!root.value?.contains(t) && !list.value?.contains(t)) close()
 }
 function onKey(e: KeyboardEvent) {
   if (!open.value) {
@@ -76,20 +102,22 @@ onBeforeUnmount(close)
       <span class="value">{{ current }}</span>
       <ChevronDown class="arrow" :size="size === 'sm' ? 14 : 18" aria-hidden="true" />
     </button>
-    <ul v-if="open" ref="list" class="menu" role="listbox" :aria-label="ariaLabel">
-      <li
-        v-for="(o, i) in options"
-        :key="String(o.value)"
-        role="option"
-        :aria-selected="o.value === model"
-        :class="{ highlighted: i === highlighted }"
-        @pointerenter="highlighted = i"
-        @click="choose(i)"
-      >
-        <span>{{ o.label }}</span>
-        <Check v-if="o.value === model" :size="16" aria-hidden="true" />
-      </li>
-    </ul>
+    <Teleport to="body">
+      <ul v-if="open" ref="list" class="menu" :style="menuStyle" role="listbox" :aria-label="ariaLabel">
+        <li
+          v-for="(o, i) in options"
+          :key="String(o.value)"
+          role="option"
+          :aria-selected="o.value === model"
+          :class="{ highlighted: i === highlighted }"
+          @pointerenter="highlighted = i"
+          @click="choose(i)"
+        >
+          <span>{{ o.label }}</span>
+          <Check v-if="o.value === model" :size="16" aria-hidden="true" />
+        </li>
+      </ul>
+    </Teleport>
   </div>
 </template>
 
@@ -111,7 +139,7 @@ onBeforeUnmount(close)
   background: var(--card);
   border-color: var(--line-strong);
 }
-.open .trigger,
+.select.open .trigger,
 .trigger:focus-visible {
   outline: none;
   border-color: var(--accent);
@@ -129,7 +157,7 @@ onBeforeUnmount(close)
   color: var(--muted);
   transition: transform var(--ease);
 }
-.open .arrow {
+.select.open .arrow {
   transform: rotate(180deg);
 }
 .md .trigger {
@@ -145,14 +173,11 @@ onBeforeUnmount(close)
   font-size: var(--fs-sm);
 }
 .menu {
-  position: absolute;
-  z-index: 20;
-  top: calc(100% + var(--sp-1));
-  left: 0;
-  min-width: 100%;
+  position: fixed;
+  z-index: 60; /* 比提示框的遮罩（50）高：提示框里也能用 */
   max-height: 320px;
+  margin: var(--sp-1) 0;
   overflow-y: auto;
-  margin: 0;
   padding: var(--sp-1);
   list-style: none;
   background: var(--card);

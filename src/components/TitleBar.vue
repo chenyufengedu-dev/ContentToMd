@@ -1,10 +1,20 @@
+<script lang="ts">
+export type Page = 'home' | 'library' | 'settings'
+</script>
+
 <script setup lang="ts">
 // 自绘标题栏：软件名、正中间的页面切换（胶囊形分段）、窗口按钮。空白处可以拖动窗口、双击最大化
 import { Minus, Square, X } from 'lucide-vue-next'
 import { minimizeWindow, toggleMaximizeWindow, closeWindow } from '../shell/tauri'
 
-defineProps<{ page: 'home' | 'settings'; homeDisabled: boolean }>()
-const emit = defineEmits<{ navigate: ['home' | 'settings'] }>()
+/** onlySettings：第一次使用、还没配置完时只能停在设置页 */
+const props = defineProps<{ page: Page; onlySettings: boolean }>()
+const emit = defineEmits<{ navigate: [Page] }>()
+const PAGES: { id: Page; label: string }[] = [
+  { id: 'home', label: '新增' },
+  { id: 'library', label: '收藏库' },
+  { id: 'settings', label: '设置' },
+]
 </script>
 
 <template>
@@ -15,21 +25,16 @@ const emit = defineEmits<{ navigate: ['home' | 'settings'] }>()
     </div>
     <nav class="nav" aria-label="页面">
       <!-- 当前页下面的白色底块，切换时滑过去 -->
-      <span class="nav-thumb" :class="{ right: page === 'settings' }" aria-hidden="true" />
+      <span class="nav-thumb" :style="{ '--i': PAGES.findIndex((x) => x.id === props.page) }" aria-hidden="true" />
       <button
+        v-for="x in PAGES"
+        :key="x.id"
         class="nav-item"
-        :aria-current="page === 'home' ? 'page' : undefined"
-        :disabled="homeDisabled"
-        @click="emit('navigate', 'home')"
+        :aria-current="page === x.id ? 'page' : undefined"
+        :disabled="onlySettings && x.id !== 'settings'"
+        @click="emit('navigate', x.id)"
       >
-        收藏
-      </button>
-      <button
-        class="nav-item"
-        :aria-current="page === 'settings' ? 'page' : undefined"
-        @click="emit('navigate', 'settings')"
-      >
-        设置
+        {{ x.label }}
       </button>
     </nav>
     <div class="window-controls">
@@ -89,11 +94,10 @@ const emit = defineEmits<{ navigate: ['home' | 'settings'] }>()
   border-radius: var(--radius-pill);
   background: var(--card);
   box-shadow: var(--shadow-card);
+  transform: translateX(calc(var(--i) * (80px + 2px)));
   transition: transform 260ms cubic-bezier(0.2, 0, 0, 1);
 }
-.nav-thumb.right {
-  transform: translateX(calc(80px + 2px));
-}
+
 .nav-item {
   position: relative; /* 文字在白色底块上面 */
   height: var(--h-xs);

@@ -2,7 +2,14 @@
 // 投放页：放入内容 → 处理中 / 失败 → 确认页 → 保存成功（方案第 6、11 节）。
 // 一次只放一种内容：一个音视频文件、一个 MD / TXT 文件，或者 1～9 张图片（设计稿 设计稿/投放页/*.webp）
 import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef } from 'vue'
-import { type Config, SERVICE_LABELS, isServiceConfigured, type ServiceKind } from '../core/config'
+import {
+  type Config,
+  SERVICE_LABELS,
+  isServiceConfigured,
+  notesRoot,
+  storeLabel,
+  type ServiceKind,
+} from '../core/config'
 import { type Mode, MODES, type NoteDraft, type Prompts, type SourceType, preselectMode } from '../core/note'
 import { type Job, newImageJob, newJob, newTextJob, runJob } from '../core/pipeline'
 import { parseShareText, type ShareInfo } from '../core/shareText'
@@ -39,7 +46,7 @@ import {
 } from 'lucide-vue-next'
 
 const props = defineProps<{ config: Config; prompts: Prompts }>()
-const emit = defineEmits<{ goSettings: [] }>()
+const emit = defineEmits<{ goSettings: []; configChanged: [Config] }>()
 
 type Phase = 'drop' | 'processing' | 'failed' | 'confirm' | 'saved'
 const phase = ref<Phase>('drop')
@@ -292,7 +299,7 @@ async function start() {
   })
   pendingDraft.value = null
   keepDraft(true)
-  existingTags.value = await listVaultTags(props.config.vaultPath).catch(() => [])
+  existingTags.value = await listVaultTags(notesRoot(props.config)).catch(() => [])
   await run()
 }
 
@@ -383,7 +390,7 @@ async function resumeDraft() {
   if (j.images) images.value = j.images.map((i) => ({ file: i.file, url: URL.createObjectURL(i.file) }))
   else if (j.type === '文字') textFile.value = { name: j.fileName, text: j.transcript ?? '', encoding: '' }
   job.value = reactive(j) as Job
-  existingTags.value = await listVaultTags(props.config.vaultPath).catch(() => [])
+  existingTags.value = await listVaultTags(notesRoot(props.config)).catch(() => [])
   if (atConfirm) phase.value = 'confirm'
   else await run()
 }
@@ -404,7 +411,6 @@ let unguard: (() => void) | undefined
 
 // ---------------- 保存后 ----------------
 const saved = ref<SavedNote | null>(null)
-const vaultName = computed(() => props.config.vaultPath.split(/[\\/]/).filter(Boolean).at(-1) ?? '收藏库')
 function onEdited(edits: NoteDraft) {
   if (!job.value) return
   job.value.edits = edits
@@ -418,7 +424,9 @@ function onSaved(note: SavedNote) {
 const openError = ref<string | null>(null)
 async function open() {
   openError.value = null
-  await openNote(props.config.vaultPath, saved.value!.path).catch((e) => (openError.value = String(e)))
+  await openNote(notesRoot(props.config), saved.value!.path, props.config.vault.kind === 'obsidian').catch(
+    (e) => (openError.value = String(e)),
+  )
 }
 function next() {
   clearContent()
@@ -460,6 +468,7 @@ onBeforeUnmount(() => {
     @saved="onSaved"
     @edited="onEdited"
     @go-settings="emit('goSettings')"
+    @config-changed="(c) => emit('configChanged', c)"
     @discard="next"
   />
 
@@ -467,7 +476,7 @@ onBeforeUnmount(() => {
     <SavedView
       :cost="job?.costUnknown ? undefined : job?.cost"
       :note="saved"
-      :vault-name="vaultName"
+      :location="storeLabel(config)"
       :open-error="openError"
       @open="open"
       @next="next"

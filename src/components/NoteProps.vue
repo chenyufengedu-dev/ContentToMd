@@ -13,11 +13,21 @@ const props = defineProps<{
   domainFallback?: boolean
 }>()
 const domainId = defineModel<number>('domainId', { required: true })
+const emit = defineEmits<{ newDomain: [] }>()
 const tags = defineModel<string[]>('tags', { required: true })
 const keywords = defineModel<string[]>('keywords', { required: true })
 
 const known = computed(() => new Set(props.existingTags))
-const domainOptions = computed(() => props.domains.map((d) => ({ value: d.id, label: d.name })))
+// 下拉最后一项“新增领域…”不是真的领域：选它时不改领域，交给确认页弹框新建（US4）
+const NEW_DOMAIN = -1
+const domainOptions = computed(() => [
+  ...props.domains.map((d) => ({ value: d.id, label: d.name })),
+  { value: NEW_DOMAIN, label: '新增领域…' },
+])
+const domainChoice = computed({
+  get: () => domainId.value,
+  set: (v: number) => (v === NEW_DOMAIN ? emit('newDomain') : (domainId.value = v)),
+})
 
 type Field = 'tags' | 'keywords'
 const adding = ref<Field | null>(null)
@@ -58,7 +68,7 @@ const TIPS = {
         <span class="label">领域</span>
         <InfoTip :text="TIPS.domain" />
       </div>
-      <SelectBox v-model="domainId" class="domain" :options="domainOptions" aria-label="领域" size="md" />
+      <SelectBox v-model="domainChoice" class="domain" :options="domainOptions" aria-label="领域" size="md" />
       <p v-if="domainFallback" class="warn">AI 没有选出合适的领域，已暂时放到“其他”，请选一个</p>
     </div>
 

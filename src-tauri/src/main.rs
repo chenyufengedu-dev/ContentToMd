@@ -389,11 +389,222 @@ fn frontmatter_tags(text: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// 打开笔记：收藏库在 Obsidian 的 vault 里时用 Obsidian 打开，否则用系统默认程序（F13）
+// ---------------- 收藏库页（F21） ----------------
+
+/// 收藏库页的一条笔记。path 相对存放文件夹（领域/文件名.md），cover 相对存放文件夹（附件/年-月/图.png）
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NoteEntry {
+    path: String,
+    title: String,
+    domain: String,
+    created: String,
+    tags: Vec<String>,
+    keywords: Vec<String>,
+    cover: String,
+    body: String,
+}
+
+#[derive(serde::Serialize)]
+struct NoteList {
+    notes: Vec<NoteEntry>,
+    /// 读不出来的文件（相对路径），收藏库页底部提示“有 N 个文件无法读取”
+    failed: Vec<String>,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct NoteMeta {
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    created: String,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    keywords: Vec<String>,
+    #[serde(default)]
+    cover: String,
+}
+
+/// 读存放文件夹里每个领域文件夹下的笔记（只读一层，跳过“附件”和隐藏文件夹；存放文件夹最外层的 .md 不算）。
+/// 领域按所在文件夹算，用户在 Obsidian 里挪过文件也对得上
 #[tauri::command]
-fn open_note(vault: String, rel_path: String) -> Result<(), String> {
+fn list_notes(root: String) -> Result<NoteList, String> {
+    let root = PathBuf::from(root);
+    let domains = fs::read_dir(&root).map_err(|e| io_msg(&root, e))?;
+    let mut list = NoteList {
+        notes: Vec::new(),
+        failed: Vec::new(),
+    };
+    for d in domains.flatten().filter(|d| d.path().is_dir()) {
+        let domain = d.file_name().to_string_lossy().into_owned();
+        if domain.starts_with('.') || domain == "附件" {
+            continue;
+        }
+        let Ok(files) = fs::read_dir(d.path()) else {
+            continue;
+        };
+        for f in files.flatten() {
+            let p = f.path();
+            if !p.extension().is_some_and(|x| x.eq_ignore_ascii_case("md")) {
+                continue;
+            }
+            let name = f.file_name().to_string_lossy().into_owned();
+            let rel = format!("{domain}/{name}");
+            let Ok(text) = fs::read_to_string(&p) else {
+                list.failed.push(rel);
+                continue;
+            };
+            let parsed =
+                gray_matter::Matter::<gray_matter::engine::YAML>::new().parse::<NoteMeta>(&text);
+            let (meta, body) = match parsed {
+                Ok(m) => (m.data.unwrap_or_default(), m.content),
+                Err(_) => (NoteMeta::default(), text),
+            };
+            let clean = |v: Vec<String>| -> Vec<String> {
+                v.into_iter()
+                    .map(|t| t.trim().to_string())
+                    .filter(|t| !t.is_empty())
+                    .collect()
+            };
+            let title = if meta.title.trim().is_empty() {
+                name.trim_end_matches(".md").to_string()
+            } else {
+                meta.title.trim().to_string()
+            };
+            list.notes.push(NoteEntry {
+                path: rel,
+                title,
+                domain: domain.clone(),
+                created: meta.created,
+                tags: clean(meta.tags),
+                keywords: clean(meta.keywords),
+                cover: meta.cover,
+                body,
+            });
+        }
+    }
+    Ok(list)
+}
+
+/// 封面图只能从存放文件夹的“附件”里读，路径里不能有“..”
+fn cover_bytes(root: &str, rel_path: &str) -> Result<Vec<u8>, String> {
+    let rel = std::path::Path::new(rel_path);
+    if !rel.starts_with("附件")
+        || rel
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err("只能读附件文件夹里的图片".into());
+    }
+    let path = PathBuf::from(root).join(rel);
+    fs::read(&path).map_err(|e| io_msg(&path, e))
+}
+
+#[tauri::command]
+fn read_cover(root: String, rel_path: String) -> Result<tauri::ipc::Response, String> {
+    Ok(tauri::ipc::Response::new(cover_bytes(&root, &rel_path)?))
+}
+
+#[derive(serde::Serialize)]
+struct ObsidianVault {
+    name: String,
+    path: String,
+}
+
+/// Obsidian 自己记的仓库清单（%APPDATA%\obsidian\obsidian.json）里，文件夹还在、里面有 .obsidian 的（F31）
+fn parse_obsidian_vaults(json: &str) -> Vec<ObsidianVault> {
+    #[derive(serde::Deserialize)]
+    struct Entry {
+        path: String,
+    }
+    #[derive(serde::Deserialize)]
+    struct List {
+        vaults: HashMap<String, Entry>,
+    }
+    let Ok(list) = serde_json::from_str::<List>(json) else {
+        return Vec::new();
+    };
+    let mut vaults: Vec<ObsidianVault> = list
+        .vaults
+        .into_values()
+        .filter(|e| PathBuf::from(&e.path).join(".obsidian").is_dir())
+        .map(|e| ObsidianVault {
+            name: PathBuf::from(&e.path)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| e.path.clone()),
+            path: e.path,
+        })
+        .collect();
+    vaults.sort_by(|a, b| a.name.cmp(&b.name));
+    vaults
+}
+
+/// 列出电脑上的 Obsidian 仓库；没装过 Obsidian 时是空的
+#[tauri::command]
+fn list_obsidian_vaults() -> Vec<ObsidianVault> {
+    std::env::var("APPDATA")
+        .ok()
+        .and_then(|a| {
+            fs::read_to_string(PathBuf::from(a).join("obsidian").join("obsidian.json")).ok()
+        })
+        .map(|s| parse_obsidian_vaults(&s))
+        .unwrap_or_default()
+}
+
+/// 仓库里已有的文件夹（最多三层，跳过 .obsidian 这类隐藏文件夹），给设置页“存到哪个文件夹”的下拉框用。
+/// 返回相对仓库的路径，用 / 分层，按名称排序
+#[tauri::command]
+fn list_subfolders(vault: String) -> Vec<String> {
+    fn walk(dir: &std::path::Path, prefix: &str, depth: usize, out: &mut Vec<String>) {
+        if depth == 0 {
+            return;
+        }
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') || !e.path().is_dir() {
+                continue;
+            }
+            let rel = if prefix.is_empty() {
+                name
+            } else {
+                format!("{prefix}/{name}")
+            };
+            walk(&e.path(), &rel, depth - 1, out);
+            out.push(rel);
+        }
+    }
+    let mut out = Vec::new();
+    walk(&PathBuf::from(vault), "", 3, &mut out);
+    out.sort();
+    out
+}
+
+/// 建好仓库里存笔记的子文件夹（可以多层）；每一层都按名称规则检查，不会建到仓库外面
+#[tauri::command]
+fn ensure_subfolder(vault: String, sub: String) -> Result<(), String> {
+    let mut dir = PathBuf::from(&vault);
+    if !dir.is_dir() {
+        return Err(format!("仓库文件夹“{vault}”找不到了，请重新选择"));
+    }
+    for part in sub.split(['/', '\\']).map(str::trim) {
+        check_segment(part)?;
+        dir.push(part);
+    }
+    fs::create_dir_all(&dir).map_err(|e| io_msg(&dir, e))
+}
+
+/// 打开笔记：连接的是 Obsidian 仓库时在 Obsidian 里打开，否则用系统默认程序（F13、F31）
+#[tauri::command]
+fn open_note(vault: String, rel_path: String, in_obsidian: bool) -> Result<(), String> {
     let path = PathBuf::from(&vault).join(rel_path.replace('/', "\\"));
-    let in_obsidian = path.ancestors().any(|a| a.join(".obsidian").is_dir());
+    if !path.is_file() {
+        return Err(format!("找不到这篇笔记：{}", path.display()));
+    }
     let target = if in_obsidian {
         format!(
             "obsidian://open?path={}",
@@ -402,7 +613,10 @@ fn open_note(vault: String, rel_path: String) -> Result<(), String> {
     } else {
         path.to_string_lossy().into_owned()
     };
-    std::process::Command::new("explorer")
+    // 不用 explorer：路径带空格时参数会被加上引号，explorer 认不出来就只打开一个文件夹窗口。
+    // url.dll 的 FileProtocolHandler 就是“用默认程序打开这个文件或链接”
+    std::process::Command::new("rundll32")
+        .arg("url.dll,FileProtocolHandler")
         .arg(target)
         .spawn()
         .map_err(|e| format!("无法打开笔记：{e}"))?;
@@ -435,6 +649,11 @@ fn main() {
             remove_attachment,
             list_vault_tags,
             open_note,
+            list_obsidian_vaults,
+            ensure_subfolder,
+            list_subfolders,
+            list_notes,
+            read_cover,
             draft_write,
             draft_list,
             draft_read,
@@ -644,5 +863,107 @@ mod tests {
             "附件-1.png"
         );
         assert_eq!(percent_decode("a%20b").unwrap(), "a b");
+    }
+
+    #[test]
+    fn 仓库清单只列出还在且有_obsidian_的文件夹() {
+        let v = TempVault::new("obsidian-list");
+        let good = v.0.join("我的笔记");
+        fs::create_dir_all(good.join(".obsidian")).unwrap();
+        let plain = v.0.join("普通");
+        fs::create_dir_all(&plain).unwrap();
+        let json = serde_json::json!({ "vaults": {
+            "a": { "path": good.to_string_lossy(), "ts": 1 },
+            "b": { "path": plain.to_string_lossy(), "ts": 2 },
+            "c": { "path": v.0.join("删掉了").to_string_lossy(), "ts": 3 }
+        }})
+        .to_string();
+        let list = parse_obsidian_vaults(&json);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].name, "我的笔记");
+        assert_eq!(list[0].path, good.to_string_lossy());
+        assert!(parse_obsidian_vaults("不是 json").is_empty());
+    }
+
+    #[test]
+    fn 收藏库列表只读领域文件夹里的笔记() {
+        let v = TempVault::new("list-notes");
+        write(
+            &v,
+            "设计UI",
+            "配色",
+            "---\ntitle: \"Dribbble 配色\"\ndomain: \"设计UI\"\ntags: [\"配色\", \"UI\"]\nkeywords: [\"仪表盘\"]\ncreated: 2026-10-18\ncover: \"附件/2026-10/a.png\"\n---\n\n正文第一段",
+        )
+        .unwrap();
+        write(&v, "为人处世", "没有属性", "只有正文").unwrap();
+        fs::create_dir_all(v.0.join("附件").join("2026-10")).unwrap();
+        fs::write(v.0.join("附件").join("2026-10").join("说明.md"), "不是笔记").unwrap();
+        fs::create_dir_all(v.0.join(".obsidian")).unwrap();
+        fs::write(v.0.join(".obsidian").join("x.md"), "隐藏").unwrap();
+        fs::write(v.0.join("最外层.md"), "不在领域文件夹里").unwrap();
+        fs::write(v.0.join("设计UI").join("坏的.md"), [0xff, 0xfe, 0x00]).unwrap();
+
+        let list = list_notes(v.path()).unwrap();
+        let mut notes = list.notes;
+        notes.sort_by(|a, b| a.path.cmp(&b.path));
+        assert_eq!(notes.len(), 2);
+        let n = &notes[0];
+        assert_eq!(n.path, "为人处世/没有属性.md");
+        assert_eq!(n.title, "没有属性"); // 没有 frontmatter 时用文件名
+        assert_eq!(n.domain, "为人处世");
+        assert_eq!(n.body, "只有正文");
+        let n = &notes[1];
+        assert_eq!(n.path, "设计UI/配色.md");
+        assert_eq!(n.title, "Dribbble 配色");
+        assert_eq!(n.tags, ["配色", "UI"]);
+        assert_eq!(n.keywords, ["仪表盘"]);
+        assert_eq!(n.created, "2026-10-18");
+        assert_eq!(n.cover, "附件/2026-10/a.png");
+        assert_eq!(n.body.trim(), "正文第一段");
+        assert_eq!(list.failed, ["设计UI/坏的.md"]);
+        assert!(list_notes(v.0.join("不存在").to_string_lossy().into_owned()).is_err());
+    }
+
+    #[test]
+    fn 封面只能读附件文件夹里的() {
+        let v = TempVault::new("read-cover");
+        fs::create_dir_all(v.0.join("附件").join("2026-10")).unwrap();
+        fs::write(v.0.join("附件").join("2026-10").join("a.png"), [1u8, 2, 3]).unwrap();
+        fs::write(v.0.join("秘密.txt"), "x").unwrap();
+        assert_eq!(
+            cover_bytes(&v.path(), "附件/2026-10/a.png").unwrap(),
+            [1u8, 2, 3]
+        );
+        assert!(cover_bytes(&v.path(), "秘密.txt").is_err());
+        assert!(cover_bytes(&v.path(), "附件/../秘密.txt").is_err());
+    }
+
+    #[test]
+    fn 列出仓库里的文件夹_跳过隐藏的() {
+        let v = TempVault::new("list-folders");
+        for d in [
+            ".obsidian/plugins",
+            ".trash",
+            "收藏/抖音",
+            "工作",
+            "a/b/c/d",
+        ] {
+            fs::create_dir_all(v.0.join(d)).unwrap();
+        }
+        fs::write(v.0.join("笔记.md"), "x").unwrap();
+        assert_eq!(
+            list_subfolders(v.path()),
+            ["a", "a/b", "a/b/c", "工作", "收藏", "收藏/抖音"]
+        );
+    }
+
+    #[test]
+    fn 子文件夹建在仓库里_不能跳出去() {
+        let v = TempVault::new("subfolder");
+        ensure_subfolder(v.path(), "收藏/抖音".into()).unwrap();
+        assert!(v.0.join("收藏").join("抖音").is_dir());
+        assert!(ensure_subfolder(v.path(), "../外面".into()).is_err());
+        assert!(ensure_subfolder(v.path(), "C:/Windows".into()).is_err());
+        assert!(!v.0.parent().unwrap().join("外面").exists());
     }
 }
