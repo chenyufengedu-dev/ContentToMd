@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { defaultConfig } from './config'
 import { AppError, type ErrorCode } from './errors'
-import { chatJson, transcribe, type Fetch } from './services'
+import { chatJson, TIMEOUT_MS, transcribe, type Fetch } from './services'
 
 const text = { ...defaultConfig().services.text, apiKey: 'sk-test' }
 const asr = { ...defaultConfig().services.asr, apiKey: 'sk-test' }
@@ -67,6 +67,46 @@ describe('服务返回的错误按错误码分类（方案第 8 节）', () => {
     const p = chatJson('text', text, 's', 'u', hang, ctrl.signal)
     ctrl.abort()
     expect(await codeOf(p)).toBe('cancelled')
+  })
+
+  it('请求通道不理会中止信号（软件里转写走的那条）时，点取消也立刻停下', async () => {
+    const ctrl = new AbortController()
+    const deaf: Fetch = () => new Promise(() => {}) // 永远不结束，也不理 signal
+    const p = transcribe(asr, new Blob(['x']), deaf, ctrl.signal)
+    ctrl.abort()
+    expect(await codeOf(p)).toBe('cancelled')
+  })
+
+  it('整理已经在一边生成一边返回时点取消，也立刻停下', async () => {
+    const ctrl = new AbortController()
+    // 先吐一段，然后一直不结束
+    const endless: Fetch = async () =>
+      new Response(
+        new ReadableStream({
+          start(c) {
+            c.enqueue(
+              new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta: { content: '{' } }] })}\n\n`),
+            )
+          },
+        }),
+        { headers: { 'Content-Type': 'text/event-stream' } },
+      )
+    let seen = false
+    const p = chatJson('text', text, 's', 'u', endless, ctrl.signal, () => {
+      seen = true
+      ctrl.abort()
+    })
+    expect(await codeOf(p)).toBe('cancelled')
+    expect(seen).toBe(true)
+  })
+
+  it('请求通道不理会中止信号时，到点也照样算超时', async () => {
+    vi.useFakeTimers()
+    const deaf: Fetch = () => new Promise(() => {})
+    const p = codeOf(transcribe(asr, new Blob(['x']), deaf))
+    await vi.advanceTimersByTimeAsync(TIMEOUT_MS.asr)
+    expect(await p).toBe('timeout')
+    vi.useRealTimers()
   })
 })
 

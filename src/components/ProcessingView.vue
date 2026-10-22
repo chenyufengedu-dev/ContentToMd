@@ -2,7 +2,7 @@
 // 处理中 / 失败（设计稿：设计稿/处理状态和设置页/定稿-处理中-*.webp）。
 // 左边一个缩略图大小的预览框：整理前是笔记骨架加一道很淡的光泽；整理时 AI 生成的文字一个字一个字打出来，
 // 骨架被文字挤下去。右边是文件信息和步骤：已完成绿色虚线小圆环，进行中灰色虚线小圆环在转，没开始的不转
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { FileText, FileVideo, Image as ImageIcon } from 'lucide-vue-next'
 import { type Job, STEP_LABELS } from '../core/pipeline'
 import type { ErrorCode } from '../core/errors'
@@ -16,7 +16,7 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ cancel: []; retry: []; back: []; goSettings: [] }>()
 
-// ---- 打字机：显示的字数追着 AI 已生成的字数走，落后越多走得越快，看起来一个字一个字出来 ----
+// ---- 打字机：显示的字数追着 AI 已生成的字数走，匀速约每秒 25 字，看得清、有“正在写”的感觉；落后超过 800 字才加快，免得和真实进度差太远 ----
 const shown = ref(0)
 const target = computed(() => props.job.preview ?? '')
 let timer: number | undefined
@@ -24,7 +24,7 @@ watch(
   target,
   (t) => {
     if (t.length < shown.value) shown.value = 0 // 重试时重新开始
-    if (timer === undefined && shown.value < t.length) timer = window.setInterval(tick, 30)
+    if (timer === undefined && shown.value < t.length) timer = window.setInterval(tick, 40)
   },
   { immediate: true },
 )
@@ -35,14 +35,20 @@ function tick() {
     timer = undefined
     return
   }
-  shown.value += Math.max(1, Math.ceil(left / 12))
+  shown.value += left > 800 ? Math.ceil(left / 80) : 1
 }
 onBeforeUnmount(() => clearInterval(timer))
-/** 框里只放得下几行，超出时只显示最后一段 */
-const typed = computed(() => {
-  const t = target.value.slice(0, shown.value)
-  return t.length > 160 ? '…' + t.slice(-160) : t
-})
+/** 从第一个字一直往下打；框满了旧的行往上移出去（见 .typing 的样式），开头不会被换掉 */
+const typed = computed(() => target.value.slice(0, shown.value))
+/** 字多到框放不下时，顶部才渐隐（字少时第一行不能被淡掉） */
+const typingEl = ref<HTMLElement>()
+const overflowing = ref(false)
+watch(typed, () =>
+  nextTick(() => {
+    const el = typingEl.value
+    overflowing.value = !!el && el.scrollHeight > el.clientHeight + 1
+  }),
+)
 
 /** 骨架：两三组“小标题 + 几行段落”，宽度是占框宽的比例 */
 const SKELETON = [
@@ -52,8 +58,14 @@ const SKELETON = [
   [28, 90, 64],
 ]
 
-const failedStep = computed(() => props.job.steps.find((s) => s.status === 'failed'))
+/** 失败时后面没开始的步骤不显示，免得像是还会继续 */
+const visibleSteps = computed(() => {
+  const at = props.job.steps.findIndex((s) => s.status === 'failed')
+  return props.failed && at >= 0 ? props.job.steps.slice(0, at + 1) : props.job.steps
+})
 const isAuthError = computed(() => props.error?.code === 'auth')
+/** 文件本身的问题（读不出声音、没有语音），重试多少次都一样，只给“返回修改” */
+const canRetry = computed(() => !['decode', 'no_speech'].includes(props.error?.code ?? ''))
 function elapsed(s: { startedAt?: number; endedAt?: number }) {
   if (!s.startedAt) return ''
   return `${Math.round(((s.endedAt ?? props.now) - s.startedAt) / 1000)} 秒`
@@ -65,14 +77,16 @@ function elapsed(s: { startedAt?: number; endedAt?: number }) {
     <!-- 左：预览框 -->
     <div class="frame">
       <div class="sheet">
-        <p v-if="typed" class="typed">{{ typed }}<span v-if="!failed" class="caret" /></p>
+        <div v-if="typed" ref="typingEl" class="typing" :class="{ overflowing }">
+          <p class="typed">{{ typed }}<span v-if="!failed" class="caret" /></p>
+        </div>
         <div class="skeleton" :class="{ shimmer: !failed }" aria-hidden="true">
           <div v-for="(g, i) in SKELETON" :key="i" class="sk-group">
             <span v-for="(w, j) in g" :key="j" :class="j === 0 ? 'sk-h' : 'sk-l'" :style="{ width: `${w}%` }" />
           </div>
         </div>
       </div>
-      <div v-if="!failed" class="generating">
+      <div v-if="!failed" class="generating" :class="{ bottom: typed }">
         <svg class="spinner" viewBox="0 0 16 16" aria-hidden="true">
           <circle cx="8" cy="8" r="6" class="track" />
           <circle cx="8" cy="8" r="6" class="arc" />
@@ -95,12 +109,12 @@ function elapsed(s: { startedAt?: number; endedAt?: number }) {
       </div>
 
       <ol class="steps">
-        <li v-for="s in job.steps" :key="s.id" class="step" :class="s.status">
+        <li v-for="s in visibleSteps" :key="s.id" class="step" :class="s.status">
           <svg class="ring" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6" /></svg>
           <span class="step-name">{{ STEP_LABELS[s.id] }}</span>
           <span class="step-time">{{
             s.status === 'running'
-              ? s.note || '进行中'
+              ? [s.note, elapsed(s)].filter(Boolean).join(' · ')
               : s.status === 'failed'
                 ? '失败'
                 : s.status === 'done'
@@ -111,23 +125,16 @@ function elapsed(s: { startedAt?: number; endedAt?: number }) {
       </ol>
 
       <template v-if="failed && error">
-        <!-- 失败：在原来提示语的位置写原因和接下来怎么做，不加底色 -->
+        <!-- 失败：在原来提示语的位置只写一行原因，不加底色；怎么办交给按钮 -->
         <p class="hint fail-reason">{{ error.message }}</p>
-        <p v-if="failedStep" class="hint">
-          {{
-            isAuthError
-              ? '到设置里改好密钥后回来点“重试”'
-              : `点“重试”会从“${STEP_LABELS[failedStep.id]}”这一步继续，前面的步骤不用重做`
-          }}
-        </p>
         <details v-if="error.detail" class="detail">
           <summary>详细信息</summary>
           <pre>{{ error.detail }}</pre>
         </details>
         <div class="buttons">
           <button v-if="isAuthError" class="primary" @click="emit('goSettings')">去设置</button>
-          <button v-else class="primary" @click="emit('retry')">重试</button>
-          <button class="soft" @click="emit('back')">返回修改</button>
+          <button v-else-if="canRetry" class="primary" @click="emit('retry')">重试</button>
+          <button :class="canRetry || isAuthError ? 'soft' : 'primary'" @click="emit('back')">返回修改</button>
         </div>
       </template>
       <template v-else>
@@ -172,6 +179,20 @@ function elapsed(s: { startedAt?: number; endedAt?: number }) {
   background: var(--card);
   overflow: hidden;
 }
+/* 打出来的字：框满后贴着底部，旧的行往上移出去，顶部渐隐 */
+.typing {
+  flex: 0 0 auto; /* 文字不让位，下面的骨架让位 */
+  max-height: calc(100% - 28px);
+  min-height: 0;
+  margin-bottom: 28px; /* 给框底的“正在生成”留位置，最新一行不被压住 */
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  overflow: hidden;
+}
+.typing.overflowing {
+  mask-image: linear-gradient(to bottom, transparent, #000 24px);
+}
 .typed {
   flex: none;
   margin: 0;
@@ -195,6 +216,8 @@ function elapsed(s: { startedAt?: number; endedAt?: number }) {
   }
 }
 .skeleton {
+  flex: 1 1 0;
+  min-height: 0;
   position: relative;
   display: flex;
   flex-direction: column;
@@ -236,7 +259,13 @@ function elapsed(s: { startedAt?: number; endedAt?: number }) {
     transform: translateX(100%);
   }
 }
-/* “正在生成”始终在框的正中 */
+/* “正在生成”：还没出字时在框的正中 */
+/* 出字以后“正在生成”挪到框底，把整个框让给文字 */
+.generating.bottom {
+  top: auto;
+  bottom: var(--sp-3);
+  transform: translateX(-50%);
+}
 .generating {
   position: absolute;
   left: 50%;
