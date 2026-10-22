@@ -10,7 +10,7 @@ import TunerPanel from './TunerPanel.vue'
 
 createApp({
   render: () => [
-    h(TitleBar, { page: 'home', homeDisabled: false }),
+    h(TitleBar, { page: 'home', onlySettings: false }),
     h(ConfirmPage, { config: defaultConfig(), job: SAMPLE_JOB, existingTags: SAMPLE_EXISTING_TAGS }),
     h(TunerPanel),
   ],

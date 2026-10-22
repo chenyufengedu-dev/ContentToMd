@@ -9,6 +9,7 @@ import type { Fetch } from '../core/services'
 import type { Job } from '../core/pipeline'
 import { DRAFT_JSON, toDraft, type DraftData } from '../core/draft'
 import { parseUsage, type UsageRecord } from '../core/cost'
+import { parseNoteList } from '../core/library'
 
 export const loadConfigJson = () => invoke<string | null>('load_config')
 export const saveConfig = (c: Config) => invoke<void>('save_config', { json: JSON.stringify(c, null, 2) })
@@ -41,7 +42,15 @@ export const httpFetch: Fetch = async (url, init) => {
 export const ensurePrompts = (defaults: Record<string, string>) =>
   invoke<Record<string, string>>('ensure_prompts', { defaults })
 export const listVaultTags = (vault: string) => invoke<string[]>('list_vault_tags', { vault })
-export const openNote = (vault: string, relPath: string) => invoke<void>('open_note', { vault, relPath })
+export const openNote = (vault: string, relPath: string, inObsidian: boolean) =>
+  invoke<void>('open_note', { vault, relPath, inObsidian })
+export const listObsidianVaults = () => invoke<{ name: string; path: string }[]>('list_obsidian_vaults')
+// 收藏库页（F21）
+export const listNotes = async (root: string) => parseNoteList(await invoke<unknown>('list_notes', { root }))
+export const readCover = async (root: string, relPath: string) =>
+  new Blob([await invoke<ArrayBuffer>('read_cover', { root, relPath })])
+export const listSubfolders = (vault: string) => invoke<string[]>('list_subfolders', { vault })
+export const ensureSubfolder = (vault: string, sub: string) => invoke<void>('ensure_subfolder', { vault, sub })
 export const writeNote = (vault: string, domain: string, title: string, date: string, content: string) =>
   invoke<string>('write_note', { vault, domain, title, date, content })
 /** 图片写进 收藏库/附件/年-月/；图片内容直接放在请求体里，参数放请求头（见 main.rs 的 write_attachment） */

@@ -13,13 +13,13 @@ import {
   Image as ImageIcon,
   Link2,
 } from 'lucide-vue-next'
-import type { Config } from '../core/config'
+import { type Config, addDomain, notesRoot, storeLabel } from '../core/config'
 import type { Job } from '../core/pipeline'
 import { buildMarkdown, safeFileTitle, today, type NoteDraft, type NoteImage } from '../core/note'
 import { cropForSave, type Rect } from '../core/image'
 import { saveFailure, type SaveFailure } from '../core/saveFailure'
 import { matchToSource } from '../core/sourceMatch'
-import { removeAttachment, writeAttachment, writeNote } from '../shell/tauri'
+import { removeAttachment, saveConfig, writeAttachment, writeNote } from '../shell/tauri'
 import { editorExtensions, fixCallouts } from '../editor/extensions'
 import { linkedBlockKey } from '../editor/linkedBlock'
 import NoteProps from '../components/NoteProps.vue'
@@ -38,7 +38,13 @@ export interface SavedNote {
   text: string
 }
 /** edited：确认页改到一半的内容，由投放页存进草稿 */
-const emit = defineEmits<{ saved: [SavedNote]; discard: []; goSettings: []; edited: [NoteDraft] }>()
+const emit = defineEmits<{
+  saved: [SavedNote]
+  discard: []
+  goSettings: []
+  edited: [NoteDraft]
+  configChanged: [Config]
+}>()
 
 const d = props.job.draft!
 /** 从草稿恢复时接着上次改到的地方（F10） */
@@ -233,6 +239,27 @@ const saving = ref(false)
 const saveError = ref<SaveFailure | null>(null)
 const failDialog = ref(false)
 const titleMissing = computed(() => !form.title.trim())
+// ---- 新增领域（US4）：存进设置，再选上它 ----
+const newDomain = reactive({ open: false, name: '', error: '' })
+const newDomainInput = ref<HTMLInputElement>()
+async function startNewDomain() {
+  Object.assign(newDomain, { open: true, name: '', error: '' })
+  await nextTick()
+  newDomainInput.value?.focus()
+}
+async function confirmNewDomain() {
+  const r = addDomain(props.config, newDomain.name)
+  if (typeof r === 'string') return (newDomain.error = r)
+  try {
+    await saveConfig(r.config)
+  } catch (e) {
+    return (newDomain.error = `没能存进设置：${String(e)}`)
+  }
+  emit('configChanged', r.config)
+  form.domainId = r.domain.id
+  newDomain.open = false
+}
+
 const domainName = computed(() => props.config.domains.find((x) => x.id === form.domainId)?.name ?? '其他')
 
 const EXT: Record<string, string> = {
@@ -253,7 +280,7 @@ async function writeImages(title: string): Promise<{ images: NoteImage[]; writte
       const blob = await cropForSave(p.file, p.crop ?? null)
       const ext = EXT[blob.type] ?? p.file.name.split('.').pop() ?? 'png'
       const name = `${created}-${base}-${i + 1}.${ext}`
-      const rel = await writeAttachment(props.config.vaultPath, created.slice(0, 7), name, blob)
+      const rel = await writeAttachment(notesRoot(props.config), created.slice(0, 7), name, blob)
       written.push(rel)
       images.push({ path: `../${rel}`, caption: d.image_captions[i] ?? '' })
     } catch {
@@ -292,7 +319,7 @@ async function save() {
     images,
   )
   try {
-    const rel = await writeNote(props.config.vaultPath, domainName.value, safeFileTitle(title), created, md)
+    const rel = await writeNote(notesRoot(props.config), domainName.value, safeFileTitle(title), created, md)
     emit('saved', {
       path: rel,
       failedImages: failed,
@@ -302,7 +329,7 @@ async function save() {
     })
   } catch (e) {
     // 保存失败时编辑中的内容保留（方案第 7 节）；刚写进去的图片删掉，不留没人引用的文件
-    for (const rel of written) await removeAttachment(props.config.vaultPath, rel).catch(() => {})
+    for (const rel of written) await removeAttachment(notesRoot(props.config), rel).catch(() => {})
     saveError.value = saveFailure(String(e))
     failDialog.value = true
   } finally {
@@ -432,6 +459,7 @@ onBeforeUnmount(() => {
           :domains="config.domains"
           :existing-tags="existingTags"
           :domain-fallback="job.domainFallback"
+          @new-domain="startNewDomain"
         />
 
         <div class="source">
@@ -488,6 +516,10 @@ onBeforeUnmount(() => {
             ·<button class="link" @click="emit('goSettings')">去设置</button>
           </template>
         </p>
+        <!-- 保存前就知道会存到哪：跟着领域变 -->
+        <p v-else-if="!confirmingDiscard" class="save-to" :title="`${storeLabel(config)} / ${domainName}`">
+          <Folder :size="14" aria-hidden="true" /><span>存到：{{ storeLabel(config) }} / {{ domainName }}</span>
+        </p>
         <template v-if="confirmingDiscard">
           <p class="discard-ask">确定放弃这一条吗？已整理的内容不会保存。</p>
           <div class="action-row">
@@ -518,6 +550,29 @@ onBeforeUnmount(() => {
         到<button class="link" @click="emit('goSettings')">设置</button>{{ saveError.next.replace(/^到设置/, '') }}
       </p>
       <p v-else>{{ saveError.next }}</p>
+    </NoticeDialog>
+
+    <NoticeDialog
+      v-if="newDomain.open"
+      title="新增领域"
+      cancel-text="取消"
+      ok-text="新增并选上"
+      @cancel="newDomain.open = false"
+      @ok="confirmNewDomain"
+    >
+      <p>会在收藏库里多一个同名文件夹，设置里也能改名。</p>
+      <label class="new-domain">
+        <input
+          ref="newDomainInput"
+          v-model="newDomain.name"
+          maxlength="20"
+          placeholder="比如：健身"
+          aria-label="新领域的名字"
+          @input="newDomain.error = ''"
+          @keydown.enter.prevent="confirmNewDomain"
+        />
+      </label>
+      <div v-if="newDomain.error" class="new-domain-error">{{ newDomain.error }}</div>
     </NoticeDialog>
 
     <CropDialog
@@ -1059,6 +1114,23 @@ onBeforeUnmount(() => {
   font-size: var(--fs-sm);
   color: var(--fg);
 }
+.save-to {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-1);
+  margin: 0 0 var(--sp-3);
+  font-size: var(--fs-sm);
+  color: var(--faint);
+}
+.save-to svg {
+  flex: none;
+}
+.save-to span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .save-fail {
   display: flex;
   align-items: center;
@@ -1109,5 +1181,39 @@ onBeforeUnmount(() => {
   fill: var(--card);
   stroke: var(--accent);
   stroke-width: 1.5;
+}
+.new-domain {
+  display: flex;
+  height: var(--h-md);
+  margin-top: var(--sp-3);
+  padding: 0 var(--px-sm);
+  border-radius: var(--radius-md);
+  background: var(--card-muted);
+  transition:
+    background var(--ease),
+    box-shadow var(--ease);
+}
+.new-domain:focus-within {
+  background: var(--card);
+  box-shadow:
+    0 0 0 1px var(--accent),
+    0 0 0 4px var(--accent-soft);
+}
+.new-domain input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: none;
+  font: inherit;
+  color: var(--fg);
+}
+.new-domain input::placeholder {
+  color: var(--faint);
+}
+.new-domain-error {
+  margin-top: var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--err);
 }
 </style>

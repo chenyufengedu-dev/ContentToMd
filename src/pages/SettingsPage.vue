@@ -11,13 +11,29 @@ import {
   maskKey,
   checkDomainName,
   nextDomainId,
+  checkSubfolder,
+  checkNewFolderName,
+  switchVaultKind,
+  storeLabel,
+  notesRoot,
 } from '../core/config'
 import { testService } from '../core/services'
 import { describeError } from '../core/errors'
-import { saveConfig, pickFolder, folderHasNotes, httpFetch, readUsage } from '../shell/tauri'
+import {
+  saveConfig,
+  pickFolder,
+  folderHasNotes,
+  httpFetch,
+  readUsage,
+  dirExists,
+  listObsidianVaults,
+  ensureSubfolder,
+  listSubfolders,
+} from '../shell/tauri'
 import { formatYuan, keyId, summarize, type Price, type UsageRecord } from '../core/cost'
 import SettingCard from '../components/SettingCard.vue'
-import { Check, ChevronRight, X } from 'lucide-vue-next'
+import SelectBox from '../components/SelectBox.vue'
+import { Check, ChevronRight, Circle, CircleCheck, X } from 'lucide-vue-next'
 
 const props = defineProps<{ config: Config; firstRun: boolean }>()
 const emit = defineEmits<{ saved: [Config] }>()
@@ -214,7 +230,142 @@ function animateSwitch(before: Snap, closingId: string | null): Promise<unknown>
   return closed
 }
 
-// ---- 收藏库 ----
+// ---- 收藏库（F31，设计稿 设计稿/设置页/状态-收藏库-Obsidian.webp、状态-收藏库-普通文件夹.webp） ----
+const VAULT_KINDS = [
+  { kind: 'obsidian', label: '连接 Obsidian 仓库' },
+  { kind: 'folder', label: '保存到普通文件夹' },
+] as const
+const obsidianVaults = ref<{ name: string; path: string }[]>([])
+onMounted(() =>
+  listObsidianVaults()
+    .then((v) => (obsidianVaults.value = v))
+    .catch(() => {}),
+)
+// 一层一层出现：先选仓库 → 选中后才显示连接结果 → 连上了才问存到哪个文件夹
+/** 当前路径是不是 Obsidian 仓库（里面有 .obsidian）；null 表示还在查 */
+const pathIsVault = ref<boolean | null>(null)
+/** 在“连接 Obsidian 仓库”下亲手选过文件夹：只有这时才说“不是仓库”，切过来时原来的普通文件夹不算 */
+const pickedHere = ref(false)
+watch(
+  () => draft.vaultPath,
+  async (p) => {
+    pathIsVault.value = null
+    const r = p ? await dirExists(`${p}\\.obsidian`).catch(() => false) : false
+    if (draft.vaultPath === p) pathIsVault.value = r // 查的过程中路径又变了，丢掉旧结果
+  },
+  { immediate: true },
+)
+const NOT_VAULT = '这个文件夹不是 Obsidian 仓库（里面没有 .obsidian 文件夹）'
+const vaultName = computed(() => draft.vaultPath.split(/[\\/]/).filter(Boolean).at(-1) ?? '')
+const connected = computed(() => draft.vault.kind === 'obsidian' && !!draft.vaultPath && pathIsVault.value === true)
+
+// 存到哪个文件夹：下拉框列出仓库里已有的文件夹；最后一项“新建文件夹…”让这一行原地变成输入框，点「新建」马上建好
+const NEW_FOLDER = ':new' // 文件夹名里不能有冒号，不会和真的文件夹撞
+const subfolders = ref<string[]>([])
+async function loadSubfolders() {
+  const p = draft.vaultPath
+  const list = connected.value ? await listSubfolders(p).catch(() => []) : []
+  if (draft.vaultPath === p) subfolders.value = list
+}
+watch(connected, loadSubfolders, { immediate: true })
+const subfolderOptions = computed(() => {
+  const cur = draft.vault.subfolder.trim()
+  const all = cur && !subfolders.value.includes(cur) ? [cur, ...subfolders.value] : subfolders.value
+  return [
+    { value: '', label: '仓库最外层（不另建文件夹）' },
+    ...all.map((f) => ({ value: f, label: f })),
+    { value: NEW_FOLDER, label: '新建文件夹…' },
+  ]
+})
+const subfolderChoice = computed({
+  get: () => draft.vault.subfolder.trim(),
+  set: (v: string) => {
+    if (v === NEW_FOLDER) return startNewFolder()
+    draft.vault.subfolder = v
+    createdFolder.value = ''
+  },
+})
+const subfolderError = computed(() => (connected.value ? checkSubfolder(draft.vault.subfolder) : null))
+/** 笔记最后存成什么样：仓库 / 存放文件夹 / 领域 / 标题.md（领域文件夹在存第一条笔记时自动建） */
+const notePathPreview = computed(() => `${storeLabel(draft)} / 领域 / 标题.md`)
+
+const newFolder = ref(false)
+const newFolderName = ref('')
+const newFolderInput = ref<HTMLInputElement>()
+const creatingFolder = ref(false)
+const createError = ref('')
+/** 刚建好的文件夹名：显示“✓ 已新建文件夹”，换了别的选择就不再显示 */
+const createdFolder = ref('')
+const newFolderProblem = computed(() =>
+  newFolderName.value.trim() ? checkNewFolderName(newFolderName.value, subfolders.value) : null,
+)
+async function startNewFolder() {
+  newFolder.value = true
+  newFolderName.value = ''
+  createError.value = ''
+  await nextTick()
+  newFolderInput.value?.focus()
+}
+async function createFolder() {
+  const err = checkNewFolderName(newFolderName.value, subfolders.value)
+  if (err) return (createError.value = err)
+  const name = newFolderName.value.trim()
+  creatingFolder.value = true
+  try {
+    await ensureSubfolder(draft.vaultPath, name)
+  } catch (e) {
+    return (createError.value = `没能新建文件夹：${String(e)}`)
+  } finally {
+    creatingFolder.value = false
+  }
+  await loadSubfolders()
+  draft.vault.subfolder = name
+  createdFolder.value = name
+  newFolder.value = false
+}
+
+// 选中方式下面的白色底块，换方式时滑过去（和标题栏的页面切换一样）；两个按钮宽度不同，按实际位置和宽度放
+const kindEls = ref<HTMLElement[]>([])
+const kindThumb = ref<Record<string, string>>({})
+function placeKindThumb() {
+  const el = kindEls.value[VAULT_KINDS.findIndex((v) => v.kind === draft.vault.kind)]
+  if (el) kindThumb.value = { width: `${el.offsetWidth}px`, transform: `translateX(${el.offsetLeft}px)` }
+}
+onMounted(placeKindThumb)
+watch(() => draft.vault.kind, placeKindThumb, { flush: 'post' })
+
+/** 连上之后仓库列表收起来，点“更换”才展开 */
+const changingVault = ref(false)
+const showVaultList = computed(() => !connected.value || changingVault.value)
+const VAULT_DESC = '笔记和图片保存在哪里。两种方式的笔记格式一样，随时可以切换。'
+/** 卡片收起时，说明换成当前存放位置，不点开也知道存在哪；还没选好时显示说明 */
+const vaultStatus = computed(() => {
+  if (!draft.vaultPath) return undefined
+  if (draft.vault.kind === 'folder') return { label: '存放在普通文件夹', value: draft.vaultPath }
+  return connected.value ? { label: '存放在 Obsidian 仓库', value: storeLabel(draft) } : undefined
+})
+
+function setVaultKind(kind: Config['vault']['kind']) {
+  Object.assign(draft, switchVaultKind(draft, kind))
+  pickedHere.value = false
+  newFolder.value = false
+  createdFolder.value = ''
+}
+function chooseObsidianVault(path: string) {
+  pickedHere.value = true
+  changingVault.value = false
+  if (draft.vaultPath !== path) {
+    draft.vaultPath = path
+    draft.vault.subfolder = ''
+    newFolder.value = false
+    createdFolder.value = ''
+  }
+}
+async function pickObsidianFolder() {
+  const p = await pickFolder(draft.vaultPath)
+  if (p) chooseObsidianVault(p)
+}
+
 async function chooseVault() {
   const p = await pickFolder(draft.vaultPath)
   if (p) draft.vaultPath = p
@@ -297,7 +448,7 @@ async function removeDomain(id: number) {
   const d = draft.domains.find((x) => x.id === id)
   if (!d) return
   // 领域下还有笔记时不允许删除（方案第 10.2 节）
-  if (draft.vaultPath && (await folderHasNotes(`${draft.vaultPath}\\${d.name}`))) {
+  if (draft.vaultPath && (await folderHasNotes(`${notesRoot(draft)}\\${d.name}`))) {
     domainError.value = `“${d.name}”里还有笔记，请先把这些笔记移走再删除`
     return
   }
@@ -330,9 +481,15 @@ function revert() {
 async function save() {
   KINDS.forEach(applyKey)
   const priceChanged = KINDS.filter(priceDirty)
-  saving.value = true
   saveError.value = null
+  if (draft.vault.kind === 'obsidian') {
+    if (!connected.value) return (saveError.value = '请先选一个 Obsidian 仓库')
+    if (subfolderError.value) return (saveError.value = subfolderError.value)
+  }
+  saving.value = true
   try {
+    if (draft.vault.kind === 'obsidian' && draft.vaultPath && draft.vault.subfolder.trim())
+      await ensureSubfolder(draft.vaultPath, draft.vault.subfolder.trim())
     await saveConfig(draft)
     saved.value = JSON.stringify(draft)
     emit('saved', JSON.parse(JSON.stringify(draft)))
@@ -358,15 +515,105 @@ async function save() {
 
     <SettingCard
       id="vault"
-      title="收藏库文件夹"
-      desc="笔记和图片都保存在这里，可以放在 Obsidian 的 vault 里。"
+      title="收藏库"
+      :desc="VAULT_DESC"
+      :status="vaultStatus"
       :open="open === 'vault'"
       :closing="closing === 'vault'"
       @activate="activate('vault')"
     >
-      <div class="row">
+      <div class="vault-kinds" role="radiogroup" aria-label="收藏库方式">
+        <span class="vault-thumb" :style="kindThumb" aria-hidden="true" />
+        <button
+          v-for="v in VAULT_KINDS"
+          ref="kindEls"
+          :key="v.kind"
+          class="vault-kind"
+          :class="{ on: draft.vault.kind === v.kind }"
+          role="radio"
+          :aria-checked="draft.vault.kind === v.kind"
+          @click="setVaultKind(v.kind)"
+        >
+          {{ v.label }}
+        </button>
+      </div>
+      <div v-if="draft.vault.kind === 'folder'" class="row">
         <span class="path" :class="{ missing: !draft.vaultPath }">{{ draft.vaultPath || '未配置' }}</span>
         <button class="soft" @click="chooseVault">选择文件夹</button>
+      </div>
+      <div v-else class="obsidian">
+        <div v-if="showVaultList" class="field">
+          <span v-if="obsidianVaults.length"
+            >在电脑上找到 {{ obsidianVaults.length }} 个 Obsidian 仓库，点一个连接</span
+          >
+          <span v-else>没有在电脑上找到 Obsidian 仓库，请选择仓库所在的文件夹</span>
+          <ul v-if="obsidianVaults.length" class="vault-list" role="radiogroup" aria-label="Obsidian 仓库">
+            <li v-for="v in obsidianVaults" :key="v.path">
+              <button
+                class="vault-item"
+                role="radio"
+                :aria-checked="draft.vaultPath === v.path"
+                @click="chooseObsidianVault(v.path)"
+              >
+                <component
+                  :is="draft.vaultPath === v.path ? CircleCheck : Circle"
+                  :size="16"
+                  class="vault-radio"
+                  aria-hidden="true"
+                />
+                <span class="vault-name">{{ v.name }}</span>
+                <span class="vault-path">{{ v.path }}</span>
+              </button>
+            </li>
+          </ul>
+        </div>
+        <div v-if="showVaultList">
+          <button class="vault-other" @click="pickObsidianFolder">
+            {{ obsidianVaults.length ? '选择其他文件夹' : '选择文件夹' }}
+          </button>
+        </div>
+        <p v-if="connected" class="ok vault-state">
+          <Check :size="16" aria-hidden="true" />已连接 Obsidian 仓库：{{ vaultName }}
+          <button class="vault-other" @click="changingVault = !changingVault">
+            {{ changingVault ? '收起' : '更换' }}
+          </button>
+        </p>
+        <p v-else-if="pickedHere && pathIsVault === false" class="err vault-state">{{ NOT_VAULT }}</p>
+        <div v-if="connected" class="field">
+          <span>存放文件夹</span>
+          <div v-if="newFolder" class="new-folder">
+            <input
+              ref="newFolderInput"
+              v-model="newFolderName"
+              placeholder="新文件夹的名字，比如 收藏"
+              aria-label="新文件夹的名字"
+              spellcheck="false"
+              @input="createError = ''"
+              @keydown.enter.prevent="createFolder"
+              @keydown.esc.prevent="newFolder = false"
+            />
+            <button class="soft" @click="newFolder = false">取消</button>
+            <button
+              class="primary"
+              :disabled="!newFolderName.trim() || !!newFolderProblem || creatingFolder"
+              @click="createFolder"
+            >
+              {{ creatingFolder ? '新建中…' : '新建' }}
+            </button>
+          </div>
+          <SelectBox v-else v-model="subfolderChoice" :options="subfolderOptions" aria-label="存放文件夹" size="md" />
+          <span v-if="newFolder && (createError || newFolderProblem)" class="err">{{
+            createError || newFolderProblem
+          }}</span>
+          <span v-else-if="newFolder" class="vault-hint">会在仓库最外层建一个这个名字的文件夹</span>
+          <span v-else-if="subfolderError" class="err">{{ subfolderError }}</span>
+          <template v-else>
+            <span v-if="createdFolder" class="ok vault-state">
+              <Check :size="16" aria-hidden="true" />已新建文件夹「{{ createdFolder }}」
+            </span>
+            <span class="vault-hint">笔记会存成：{{ notePathPreview }}</span>
+          </template>
+        </div>
       </div>
     </SettingCard>
 
@@ -707,6 +954,138 @@ input:focus {
   background: var(--warn-bg);
   border-radius: var(--radius-pill);
   font-size: var(--fs-xs);
+}
+
+/* ---- 收藏库：一组两选一的胶囊，下面按方式显示 ---- */
+/* 尺寸和标题栏的页面切换一样（TitleBar 的 .switch） */
+.vault-kinds {
+  position: relative;
+  display: inline-flex;
+  gap: 2px;
+  margin-bottom: var(--sp-3);
+  padding: 3px;
+  background: var(--card-muted);
+  border-radius: var(--radius-pill);
+}
+.vault-thumb {
+  position: absolute;
+  top: 3px;
+  left: 0;
+  height: var(--h-xs);
+  border-radius: var(--radius-pill);
+  background: var(--card);
+  box-shadow: var(--shadow-card);
+  transition:
+    transform 260ms cubic-bezier(0.2, 0, 0, 1),
+    width 260ms cubic-bezier(0.2, 0, 0, 1);
+}
+.vault-kind {
+  position: relative; /* 文字在白色底块上面 */
+  height: var(--h-xs);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: none;
+  color: var(--muted);
+  transition: color 260ms cubic-bezier(0.2, 0, 0, 1);
+}
+.vault-kind:hover:not(:disabled) {
+  background: none;
+  color: var(--fg);
+}
+/* 选中不加粗：字宽一变，底块就对不齐了 */
+.vault-kind.on,
+.vault-kind.on:hover:not(:disabled) {
+  color: var(--accent);
+}
+.obsidian {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.vault-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  background: var(--card-muted);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.vault-list li + li {
+  border-top: 1px solid var(--line);
+}
+/* 每一行都是能点的选项：前面一个圆圈，悬停变色，选中是靛蓝的对勾圆 */
+.vault-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  height: var(--h-md);
+  padding: 0 var(--px-sm);
+  border: 0;
+  border-radius: 0;
+  background: none;
+  font-size: var(--fs-md);
+  color: var(--fg-strong);
+  text-align: left;
+  cursor: pointer;
+}
+.vault-item:hover:not(:disabled) {
+  background: var(--hover);
+}
+.vault-radio {
+  flex: none;
+  color: var(--faint);
+}
+.vault-item[aria-checked='true'] .vault-radio {
+  color: var(--accent);
+}
+.vault-name {
+  font-weight: var(--fw-label);
+}
+.vault-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-sm);
+  color: var(--faint);
+}
+/* “选择其他文件夹”：灰色小字加下划线，不抢视线 */
+.vault-other {
+  height: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.vault-other:hover:not(:disabled) {
+  background: none;
+  color: var(--fg);
+}
+/* 新建文件夹：下拉框那一行原地换成输入框 + 取消 / 新建 */
+.new-folder {
+  display: flex;
+  gap: var(--sp-2);
+}
+.new-folder input {
+  flex: 1;
+}
+.new-folder button {
+  flex: none;
+}
+.vault-hint {
+  font-size: var(--fs-xs);
+  color: var(--faint);
+}
+.vault-state {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0;
 }
 
 /* ---- 模型服务：每家一组，三个输入框一行 ---- */

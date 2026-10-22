@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { autoCrop, checkImages, regionToRect, trimUniformEdges, MAX_IMAGES, MAX_IMAGE_BYTES } from './image'
+import { autoCrop, checkImages, regionToRect, scaledSize, trimUniformEdges, MAX_IMAGES, MAX_IMAGE_BYTES } from './image'
 
 /** 造一张 RGBA 图：整张填 bg，再在 rect 里填 fg */
 function img(w: number, h: number, bg: number[], fg?: { x: number; y: number; w: number; h: number; c: number[] }) {
@@ -86,5 +86,13 @@ describe('checkImages', () => {
     const r = checkImages(0, [f('a.txt', 10, 'text/plain')])
     expect(r.accepted).toEqual([])
     expect(r.rejected[0].reason).toBe('不是图片')
+  })
+})
+
+describe('scaledSize', () => {
+  it('按宽度等比缩小，原图本来就小时不放大', () => {
+    expect(scaledSize(1568, 980, 400)).toEqual({ w: 400, h: 250 })
+    expect(scaledSize(300, 200, 400)).toEqual({ w: 300, h: 200 })
+    expect(scaledSize(4000, 3, 24)).toEqual({ w: 24, h: 1 }) // 再扁也至少 1 像素高
   })
 })

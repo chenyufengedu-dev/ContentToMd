@@ -27,8 +27,12 @@ async function imageJob(): Promise<Job> {
 const job = query.has('image') ? await imageJob() : SAMPLE_JOB
 createApp({
   render: () => [
-    h(TitleBar, { page: 'home', homeDisabled: false }),
-    h(ConfirmPage, { config: defaultConfig(), job: reactive(job), existingTags: SAMPLE_EXISTING_TAGS }),
+    h(TitleBar, { page: 'home', onlySettings: false }),
+    h(ConfirmPage, {
+      config: { ...defaultConfig(), vaultPath: 'D:/测试收藏库' },
+      job: reactive(job),
+      existingTags: SAMPLE_EXISTING_TAGS,
+    }),
   ],
 }).mount('#app')
 

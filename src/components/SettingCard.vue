@@ -7,8 +7,17 @@
 // 动画开始时标签的左上圆角正好和卡片的左上圆角重合；标签往上升时带着圆角一起升，下面露出直的左边，
 // 所以任何一帧最外面的轮廓左上角都是圆的，卡片自己的圆角从不切换（见 SettingsPage 的 animateSwitch）
 import { computed, onMounted, ref } from 'vue'
+import { tabPath } from './tabShape'
 
-defineProps<{ id: string; title: string; desc?: string; open: boolean; closing?: boolean }>()
+defineProps<{
+  id: string
+  title: string
+  desc?: string
+  /** 收起时代替说明显示的当前状态（比如收藏库存在哪）：上面一行小字说明，下面一行深色的值 */
+  status?: { label: string; value: string }
+  open: boolean
+  closing?: boolean
+}>()
 const emit = defineEmits<{ activate: [] }>()
 
 /** 点完卡片里的东西再展开（先让按钮、输入框收到这次点击）；用键盘 Tab 进来时也展开 */
@@ -27,26 +36,9 @@ const textW = ref(64)
 onMounted(() => {
   if (textEl.value) textW.value = Math.ceil(textEl.value.getBoundingClientRect().width)
 })
-const tab = computed(() => {
-  const W = textW.value + PAD * 2 // 斜边从这里开始往右下
-  const H = TAB_H
-  const len = Math.hypot(SLANT, H)
-  const ux = SLANT / len // 斜边方向
-  const uy = H / len
-  const n = (v: number) => v.toFixed(2)
-  const d = [
-    `M 0 ${H + R}`, // 左边一直伸到卡片顶边以下一个圆角的高度，盖住卡片的左上圆角
-    `L 0 ${R}`,
-    `A ${R} ${R} 0 0 1 ${R} 0`, // 左上角用正圆弧（二次曲线画出来的角看着比右边小）
-    `L ${W - R} 0`,
-    `Q ${W} 0 ${n(W + ux * R)} ${n(uy * R)}`, // 右上角圆过去，接上斜边
-    `L ${n(W + SLANT - ux * FOOT)} ${n(H - uy * FOOT)}`,
-    `Q ${W + SLANT} ${H} ${W + SLANT + FOOT} ${H}`, // 斜边底部向外翻，平滑接进卡片顶边
-    `L ${W + SLANT + FOOT} ${H + R}`, // 卡片顶边以下这一截和卡片同色，看不出来
-    'Z',
-  ].join(' ')
-  return { d, width: W + SLANT + FOOT, height: H + R }
-})
+const tab = computed(() =>
+  tabPath({ width: textW.value + PAD * 2, height: TAB_H, radius: R, slant: SLANT, foot: FOOT }),
+)
 </script>
 
 <template>
@@ -68,7 +60,11 @@ const tab = computed(() => {
       <h2>
         <span ref="textEl" class="title-text" data-part="title">{{ title }}</span>
       </h2>
-      <p v-if="desc" class="desc" data-part="desc">{{ desc }}</p>
+      <p v-if="status && !open" class="status" data-part="desc">
+        <span class="status-label">{{ status.label }}</span>
+        <span class="status-value">{{ status.value }}</span>
+      </p>
+      <p v-else-if="desc" class="desc" data-part="desc">{{ desc }}</p>
     </header>
     <div class="body" data-part="body">
       <slot />
@@ -108,6 +104,23 @@ h2 {
   font-size: var(--fs-sm);
   line-height: 1.7;
   color: var(--muted);
+}
+
+.status {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: var(--sp-3) 0 0;
+}
+.status-label {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+.status-value {
+  font-size: var(--fs-md);
+  font-weight: var(--fw-label);
+  color: var(--accent);
+  overflow-wrap: anywhere;
 }
 
 /* ---- 标签 ---- */
