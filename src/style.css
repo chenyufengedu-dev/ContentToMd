@@ -40,6 +40,7 @@
   --ok: #1a7f4b;
   --err: #d14343;
   --warn: #b25e09;
+  --attention: #f59e0b; /* 提醒用的亮橙色小点（比如价格改了还没保存） */
   --warn-bg: #fff5e8;
   --shadow-pop: 0 8px 28px rgb(16 24 40 / 12%), 0 1px 3px rgb(16 24 40 / 6%); /* 下拉菜单、编辑栏、提示气泡 */
 
@@ -117,6 +118,7 @@
     --ok: #4cc27f;
     --err: #ff7272;
     --warn: #f0a04b;
+    --attention: #fbbf24;
     --warn-bg: #33281a;
   }
 }

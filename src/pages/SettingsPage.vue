@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import {
   type Config,
   type ServiceKind,
@@ -15,10 +15,9 @@ import {
 import { testService } from '../core/services'
 import { describeError } from '../core/errors'
 import { saveConfig, pickFolder, folderHasNotes, httpFetch, readUsage } from '../shell/tauri'
-import { formatYuan, keyId, summarize, type UsageRecord } from '../core/cost'
+import { formatYuan, keyId, summarize, type Price, type UsageRecord } from '../core/cost'
 import SettingCard from '../components/SettingCard.vue'
-import { ChevronRight, X } from 'lucide-vue-next'
-import type { Price } from '../core/cost'
+import { Check, ChevronRight, X } from 'lucide-vue-next'
 
 const props = defineProps<{ config: Config; firstRun: boolean }>()
 const emit = defineEmits<{ saved: [Config] }>()
@@ -58,10 +57,37 @@ const PRICE_FIELDS: { key: keyof Price; label: string }[] = [
 const priceOpen = reactive(
   Object.fromEntries(KINDS.map((k) => [k, !!props.config.services[k].price])) as Record<ServiceKind, boolean>,
 )
-/** 空着或不是数字就当没填；三项都空时整个价格去掉 */
+/** 价格 → 三个输入框里的文字 */
+const priceTexts = (p?: Price) => Object.fromEntries(PRICE_FIELDS.map((f) => [f.key, String(p?.[f.key] ?? '')]))
+/** 输入框里的原样文字：打到一半的“0.”不能被换成 0 或清空，所以不直接显示解析后的数字 */
+const priceText = reactive(
+  Object.fromEntries(KINDS.map((k) => [k, priceTexts(props.config.services[k].price)])) as Record<
+    ServiceKind,
+    Record<keyof Price, string>
+  >,
+)
+/** 输入框文字 → 单价：空着是没填（undefined），不是非负数是填错了（NaN） */
+const parsePrice = (raw: string) => (raw.trim() ? (Number(raw) >= 0 ? Number(raw) : NaN) : undefined)
+const savedPrice = (k: ServiceKind) => (JSON.parse(saved.value) as Config).services[k].price
+/** 填的不是数字的那一项（“完成”因此不能点） */
+const badPrice = (k: ServiceKind) => PRICE_FIELDS.find((f) => Number.isNaN(parsePrice(priceText[k][f.key])))
+/** 价格改了还没保存：收起后“价格（选填）”旁边有个橙色小点 */
+const priceDirty = (k: ServiceKind) =>
+  JSON.stringify(savedPrice(k) ?? null) !== JSON.stringify(draft.services[k].price ?? null)
+/** 保存设置后，价格改过的服务在“价格（选填）”旁边闪几秒“✓ 已保存” */
+const priceJustSaved = reactive<Partial<Record<ServiceKind, boolean>>>({})
+/** 取消：恢复成上次保存的价格，然后收起 */
+function cancelPrice(k: ServiceKind) {
+  const p = savedPrice(k)
+  draft.services[k].price = p ? { ...p } : undefined
+  Object.assign(priceText[k], priceTexts(p))
+  priceOpen[k] = false
+}
+/** 空着或填错的项当没填；三项都没填时整个价格去掉 */
 function setPrice(k: ServiceKind, f: keyof Price, raw: string) {
-  const v = raw.trim() === '' ? NaN : Number(raw)
-  const price: Price = { ...draft.services[k].price, [f]: Number.isFinite(v) && v >= 0 ? v : undefined }
+  priceText[k][f] = raw
+  const v = parsePrice(raw)
+  const price: Price = { ...draft.services[k].price, [f]: Number.isNaN(v) ? undefined : v }
   draft.services[k].price = Object.values(price).some((x) => x !== undefined) ? price : undefined
 }
 
@@ -117,6 +143,20 @@ function animateSwitch(before: Snap, closingId: string | null): Promise<unknown>
   let closed: Promise<unknown> = Promise.resolve()
   const run = (el: Element, frames: Keyframe[], opts: KeyframeAnimationOptions) =>
     el.animate(frames, { easing: EASE, fill: 'backwards', ...opts })
+  // 展开时内容错开入场：第 i 块在 60 + 100×i 毫秒开始，每块 280ms：从下方 8px 淡入上来；
+  // 带一点轻模糊，前 40% 的时间里就变清晰，后面都是清楚的（作者觉得模糊久了看着不清楚，不要回弹）
+  const enter = (el: Element, i: number) =>
+    run(
+      el,
+      [
+        { opacity: 0, filter: 'blur(3px)', transform: 'translateY(8px)' },
+        { filter: 'blur(0)', offset: 0.4 },
+        { opacity: 1, filter: 'blur(0)', transform: 'none' },
+      ],
+      { duration: 280, delay: 60 + 100 * i },
+    )
+  // 收回时内容不错开，快速淡入到右栏的位置
+  const fadeIn = (el: Element) => run(el, [{ opacity: 0 }, { opacity: 1 }], { duration: 150, delay: 40 })
   // 先把所有新位置量完再开始动画（动画一开始，量到的位置就带上了位移）
   const after: Snap = snapshot()
   const moved = new Map<Element, number>()
@@ -161,27 +201,14 @@ function animateSwitch(before: Snap, closingId: string | null): Promise<unknown>
       // 标题：屏幕上几乎不动（只有和标签里位置的细微差别，跟着卡片同一条曲线走完）
       run(el, [{ transform: `translate(${tx}px, ${ty}px)` }, { transform: 'none' }], { duration: dur })
     } else if (part === 'desc') {
-      run(
-        el,
-        [
-          { opacity: 0, transform: 'translateY(4px)' },
-          { opacity: 1, transform: 'none' },
-        ],
-        {
-          duration: 240,
-          delay: opening ? 200 : 80,
-        },
-      )
+      // 说明是错开入场的第 1 块
+      if (opening) enter(el, 0)
+      else fadeIn(el)
     } else {
-      // 设置内容：从原来的屏幕位置滑过去，展开时稍晚开始
-      run(
-        el,
-        [
-          { transform: `translate(${tx}px, ${ty}px)`, opacity: 0.3 },
-          { transform: 'none', opacity: 1 },
-        ],
-        { duration: opening ? OPEN + 80 : CLOSE, delay: opening ? 120 : 0 },
-      )
+      // 设置内容：一组一组错开入场（容器在变形，内容不长距离搬家，就地出现）
+      const blocks = [...el.children]
+      if (opening) blocks.forEach((child, i) => enter(child, i + (card.querySelector('[data-part=desc]') ? 1 : 0)))
+      else fadeIn(el)
     }
   }
   return closed
@@ -281,14 +308,41 @@ async function removeDomain(id: number) {
 // ---- 保存 ----
 const saveError = ref<string | null>(null)
 const saving = ref(false)
+/** 保存成功后左边显示 3 秒“✓ 已保存” */
+const justSaved = ref(false)
+let justSavedTimer: number | undefined
+
+/** 有没保存的改动（含刚粘贴、还没写进配置的新密钥） */
+const pending = computed(() => dirty.value || KINDS.some((k) => newKey[k].trim()))
+/** 保存条：有改动、第一次使用、刚保存完（显示“已保存”）时浮在底部，其余时间不出现 */
+const barShown = computed(() => pending.value || props.firstRun || justSaved.value)
+onBeforeUnmount(() => window.clearTimeout(justSavedTimer))
+
+/** 撤销：恢复成上次保存的样子 */
+function revert() {
+  Object.assign(draft, JSON.parse(saved.value) as Config)
+  for (const k of KINDS) {
+    newKey[k] = ''
+    cancelPrice(k)
+  }
+  saveError.value = null
+}
 async function save() {
   KINDS.forEach(applyKey)
+  const priceChanged = KINDS.filter(priceDirty)
   saving.value = true
   saveError.value = null
   try {
     await saveConfig(draft)
     saved.value = JSON.stringify(draft)
     emit('saved', JSON.parse(JSON.stringify(draft)))
+    for (const k of priceChanged) priceJustSaved[k] = true
+    justSaved.value = true
+    window.clearTimeout(justSavedTimer)
+    justSavedTimer = window.setTimeout(() => {
+      justSaved.value = false
+      for (const k of KINDS) priceJustSaved[k] = false
+    }, 1200)
   } catch (e) {
     saveError.value = String(e)
   } finally {
@@ -359,7 +413,11 @@ async function save() {
           </button>
           <button class="price-toggle" :aria-expanded="priceOpen[k]" @click="priceOpen[k] = !priceOpen[k]">
             价格（选填）<ChevronRight :size="14" class="chev" :class="{ down: priceOpen[k] }" aria-hidden="true" />
+            <span v-if="!priceOpen[k] && priceDirty(k)" class="dot" title="价格改了还没保存" />
           </button>
+          <Transition name="fade">
+            <span v-if="priceJustSaved[k]" class="price-saved"><Check :size="14" aria-hidden="true" />已保存</span>
+          </Transition>
           <span v-if="test[k].status === 'ok'" class="ok">✓ {{ test[k].message }}</span>
           <span v-if="test[k].status === 'fail'" class="err">{{ test[k].message }}</span>
           <span v-if="spendText(k)" class="spend">{{ spendText(k) }}</span>
@@ -369,7 +427,7 @@ async function save() {
             <span class="price-label">{{ f.label }}</span>
             <span class="price-input">
               <input
-                :value="draft.services[k].price?.[f.key] ?? ''"
+                :value="priceText[k][f.key]"
                 inputmode="decimal"
                 placeholder="未填"
                 @input="setPrice(k, f.key, ($event.target as HTMLInputElement).value)"
@@ -380,6 +438,11 @@ async function save() {
           <p class="price-note">
             填了才会计算花费，按服务返回的用量估算，以服务商账单为准。价格可在服务商官网的价格页查到。
           </p>
+          <div class="price-actions">
+            <span v-if="badPrice(k)" class="price-status">「{{ badPrice(k)!.label }}」要填数字，比如 0.02</span>
+            <button class="soft small" @click="cancelPrice(k)">取消</button>
+            <button class="primary small" :disabled="!!badPrice(k)" @click="priceOpen[k] = false">完成</button>
+          </div>
         </div>
         <details v-if="test[k].status === 'fail' && test[k].detail" class="detail">
           <summary>详细信息</summary>
@@ -440,13 +503,18 @@ async function save() {
       </ul>
     </SettingCard>
 
-    <footer>
-      <span v-if="saveError" class="err">保存失败：{{ saveError }}</span>
-      <span v-else-if="!dirty && !firstRun" class="muted">设置已保存</span>
-      <button class="primary" :disabled="saving || (!dirty && !KINDS.some((k) => newKey[k]))" @click="save">
-        {{ saving ? '保存中…' : '保存设置' }}
-      </button>
-    </footer>
+    <!-- 保存条（Discord、Shopify 后台的做法）：有改动时从底部浮起，保存后显示“已保存”再落下；平时不出现 -->
+    <Transition name="bar">
+      <div v-if="barShown" class="save-bar" role="status">
+        <span v-if="saveError" class="err">保存失败：{{ saveError }}</span>
+        <span v-else-if="justSaved && !pending" class="saved-ok"><Check :size="16" aria-hidden="true" />已保存</span>
+        <span v-else class="bar-text">{{ firstRun && !pending ? '填好后点“保存设置”' : '有改动还没保存' }}</span>
+        <button v-if="pending && !firstRun" class="soft" :disabled="saving" @click="revert">撤销</button>
+        <button class="primary" :disabled="saving || (!pending && !firstRun)" @click="save">
+          {{ saving ? '保存中…' : '保存设置' }}
+        </button>
+      </div>
+    </Transition>
   </div>
 </template>
 
@@ -455,7 +523,7 @@ async function save() {
 .settings {
   max-width: 880px;
   margin: 0 auto;
-  padding: var(--sp-5) var(--sp-5) calc(var(--h-md) + var(--sp-7) * 2);
+  padding: var(--sp-5) var(--sp-5) calc(var(--h-md) + var(--sp-7) * 2); /* 留出保存条的位置 */
   display: flex;
   flex-direction: column;
   gap: var(--sp-4);
@@ -479,10 +547,6 @@ h3 {
   background: var(--warn-bg);
   color: var(--warn);
   border-radius: var(--radius-md);
-}
-.muted {
-  color: var(--muted);
-  font-size: var(--fs-sm);
 }
 .row {
   display: flex;
@@ -551,6 +615,35 @@ h3 {
   font-size: var(--fs-xs);
   color: var(--faint);
 }
+.price-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+}
+.price-status {
+  margin-right: auto;
+  font-size: var(--fs-xs);
+  color: var(--warn);
+}
+.price-actions button {
+  min-width: 64px;
+}
+.dot {
+  width: 6px;
+  height: 6px;
+  margin-left: var(--sp-1);
+  border-radius: 50%;
+  background: var(--attention);
+}
+.price-saved {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: var(--fs-sm);
+  color: var(--ok);
+}
 .spend {
   margin-left: auto;
   font-size: var(--fs-xs);
@@ -563,7 +656,8 @@ h3 {
 .soft:hover:not(:disabled) {
   background: var(--line);
 }
-.soft.small {
+.soft.small,
+.primary.small {
   height: var(--h-xs);
   padding: 0 var(--px-sm);
   font-size: var(--fs-sm);
@@ -712,22 +806,63 @@ input:focus {
   color: var(--muted);
 }
 
-footer {
+.save-bar {
   position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  left: 50%;
+  bottom: var(--sp-4);
   z-index: 10;
+  width: min(480px, calc(100vw - var(--sp-5) * 2));
+  box-sizing: border-box;
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  gap: var(--sp-4);
-  padding: var(--sp-3) var(--sp-5);
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-5);
+  border-radius: var(--panel-radius);
   background: var(--card);
-  border-top: 1px solid var(--line);
+  box-shadow: var(--shadow-pop);
+  transform: translateX(-50%);
 }
-footer .primary {
-  margin-left: auto;
-  min-width: 140px;
+.save-bar .bar-text,
+.save-bar .saved-ok,
+.save-bar .err {
+  margin-right: auto;
+  font-size: var(--fs-md);
+}
+.bar-text {
+  color: var(--fg);
+}
+.save-bar .primary {
+  min-width: 112px;
+}
+/* 浮起和落下：只动平移和透明度，快出慢停 */
+.bar-enter-active,
+.bar-leave-active {
+  transition:
+    opacity 240ms cubic-bezier(0.2, 0, 0, 1),
+    transform 240ms cubic-bezier(0.2, 0, 0, 1);
+}
+.bar-enter-from,
+.bar-leave-to {
+  opacity: 0;
+  transform: translate(-50%, 16px);
+}
+.saved-ok {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-weight: var(--fw-label);
+  color: var(--ok);
+}
+/* “已保存”出现和消失：只淡入淡出加一点上移 */
+.fade-enter-active,
+.fade-leave-active {
+  transition:
+    opacity var(--ease),
+    transform var(--ease);
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+  transform: translateY(4px);
 }
 </style>
