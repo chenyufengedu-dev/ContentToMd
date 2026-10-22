@@ -14,11 +14,15 @@ export interface Usage {
   prompt_tokens_details?: { cached_tokens?: number }
 }
 
-/** 用户填的单价：元 / 百万 tokens。cachedInput 不填时，命中缓存的输入也按 input 算 */
+/**
+ * 用户填的单价。整理、看图：元 / 百万 tokens，cachedInput 不填时命中缓存的输入也按 input 算；
+ * 转写：perHour，元 / 小时音频（按时长计费的服务填，免费模型不填）
+ */
 export interface Price {
   input?: number
   cachedInput?: number
   output?: number
+  perHour?: number
 }
 
 /** usage.jsonl 的一行。只存密钥的编号，不存密钥 */
@@ -30,6 +34,8 @@ export interface UsageRecord {
   /** 估算金额（元）；没填价格时为 null */
   cost: number | null
   tokens?: Usage
+  /** 转写的这一段音频有多少秒 */
+  seconds?: number
   /** 哪一条收藏（文件名），方便以后对账 */
   item?: string
 }
@@ -45,6 +51,12 @@ export function estimateCost(price: Price | undefined, usage: Usage | undefined)
   const miss = usage.prompt_cache_miss_tokens ?? Math.max(0, (usage.prompt_tokens ?? 0) - hit)
   const cached = price.cachedInput ?? price.input
   return (hit * cached + miss * price.input + (usage.completion_tokens ?? 0) * price.output) / 1e6
+}
+
+/** 转写：音频秒数 × 用户填的每小时单价；没填价格或不知道时长时返回 null */
+export function estimateAsrCost(price: Price | undefined, seconds: number | undefined): number | null {
+  if (typeof price?.perHour !== 'number' || seconds === undefined) return null
+  return (seconds / 3600) * price.perHour
 }
 
 /** 给人看的金额：不到 1 分钱时不显示一串小数 */

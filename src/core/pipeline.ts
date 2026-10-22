@@ -2,12 +2,12 @@
 // 每一步的结果都留在 job 里，重试时从失败的那一步继续，已经付过费的步骤不再重复（方案第 6.2 节）
 
 import type { Config, ServiceKind } from './config'
-import { decodeTo16kMono, splitChunks, toWav, cleanTranscript, effectiveLength } from './audio'
+import { decodeTo16kMono, splitChunks, toWav, cleanTranscript, effectiveLength, wavSeconds } from './audio'
 import { transcribe, chatJson, type Fetch } from './services'
 import { AppError, isAppError } from './errors'
 import { retryOnRateLimit } from './retry'
 import { CONCURRENCY, isCondensed, lengthProblem, mapPool, REFINE_SINGLE_MAX, splitTextChunks } from './longText'
-import { estimateCost, keyId, type Usage, type UsageRecord } from './cost'
+import { estimateAsrCost, estimateCost, keyId, type Usage, type UsageRecord } from './cost'
 import { autoCrop, type Pixels, type Rect } from './image'
 import {
   buildSystemPrompt,
@@ -115,15 +115,16 @@ export interface RunContext {
 }
 
 /** 记一笔费用：加到这一条的花费上，再交给界面存起来 */
-async function recordUsage(job: Job, ctx: RunContext, kind: ServiceKind, usage?: Usage) {
+async function recordUsage(job: Job, ctx: RunContext, kind: ServiceKind, usage?: Usage, seconds?: number) {
   const s = ctx.config.services[kind]
   const at = new Date()
-  const cost = estimateCost(s.price, usage)
-  // 转写不按 tokens 计价，不算进这一条的花费；整理、看图没填价格时这一条的花费就不知道
-  if (kind !== 'asr') {
-    if (cost === null) job.costUnknown = true
-    else job.cost = (job.cost ?? 0) + cost
-  }
+  const cost = kind === 'asr' ? estimateAsrCost(s.price, seconds) : estimateCost(s.price, usage)
+  // 转写按音频时长和用户填的每小时价格算；没填（免费模型）就不算钱，也不算“不知道”。
+  // 整理、看图没填价格时这一条的花费就不知道
+  if (kind === 'asr') {
+    if (cost !== null) job.cost = (job.cost ?? 0) + cost
+  } else if (cost === null) job.costUnknown = true
+  else job.cost = (job.cost ?? 0) + cost
   ctx.onUsage?.({
     time: at.toISOString(),
     service: kind,
@@ -131,6 +132,7 @@ async function recordUsage(job: Job, ctx: RunContext, kind: ServiceKind, usage?:
     keyId: await keyId(s.apiKey),
     cost,
     tokens: usage,
+    seconds,
     item: job.fileName,
   })
 }
@@ -193,7 +195,7 @@ const STEPS: Record<StepId, (job: Job, ctx: RunContext, step: StepState) => Prom
         ctx.onUpdate()
       }
       const raw = await call(() => transcribe(ctx.config.services.asr, chunks[i], ctx.fetch, ctx.cancel), ctx, step)
-      await recordUsage(job, ctx, 'asr')
+      await recordUsage(job, ctx, 'asr', undefined, wavSeconds(chunks[i]))
       texts.push(cleanTranscript(raw))
     }
     const text = texts.join('\n')

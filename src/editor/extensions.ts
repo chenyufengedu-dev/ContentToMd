@@ -2,12 +2,14 @@
 import StarterKit from '@tiptap/starter-kit'
 import { Markdown } from '@tiptap/markdown'
 import { LinkedBlock } from './linkedBlock'
+import { Callout } from './callout'
 
 export const editorExtensions = () => [
   // 笔记正文用不到的格式不开，避免写出笔记里本来没有的东西
   StarterKit.configure({ link: false, underline: false, code: false, codeBlock: false, horizontalRule: false }),
   Markdown,
   LinkedBlock,
+  Callout,
 ]
 
 /**

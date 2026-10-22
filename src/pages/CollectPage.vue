@@ -145,6 +145,26 @@ function acceptFile(f: File) {
   fileUrl.value = URL.createObjectURL(f)
   duration.value = null
   mode.value = preselectMode(type)
+  probeMedia(f, type)
+}
+
+/** 放入音视频时先让浏览器内核试着读一下：读不出来的格式（比如部分 H.265 视频）现在就说，不等到“提取声音”那一步才报错 */
+function probeMedia(f: File, type: SourceType) {
+  const el = document.createElement(type === '视频' ? 'video' : 'audio')
+  el.preload = 'metadata'
+  el.onerror = () => {
+    if (file.value !== f) return // 用户已经移除或换了别的文件
+    clearContent(true)
+    errors.value.push(
+      importFailed(
+        f.name,
+        type === '视频'
+          ? '这个视频的格式无法读取。请转换成 mp4 后再放入。'
+          : '这个音频的格式无法读取。请转换成 mp3 后再放入。',
+      ),
+    )
+  }
+  el.src = fileUrl.value
 }
 
 /** MD / TXT：认不出编码或是空文件时不加入（方案第 8 节） */
@@ -788,7 +808,8 @@ onBeforeUnmount(() => {
 .drop {
   width: 100%;
   height: auto;
-  min-height: 112px;
+  min-height: 136px;
+  padding: var(--sp-6) var(--sp-4);
   display: flex;
   flex-direction: column;
   align-items: center;

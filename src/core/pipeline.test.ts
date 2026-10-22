@@ -181,6 +181,52 @@ describe('runJob：图片', () => {
     expect(job.costUnknown).toBeFalsy()
   })
 
+  it('转写按音频时长和用户填的每小时价格算钱，计入这一条的花费（F14）', async () => {
+    const withUsage = () =>
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { content: JSON.stringify(AI_RESULT) }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 1000, completion_tokens: 1000 },
+        }),
+      )
+    const { fetch } = fakeServices([withUsage])
+    const job = jobAfterExtract()
+    // 两段各 60 秒的 16kHz 单声道 WAV
+    const wav60 = new Blob([new Uint8Array(44 + 16000 * 2 * 60)])
+    job.wavChunks = [wav60, wav60]
+    const c = ctx(fetch)
+    c.config.services.asr.apiKey = 'sk-asr'
+    c.config.services.asr.price = { perHour: 3.6 }
+    c.config.services.text.apiKey = 'sk-test'
+    c.config.services.text.price = { input: 2, output: 8 }
+    const records: UsageRecord[] = []
+    await runJob(job, { ...c, onUsage: (r) => records.push(r) })
+    const asr = records.filter((r) => r.service === 'asr')
+    expect(asr.map((r) => r.seconds)).toEqual([60, 60])
+    expect(asr[0].cost).toBeCloseTo(0.06, 10)
+    // 转写 0.12 元 + 整理 (1000 × 2 + 1000 × 8) / 1e6
+    expect(job.cost).toBeCloseTo(0.12 + 0.01, 10)
+    expect(job.costUnknown).toBeFalsy()
+  })
+
+  it('转写没填价格（比如免费模型）：不算钱也不算“不知道”，整理填了价格这一条就有花费', async () => {
+    const withUsage = () =>
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { content: JSON.stringify(AI_RESULT) }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 1000, completion_tokens: 1000 },
+        }),
+      )
+    const { fetch } = fakeServices([withUsage])
+    const job = jobAfterExtract()
+    const c = ctx(fetch)
+    c.config.services.text.apiKey = 'sk-test'
+    c.config.services.text.price = { input: 2, output: 8 }
+    await runJob(job, c)
+    expect(job.cost).toBeCloseTo(0.01, 10)
+    expect(job.costUnknown).toBeFalsy()
+  })
+
   it('没填价格：只记用量和次数，这一条的花费不知道（F14）', async () => {
     const { fetch } = fakeServices([chatOk(AI_RESULT)])
     const job = jobAfterExtract()
