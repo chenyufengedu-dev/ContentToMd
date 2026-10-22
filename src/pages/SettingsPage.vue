@@ -67,15 +67,20 @@ watch(
   { immediate: true },
 )
 // ---- 单价（选填，F14，设计稿 状态-价格收起 / 展开）：平时收起，点“价格（选填）”展开 ----
-const PRICE_FIELDS: { key: keyof Price; label: string }[] = [
+const TOKEN_FIELDS: { key: keyof Price; label: string }[] = [
   { key: 'input', label: '输入' },
   { key: 'cachedInput', label: '缓存命中的输入' },
   { key: 'output', label: '输出' },
 ]
+// 语音转写按音频时长计费（免费模型不用填）
+const ASR_FIELDS: { key: keyof Price; label: string }[] = [{ key: 'perHour', label: '每小时音频' }]
+const ALL_PRICE_KEYS: (keyof Price)[] = ['input', 'cachedInput', 'output', 'perHour']
+const priceFields = (k: ServiceKind) => (k === 'asr' ? ASR_FIELDS : TOKEN_FIELDS)
+const priceUnit = (k: ServiceKind) => (k === 'asr' ? '元 / 小时' : '元 / 百万 tokens')
 // 价格区进入设置页时都收起；填过价格的，按钮上写“已填”
 const priceOpen = reactive(Object.fromEntries(KINDS.map((k) => [k, false])) as Record<ServiceKind, boolean>)
 /** 价格 → 三个输入框里的文字 */
-const priceTexts = (p?: Price) => Object.fromEntries(PRICE_FIELDS.map((f) => [f.key, String(p?.[f.key] ?? '')]))
+const priceTexts = (p?: Price) => Object.fromEntries(ALL_PRICE_KEYS.map((key) => [key, String(p?.[key] ?? '')]))
 /** 输入框里的原样文字：打到一半的“0.”不能被换成 0 或清空，所以不直接显示解析后的数字 */
 const priceText = reactive(
   Object.fromEntries(KINDS.map((k) => [k, priceTexts(props.config.services[k].price)])) as Record<
@@ -87,7 +92,7 @@ const priceText = reactive(
 const parsePrice = (raw: string) => (raw.trim() ? (Number(raw) >= 0 ? Number(raw) : NaN) : undefined)
 const savedPrice = (k: ServiceKind) => (JSON.parse(saved.value) as Config).services[k].price
 /** 填的不是数字的那一项（“完成”因此不能点） */
-const badPrice = (k: ServiceKind) => PRICE_FIELDS.find((f) => Number.isNaN(parsePrice(priceText[k][f.key])))
+const badPrice = (k: ServiceKind) => priceFields(k).find((f) => Number.isNaN(parsePrice(priceText[k][f.key])))
 /** 价格改了还没保存：收起后“价格（选填）”旁边有个橙色小点 */
 const priceDirty = (k: ServiceKind) =>
   JSON.stringify(savedPrice(k) ?? null) !== JSON.stringify(draft.services[k].price ?? null)
@@ -690,7 +695,7 @@ async function save() {
           <span v-if="spendText(k)" class="spend">{{ spendText(k) }}</span>
         </div>
         <div v-if="priceOpen[k]" class="price">
-          <label v-for="f in PRICE_FIELDS" :key="f.key" class="price-field">
+          <label v-for="f in priceFields(k)" :key="f.key" class="price-field">
             <span class="price-label">{{ f.label }}</span>
             <span class="price-input">
               <input
@@ -699,11 +704,15 @@ async function save() {
                 placeholder="未填"
                 @input="setPrice(k, f.key, ($event.target as HTMLInputElement).value)"
               />
-              <span class="unit">元 / 百万 tokens</span>
+              <span class="unit">{{ priceUnit(k) }}</span>
             </span>
           </label>
           <p class="price-note">
-            填了才会计算花费，按服务返回的用量估算，以服务商账单为准。价格可在服务商官网的价格页查到。
+            {{
+              k === 'asr'
+                ? '按音频时长收费的转写服务才需要填，免费模型不用填。填了会按每条的音频时长估算，以服务商账单为准。'
+                : '填了才会计算花费，按服务返回的用量估算，以服务商账单为准。价格可在服务商官网的价格页查到。'
+            }}
           </p>
           <div class="price-actions">
             <span v-if="badPrice(k)" class="price-status">「{{ badPrice(k)!.label }}」要填数字，比如 0.02</span>
@@ -763,7 +772,8 @@ async function save() {
       @cancel="askRemove = null"
       @ok="confirmRemove"
     >
-      <p>只是把它从领域列表里去掉，收藏库里的同名文件夹不会被删除。删除后几秒内可以撤销。</p>
+      <p>只删除这个领域，不会删除收藏库里的同名文件夹。</p>
+      <p>删除后几秒内可以撤销。</p>
     </NoticeDialog>
 
     <SettingCard

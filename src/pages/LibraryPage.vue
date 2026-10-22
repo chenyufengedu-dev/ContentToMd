@@ -239,7 +239,6 @@ defineExpose({ load })
 
 <style scoped>
 .library {
-  --tag: #2b8577; /* 标签的颜色（青绿），领域用强调色；设计规范里还没有，待登记 */
   display: grid;
   grid-template-columns: 180px minmax(0, 1fr);
   gap: var(--sp-7);

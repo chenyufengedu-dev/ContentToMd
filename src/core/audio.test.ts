@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cleanTranscript, effectiveLength, SAMPLE_RATE, splitChunks, toWav } from './audio'
+import { cleanTranscript, effectiveLength, SAMPLE_RATE, splitChunks, toWav, wavSeconds } from './audio'
 
 describe('toWav', () => {
   it('生成 16kHz 单声道 16 位的 WAV 文件头和数据', async () => {
@@ -35,5 +35,12 @@ describe('转写清理', () => {
   it('有效字数不算空白和标点', () => {
     expect(effectiveLength('嗯。。 ！ \n 啊？')).toBe(2)
     expect(effectiveLength('尊重上级是我们的天职')).toBe(10)
+  })
+})
+
+describe('wavSeconds', () => {
+  it('按 16kHz 单声道 16 位的 WAV 大小算出音频有多少秒', () => {
+    expect(wavSeconds(toWav(new Float32Array(SAMPLE_RATE * 3)))).toBe(3)
+    expect(wavSeconds(new Blob(['a']))).toBe(0)
   })
 })

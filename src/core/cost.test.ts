@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { estimateCost, formatYuan, hasPrice, keyId, summarize, type UsageRecord } from './cost'
+import { estimateAsrCost, estimateCost, formatYuan, hasPrice, keyId, summarize, type UsageRecord } from './cost'
 
 // 北京时间 = UTC+8
 const bj = (s: string) => new Date(`${s}+08:00`)
@@ -73,5 +73,17 @@ describe('summarize：按密钥算本月和累计', () => {
       bj('2026-10-21T12:00:00'),
     )
     expect(s).toEqual({ month: 0.75, total: 1.75, calls: 4, unknown: 1 })
+  })
+})
+
+describe('estimateAsrCost：音频时长 × 用户填的每小时单价', () => {
+  it('按秒数折算成小时再乘单价', () => {
+    expect(estimateAsrCost({ perHour: 3.6 }, 1800)).toBeCloseTo(1.8)
+    expect(estimateAsrCost({ perHour: 0 }, 1800)).toBe(0)
+  })
+  it('没填每小时价格、没有时长：不知道，返回 null', () => {
+    expect(estimateAsrCost(undefined, 100)).toBeNull()
+    expect(estimateAsrCost({ input: 1, output: 2 }, 100)).toBeNull()
+    expect(estimateAsrCost({ perHour: 3 }, undefined)).toBeNull()
   })
 })

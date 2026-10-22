@@ -44,6 +44,7 @@ const serviceSchema = (kind: ServiceKind) =>
           input: z.number().nonnegative().optional().catch(undefined),
           cachedInput: z.number().nonnegative().optional().catch(undefined),
           output: z.number().nonnegative().optional().catch(undefined),
+          perHour: z.number().nonnegative().optional().catch(undefined),
         })
         .optional()
         .catch(undefined),

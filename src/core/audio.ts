@@ -27,6 +27,9 @@ export async function decodeTo16kMono(data: ArrayBuffer): Promise<{ samples: Flo
 }
 
 /** 16 位 PCM WAV */
+/** toWav 生成的 WAV（16kHz 单声道 16 位，文件头 44 字节）有多少秒；转写按音频时长计费时用 */
+export const wavSeconds = (wav: Blob): number => Math.max(0, (wav.size - 44) / (SAMPLE_RATE * 2))
+
 export function toWav(samples: Float32Array): Blob {
   const v = new DataView(new ArrayBuffer(44 + samples.length * 2))
   const str = (o: number, s: string) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)))

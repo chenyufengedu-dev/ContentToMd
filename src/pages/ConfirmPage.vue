@@ -1035,6 +1035,17 @@ onBeforeUnmount(() => {
 .body :deep(blockquote p) {
   margin: 0;
 }
+/* 提示框（> [!info]- 图片中的文字）：藏起标记，标题加粗，整块用强调色浅底（见 editor/callout.ts） */
+.body :deep(blockquote.callout) {
+  background: var(--accent-soft);
+}
+.body :deep(.callout-mark) {
+  display: none;
+}
+.body :deep(.callout-title) {
+  font-weight: 600;
+  color: var(--accent);
+}
 /* 对照时可点击的段落和当前点中的段落 */
 .comparing .body :deep(li),
 .comparing .body :deep(.tiptap > p),
