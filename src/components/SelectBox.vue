@@ -2,7 +2,7 @@
 // 自绘下拉框：系统自带的下拉列表样式改不了，和页面格格不入。支持键盘：上下选择、回车确定、Esc 关闭。
 // 列表挂到页面最外层、按按钮的位置浮出来：放在卡片里时不会被卡片边缘切掉，也不会被下一张卡片盖住
 import { vPress } from './pressFeedback'
-import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from 'vue'
 import { Check, ChevronDown } from './icons'
 
 const props = defineProps<{
@@ -16,6 +16,8 @@ const open = ref(false)
 const highlighted = ref(0)
 const root = ref<HTMLElement>()
 const list = ref<HTMLElement>()
+const listId = useId()
+const optionId = (i: number) => `${listId}-${i}`
 /** 列表的位置（相对窗口）：按钮下面放得下就放下面，否则放上面 */
 const menuStyle = ref<Record<string, string>>({})
 const current = computed(() => props.options.find((o) => o.value === model.value)?.label ?? '')
@@ -35,6 +37,7 @@ function follow(below: boolean) {
 
 async function toggle() {
   if (open.value) return close()
+  if (!props.options.length) return
   follow(true)
   open.value = true
   highlighted.value = Math.max(
@@ -43,8 +46,9 @@ async function toggle() {
   )
   document.addEventListener('pointerdown', onOutside, true)
   await nextTick()
+  if (!open.value || !root.value) return
   // 量出列表实际多高再定往上还是往下（只定这一次，免得跟着按钮移动时跳来跳去）
-  const r = root.value!.getBoundingClientRect()
+  const r = root.value.getBoundingClientRect()
   const h = list.value?.offsetHeight ?? 0
   if (r.bottom + h > window.innerHeight && r.top > window.innerHeight - r.bottom) {
     cancelAnimationFrame(frame)
@@ -58,8 +62,13 @@ function close() {
   document.removeEventListener('pointerdown', onOutside, true)
 }
 function choose(i: number) {
+  if (!props.options[i]) return
   model.value = props.options[i].value
   close()
+  root.value?.querySelector('button')?.focus()
+}
+function onFocusOut(e: FocusEvent) {
+  if (!(e.relatedTarget instanceof Node) || !root.value?.contains(e.relatedTarget)) close()
 }
 function onOutside(e: PointerEvent) {
   const t = e.target as Node
@@ -74,8 +83,15 @@ function onKey(e: KeyboardEvent) {
     return
   }
   if (e.key === 'Escape') {
+    e.preventDefault()
     e.stopPropagation()
     close()
+  } else if (e.key === 'Tab') {
+    close()
+  } else if (e.key === 'Home' || e.key === 'End') {
+    e.preventDefault()
+    highlighted.value = e.key === 'Home' ? 0 : props.options.length - 1
+    list.value?.children[highlighted.value]?.scrollIntoView({ block: 'nearest' })
   } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
     e.preventDefault()
     const n = props.options.length
@@ -86,18 +102,28 @@ function onKey(e: KeyboardEvent) {
     choose(highlighted.value)
   }
 }
+watch(
+  () => props.options,
+  () => {
+    highlighted.value = Math.max(0, Math.min(highlighted.value, props.options.length - 1))
+    if (!props.options.length) close()
+  },
+)
 onBeforeUnmount(close)
 </script>
 
 <template>
-  <div ref="root" class="select" :class="[size ?? 'md', { open }]">
+  <div ref="root" class="select" :class="[size ?? 'md', { open }]" @focusout="onFocusOut">
     <button
       v-press
       type="button"
       class="trigger"
       :aria-label="ariaLabel"
+      role="combobox"
       aria-haspopup="listbox"
       :aria-expanded="open"
+      :aria-controls="open ? listId : undefined"
+      :aria-activedescendant="open ? optionId(highlighted) : undefined"
       @click="toggle"
       @keydown="onKey"
     >
@@ -105,15 +131,17 @@ onBeforeUnmount(close)
       <ChevronDown class="arrow" :size="size === 'sm' ? 14 : 18" aria-hidden="true" />
     </button>
     <Teleport to="body">
-      <ul v-if="open" ref="list" class="menu" :style="menuStyle" role="listbox" :aria-label="ariaLabel">
+      <ul v-if="open" :id="listId" ref="list" class="menu" :style="menuStyle" role="listbox" :aria-label="ariaLabel">
         <li
           v-for="(o, i) in options"
+          :id="optionId(i)"
           :key="String(o.value)"
           v-press
           role="option"
           :aria-selected="o.value === model"
           :class="{ highlighted: i === highlighted }"
           @pointerenter="highlighted = i"
+          @pointerdown.prevent
           @click="choose(i)"
         >
           <span :title="o.label">{{ o.label }}</span>

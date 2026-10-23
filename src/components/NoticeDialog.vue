@@ -2,7 +2,8 @@
 // 居中的小提示框（设计稿：设计稿/确认页/定稿-保存失败弹窗.webp、定稿-关闭确认弹窗.webp）：
 // 细线图标 + 标题，几行说明，右下两个按钮。出错时图标和标题是红色，其他时候墨黑。Esc、点遮罩等于点左边按钮
 import { vPress } from './pressFeedback'
-import { onBeforeUnmount, onMounted } from 'vue'
+import { ref, useId } from 'vue'
+import { useModal } from './useModal'
 import { CircleAlert, Info } from './icons'
 
 /** danger：确认的是删除这类不可恢复的操作，确认按钮用红色 */
@@ -18,17 +19,15 @@ const props = defineProps<{
 const emit = defineEmits<{ cancel: []; ok: []; neutral: [] }>()
 const dismiss = () => (props.neutralText ? emit('neutral') : emit('cancel'))
 
-function onKey(e: KeyboardEvent) {
-  if (e.key === 'Escape') dismiss()
-}
-onMounted(() => window.addEventListener('keydown', onKey))
-onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
+const dialog = ref<HTMLElement>()
+const titleId = useId()
+useModal(dialog, dismiss)
 </script>
 
 <template>
   <div class="mask" @click.self="dismiss">
-    <section class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="notice-title">
-      <h2 id="notice-title" :class="tone ?? 'info'">
+    <section ref="dialog" class="dialog" role="alertdialog" aria-modal="true" :aria-labelledby="titleId" tabindex="-1">
+      <h2 :id="titleId" :class="tone ?? 'info'">
         <component :is="tone === 'error' ? CircleAlert : Info" :size="20" aria-hidden="true" />{{ title }}
       </h2>
       <div class="body"><slot /></div>
