@@ -35,3 +35,20 @@ describe('正文编辑器的 Markdown 往返', () => {
     expect(roundTrip(md).trim()).toBe(md)
   })
 })
+
+it('正文编辑保留代码块、行内代码、链接地址和分割线', () => {
+  const md = [
+    '```js',
+    'const answer = 42',
+    '```',
+    '',
+    '使用 `answer`，访问[链接](https://example.invalid)。',
+    '',
+    '---',
+  ].join('\n')
+  const out = roundTrip(md)
+  expect(out).toContain('```js\nconst answer = 42\n```')
+  expect(out).toContain('`answer`')
+  expect(out).toContain('[链接](https://example.invalid)')
+  expect(out).toContain('---')
+})

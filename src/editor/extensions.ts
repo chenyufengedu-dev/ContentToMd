@@ -5,8 +5,8 @@ import { LinkedBlock } from './linkedBlock'
 import { Callout } from './callout'
 
 export const editorExtensions = () => [
-  // 笔记正文用不到的格式不开，避免写出笔记里本来没有的东西
-  StarterKit.configure({ link: false, underline: false, code: false, codeBlock: false, horizontalRule: false }),
+  // 保留已有 Markdown 的代码和链接；链接在编辑区只编辑，不直接打开。
+  StarterKit.configure({ underline: false, link: { openOnClick: false } }),
   Markdown,
   LinkedBlock,
   Callout,

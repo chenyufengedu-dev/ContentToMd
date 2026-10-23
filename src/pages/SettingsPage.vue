@@ -544,8 +544,9 @@ function revert() {
   }
   saveError.value = null
 }
-/** 保存设置；成功返回 true（切换页面前“保存”按钮要知道能不能继续） */
+/** 只确认本次提交的快照；没有剩余改动时才返回 true，允许切页或关闭。 */
 async function save(): Promise<boolean> {
+  if (saving.value) return false
   for (const k of KINDS) {
     const error = priceError(k)
     if (error) {
@@ -568,21 +569,23 @@ async function save(): Promise<boolean> {
       return false
     }
   }
+  const submitted: Config = JSON.parse(JSON.stringify(draft))
   saving.value = true
   try {
-    if (draft.vault.kind === 'obsidian' && draft.vaultPath && draft.vault.subfolder.trim())
-      await ensureSubfolder(draft.vaultPath, draft.vault.subfolder.trim())
-    await saveConfig(draft)
-    saved.value = JSON.stringify(draft)
-    emit('saved', JSON.parse(JSON.stringify(draft)))
-    for (const k of priceChanged) priceJustSaved[k] = true
+    if (submitted.vault.kind === 'obsidian' && submitted.vaultPath && submitted.vault.subfolder.trim())
+      await ensureSubfolder(submitted.vaultPath, submitted.vault.subfolder.trim())
+    await saveConfig(submitted)
+    saved.value = JSON.stringify(submitted)
+    emit('saved', submitted)
+    for (const k of priceChanged) if (!priceDirty(k)) priceJustSaved[k] = true
     justSaved.value = true
     window.clearTimeout(justSavedTimer)
     justSavedTimer = window.setTimeout(() => {
       justSaved.value = false
       for (const k of KINDS) priceJustSaved[k] = false
     }, 1200)
-    return true
+    // 保存期间的新输入仍待保存，切页/关闭入口必须继续留在设置页。
+    return !pending.value
   } catch (e) {
     saveError.value = String(e)
     return false
