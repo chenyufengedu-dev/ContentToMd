@@ -2,7 +2,7 @@
 // ⓘ 提示：鼠标悬停或用键盘聚焦时显示说明气泡。
 // 气泡挂到页面最外层、按图标位置定位，不会被右栏这类可滚动区域的边缘切掉；靠近窗口边缘时自动往里收
 import { ref } from 'vue'
-import { Info } from 'lucide-vue-next'
+import { Info } from './icons'
 
 defineProps<{ text: string }>()
 

@@ -2,7 +2,7 @@
 // 自绘下拉框：系统自带的下拉列表样式改不了，和页面格格不入。支持键盘：上下选择、回车确定、Esc 关闭。
 // 列表挂到页面最外层、按按钮的位置浮出来：放在卡片里时不会被卡片边缘切掉，也不会被下一张卡片盖住
 import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
-import { Check, ChevronDown } from 'lucide-vue-next'
+import { Check, ChevronDown } from './icons'
 
 const props = defineProps<{
   options: { value: T; label: string }[]

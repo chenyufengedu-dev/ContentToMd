@@ -41,7 +41,7 @@ import SelectBox from '../components/SelectBox.vue'
 import NoticeDialog from '../components/NoticeDialog.vue'
 import UnsavedDialog from '../components/UnsavedDialog.vue'
 import { toast } from '../components/useToast'
-import { Check, ChevronRight, Circle, CircleCheck, X } from 'lucide-vue-next'
+import { Check, ChevronRight, Circle, CircleCheck, X } from '../components/icons'
 
 const props = defineProps<{ config: Config; firstRun: boolean }>()
 const emit = defineEmits<{ saved: [Config]; pending: [boolean] }>()
@@ -477,26 +477,18 @@ async function finishRename() {
   if (await persistDomains()) toast(`领域已改名为「${d.name}」。`)
 }
 
-/** 点 × 先问一句；有笔记时再确认一次；确认后文件夹进回收站、领域马上从列表里去掉，几秒内可以撤销 */
-const askRemove = ref<{ domain: Domain; notes: number; step: 1 | 2 } | null>(null)
+/** 确认一次后文件夹进回收站、领域马上从列表里去掉，几秒内可以撤销 */
+const askRemove = ref<{ domain: Domain; notes: number } | null>(null)
 async function removeDomain(id: number) {
   const d = draft.domains.find((x) => x.id === id)
   if (!d) return
   domainError.value = null
   try {
     const notes = draft.vaultPath ? await countDomainNotes(savedRoot(), d.name) : 0
-    askRemove.value = { domain: d, notes, step: 1 }
+    askRemove.value = { domain: d, notes }
   } catch (e) {
     domainError.value = `没能查看“${d.name}”文件夹：${String(e)}。`
   }
-}
-
-/** 第一次确认通过：里面有笔记时再确认一次，没有笔记就直接删 */
-function nextRemoveStep() {
-  const a = askRemove.value
-  if (!a) return
-  if (a.notes > 0 && a.step === 1) a.step = 2
-  else void confirmRemove()
 }
 
 /** 把文件夹（连同笔记和只有它们在用的图片）放进回收站，再把领域从列表里去掉并马上保存；几秒内可以撤销 */
@@ -855,28 +847,20 @@ onMounted(() => {
       @stay="askClose = false"
     />
 
-    <!-- 删除领域：说清里面有多少篇笔记，有笔记时再确认一次；文件夹和笔记放进回收站，几秒内可以撤销 -->
+    <!-- 删除领域：一次确认中说明笔记数、回收站和撤销 -->
     <NoticeDialog
       v-if="askRemove"
-      :title="
-        askRemove.step === 2
-          ? `再确认一次：删除「${askRemove.domain.name}」和 ${askRemove.notes} 篇笔记？`
-          : `删除领域「${askRemove.domain.name}」？`
-      "
+      :title="`删除领域「${askRemove.domain.name}」？`"
       tone="error"
-      :danger="askRemove.step === 2 || askRemove.notes === 0"
+      danger
       cancel-text="取消"
-      :ok-text="askRemove.step === 1 && askRemove.notes > 0 ? '继续' : '删除'"
+      ok-text="删除"
       @cancel="askRemove = null"
-      @ok="nextRemoveStep"
+      @ok="confirmRemove"
     >
-      <template v-if="askRemove.step === 2">
+      <template v-if="askRemove.notes > 0">
         <p>这个领域的文件夹和里面的 {{ askRemove.notes }} 篇笔记，还有只有它们在用的图片，会一起放进回收站。</p>
         <p>删除后几秒内可以撤销，之后也可以从回收站找回。</p>
-      </template>
-      <template v-else-if="askRemove.notes > 0">
-        <p>这个领域的文件夹里有 {{ askRemove.notes }} 篇笔记。</p>
-        <p>删除领域会把文件夹和里面的笔记一起删除，下一步还会再确认一次。</p>
       </template>
       <template v-else>
         <p>这个领域的文件夹里没有笔记。删除后，文件夹也会放进回收站。</p>

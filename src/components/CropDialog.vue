@@ -2,7 +2,7 @@
 // 调整裁剪（F29）：居中的大浮层，原图上叠一个裁剪框，拖四边、四角调整大小，拖框内移动。
 // 多张图时底部缩略图切换；“恢复原图”= 这张不裁。点“完成”才生效，“取消”或 Esc 不改
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { X } from 'lucide-vue-next'
+import { X } from './icons'
 import type { Rect } from '../core/image'
 
 const props = defineProps<{ images: { url: string; crop: Rect | null }[]; start: number }>()

@@ -3,7 +3,7 @@
 // 按钮用 mousedown.prevent，点按钮时正文不会失去焦点
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import type { Editor } from '@tiptap/vue-3'
-import { Undo2, Redo2, Bold, List, ListOrdered, Quote } from 'lucide-vue-next'
+import { Undo2, Redo2, Bold, ListBullet, ListOrdered, Quote } from './icons'
 
 const props = defineProps<{ editor: Editor }>()
 
@@ -63,7 +63,7 @@ const setHeading = () => props.editor.chain().focus().setHeading({ level: 3 }).r
       title="列表"
       @click="editor.chain().focus().toggleBulletList().run()"
     >
-      <List :size="16" />
+      <ListBullet :size="16" />
     </button>
     <button
       class="tool"

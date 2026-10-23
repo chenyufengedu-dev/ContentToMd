@@ -6,7 +6,7 @@
 // 写出来要慢一点才看得出“逐步”，所以单独用一段 0.5 秒的动画，不跟弹簧走
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { animate, motionValue } from 'motion'
-import { ArrowUpRight } from 'lucide-vue-next'
+import { ArrowUpRight } from './icons'
 import { cardDate, previewLines, type LibraryNote } from '../core/library'
 import { clamp01, usePull } from './usePull'
 import { useCover } from './useCover'

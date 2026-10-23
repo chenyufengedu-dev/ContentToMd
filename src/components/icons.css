@@ -1,0 +1,407 @@
+/* 图标样式：线宽、深浅线、悬停动画。图标本身在 icons.ts。 */
+.ai {
+  --ai-spring: cubic-bezier(0.34, 1.7, 0.5, 1);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  overflow: visible;
+  flex: none;
+}
+.ai .soft {
+  fill: currentColor;
+  fill-opacity: 0.13;
+}
+.ai .l2 {
+  stroke-opacity: 0.45;
+}
+.ai-mono .l2 {
+  stroke-opacity: 1;
+}
+.ai .part {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.ai .check-mark {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+}
+.ai .search-glint {
+  opacity: 0;
+  stroke: #fff;
+  stroke-width: 1.6;
+}
+.ai .trash-lid {
+  transform-origin: 3px 4.75px;
+  transform-box: view-box;
+}
+.ai .warn-all {
+  transform-origin: 9px 15px;
+  transform-box: view-box;
+}
+.ai .info-stem {
+  transform-origin: 9px 11.75px;
+  transform-box: view-box;
+}
+.ai .clock-hands {
+  transform-origin: 9px 9px;
+  transform-box: view-box;
+}
+.ai .txt-line {
+  transform-box: fill-box;
+  transform-origin: left center;
+}
+.ai .undo-shaft {
+  transform-origin: 10.5px 7.5px;
+  transform-box: view-box;
+}
+.ai .redo-shaft {
+  transform-origin: 7.5px 7.5px;
+  transform-box: view-box;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  /* 成功类：出现时圆弹出、对勾一笔描出来 */
+  .ai .check-ring {
+    animation: ai-pop 0.6s var(--ai-spring) both;
+  }
+  .ai .check-mark {
+    animation: ai-draw 0.45s 0.18s cubic-bezier(0.3, 0.8, 0.3, 1) both;
+  }
+
+  /* 其余：鼠标放到按钮、链接或带 data-ai-hover 的容器上时播放一次 */
+  :is(button, a, [data-ai-hover]):hover .ai .a {
+    animation-duration: 0.7s;
+    animation-timing-function: var(--ai-spring);
+    animation-fill-mode: both;
+  }
+  :is(button, a, [data-ai-hover]):hover .ai .trash-lid {
+    animation-name: ai-lid;
+  }
+  :is(button, a, [data-ai-hover]):hover .ai .search-all {
+    animation-name: ai-focus;
+  }
+  :is(button, a, [data-ai-hover]):hover .ai .search-glint {
+    animation: ai-glint 0.6s 0.1s ease-in-out both;
+  }
+  :is(button, a, [data-ai-hover]):hover .ai .plus-mark,
+  :is(button, a, [data-ai-hover]):hover .ai .plus-s {
+    animation-name: ai-spin-in;
+  }
+  :is(button, a, [data-ai-hover]):hover .ai .plus-box {
+    animation-name: ai-pop2;
+    animation-duration: 0.5s;
+  }
+  :is(button, a, [data-ai-hover]):hover .ai .back-chev {
+    animation-name: ai-back;
+  }
+  :is(button, a, [data-ai-hover]):hover .ai .warn-all {
+    animation-name: ai-shake;
+    animation-duration: 0.8s;
+    animation-timing-function: ease-out;
+  }
+  :is(button, a, [data-ai-hover]):hover .ai .info-dot {
+    animation-name: ai-drop;
+  }
+  :is(button, a, [data-ai-hover]):hover .ai .info-stem {
+    animation: ai-grow 0.5s 0.1s var(--ai-spring) both;
+  }
+  :is(button, a, [data-ai-hover]):hover .ai .folder-paper {
+    animation-name: ai-rise;
+    animation-duration: 0.8s;
+  }
+  :is(button, a, [data-ai-hover]):hover .ai .clock-hands {
+    animation-name: ai-spin360;
+    animation-duration: 0.9s;
+    animation-timing-function: cubic-bezier(0.3, 0.9, 0.3, 1);
+  }
+  :is(button, a, [data-ai-hover]):hover .ai .bar1 {
+    animation-name: ai-bars;
+  }
+  :is(button, a, [data-ai-hover]):hover .ai .bar2 {
+    animation-name: ai-bars;
+    animation-delay: 0.06s;
+  }
+  :is(button, a, [data-ai-hover]):hover .ai .bar3 {
+    animation-name: ai-bars;
+    animation-delay: 0.12s;
+  }
+  :is(button, a, [data-ai-hover]):hover .ai .bar4 {
+    animation-name: ai-bars;
+    animation-delay: 0.18s;
+  }
+  :is(button, a, [data-ai-hover]):hover .ai .bar5 {
+    animation-name: ai-bars;
+    animation-delay: 0.24s;
+  }
+  :is(button, a, [data-ai-hover]):hover .ai .mic-cap {
+    animation-name: ai-mic;
+  }
+  :is(button, a, [data-ai-hover]):hover .ai .x-all {
+    animation-name: ai-spin90;
+  }
+  :is(button, a, [data-ai-hover]):hover .ai .txt-line {
+    animation-name: ai-write;
+    animation-duration: 0.55s;
+  }
+  :is(button, a, [data-ai-hover]):hover .ai .txt-line2 {
+    animation-delay: 0.08s;
+  }
+  :is(button, a, [data-ai-hover]):hover .ai .txt-line3 {
+    animation-delay: 0.16s;
+  }
+  :is(button, a, [data-ai-hover]):hover .ai .img-sun {
+    animation-name: ai-sun;
+  }
+  :is(button, a, [data-ai-hover]):hover .ai .img-hills {
+    animation-name: ai-hills;
+  }
+  :is(button, a, [data-ai-hover]):hover .ai .shoot {
+    animation-name: ai-shoot;
+  }
+  :is(button, a, [data-ai-hover]):hover .ai .undo-head {
+    animation-name: ai-head-l;
+  }
+  :is(button, a, [data-ai-hover]):hover .ai .redo-head {
+    animation-name: ai-head-r;
+  }
+  :is(button, a, [data-ai-hover]):hover .ai .undo-shaft,
+  :is(button, a, [data-ai-hover]):hover .ai .redo-shaft {
+    animation-name: ai-stretch;
+  }
+}
+
+@keyframes ai-write {
+  from {
+    transform: scaleX(0.15);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+@keyframes ai-sun {
+  0% {
+    transform: scale(0.3);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes ai-hills {
+  0% {
+    transform: translateY(2.5px);
+  }
+  100% {
+    transform: none;
+  }
+}
+@keyframes ai-pop {
+  from {
+    transform: scale(0.7);
+  }
+  to {
+    transform: scale(1);
+  }
+}
+@keyframes ai-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes ai-lid {
+  0% {
+    transform: none;
+  }
+  35% {
+    transform: translateY(-2.25px) rotate(-14deg);
+  }
+  100% {
+    transform: none;
+  }
+}
+@keyframes ai-focus {
+  0% {
+    transform: none;
+  }
+  40% {
+    transform: translate(-1px, -1px) scale(1.12);
+  }
+  100% {
+    transform: none;
+  }
+}
+@keyframes ai-glint {
+  0% {
+    opacity: 0;
+    transform: translate(-0.6px, -0.6px);
+  }
+  40% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(0.8px, 0.8px);
+  }
+}
+@keyframes ai-spin-in {
+  from {
+    transform: rotate(-90deg) scale(0.7);
+  }
+  to {
+    transform: none;
+  }
+}
+@keyframes ai-pop2 {
+  0% {
+    transform: scale(0.92);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes ai-back {
+  0% {
+    transform: none;
+  }
+  35% {
+    transform: translateX(-2.4px);
+  }
+  100% {
+    transform: none;
+  }
+}
+@keyframes ai-shake {
+  0% {
+    transform: none;
+  }
+  15% {
+    transform: rotate(-9deg);
+  }
+  35% {
+    transform: rotate(7deg);
+  }
+  55% {
+    transform: rotate(-4deg);
+  }
+  75% {
+    transform: rotate(2deg);
+  }
+  100% {
+    transform: none;
+  }
+}
+@keyframes ai-drop {
+  0% {
+    transform: translateY(-4px);
+    opacity: 0;
+  }
+  100% {
+    transform: none;
+    opacity: 1;
+  }
+}
+@keyframes ai-grow {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: none;
+  }
+}
+@keyframes ai-rise {
+  0% {
+    transform: none;
+  }
+  45% {
+    transform: translateY(-4px);
+  }
+  100% {
+    transform: none;
+  }
+}
+@keyframes ai-spin360 {
+  from {
+    transform: rotate(0);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes ai-bars {
+  0% {
+    transform: scaleY(1);
+  }
+  40% {
+    transform: scaleY(0.45);
+  }
+  100% {
+    transform: scaleY(1);
+  }
+}
+@keyframes ai-mic {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.14);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes ai-spin90 {
+  from {
+    transform: rotate(0);
+  }
+  to {
+    transform: rotate(90deg);
+  }
+}
+@keyframes ai-shoot {
+  0% {
+    transform: none;
+  }
+  35% {
+    transform: translate(2px, -2px);
+  }
+  100% {
+    transform: none;
+  }
+}
+@keyframes ai-head-l {
+  0% {
+    transform: none;
+  }
+  35% {
+    transform: translateX(-2.2px);
+  }
+  100% {
+    transform: none;
+  }
+}
+@keyframes ai-head-r {
+  0% {
+    transform: none;
+  }
+  35% {
+    transform: translateX(2.2px);
+  }
+  100% {
+    transform: none;
+  }
+}
+@keyframes ai-stretch {
+  0% {
+    transform: none;
+  }
+  35% {
+    transform: scaleX(1.31);
+  }
+  100% {
+    transform: none;
+  }
+}
