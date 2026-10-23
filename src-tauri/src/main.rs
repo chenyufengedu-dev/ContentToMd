@@ -815,9 +815,14 @@ fn restore_note_at(root: &std::path::Path, rel: &str, images: &[String]) -> Resu
     for a in images {
         wanted.push(inside_root(root, a)?);
     }
+    restore_from_trash(&wanted)
+}
+
+/// 把这些路径（文件或文件夹）从回收站还原到原位置；同一个位置有好几份时取最近删的那份
+fn restore_from_trash(wanted: &[PathBuf]) -> Result<(), String> {
     let items = trash::os_limited::list().map_err(|e| format!("读不了回收站：{e}"))?;
     let mut chosen = Vec::new();
-    for w in &wanted {
+    for w in wanted {
         let key = norm_path(w);
         if let Some(it) = items
             .iter()
@@ -828,7 +833,7 @@ fn restore_note_at(root: &std::path::Path, rel: &str, images: &[String]) -> Resu
         }
     }
     if chosen.is_empty() {
-        return Err("回收站里找不到这条笔记了，可能已经被清空或还原过".into());
+        return Err("回收站里找不到这条内容了，可能已经被清空或还原过".into());
     }
     trash::os_limited::restore_all(chosen).map_err(|e| format!("无法还原：{e}"))
 }
@@ -836,6 +841,102 @@ fn restore_note_at(root: &std::path::Path, rel: &str, images: &[String]) -> Resu
 #[tauri::command]
 fn restore_note(root: String, rel_path: String, images: Vec<String>) -> Result<(), String> {
     restore_note_at(&PathBuf::from(root), &rel_path, &images)
+}
+
+/// 领域文件夹里有多少篇笔记（.md）；文件夹不存在（用到时才创建）时是 0
+fn count_notes_at(root: &std::path::Path, domain: &str) -> Result<usize, String> {
+    check_segment(domain)?;
+    let dir = root.join(domain);
+    if !dir.is_dir() {
+        return Ok(0);
+    }
+    Ok(fs::read_dir(&dir)
+        .map_err(|e| io_msg(&dir, e))?
+        .flatten()
+        .filter(|f| {
+            f.path()
+                .extension()
+                .is_some_and(|x| x.eq_ignore_ascii_case("md"))
+        })
+        .count())
+}
+
+#[tauri::command]
+fn count_domain_notes(root: String, domain: String) -> Result<usize, String> {
+    count_notes_at(&PathBuf::from(root), &domain)
+}
+
+/// 删除领域时一起放进回收站的图片：这个领域里的笔记用到的、别的领域的笔记都没用到的
+fn images_only_in_domain(root: &std::path::Path, domain: &str) -> Vec<String> {
+    let prefix = format!("{domain}/");
+    let (inside, outside): (Vec<String>, Vec<String>) = all_note_paths(root)
+        .into_iter()
+        .partition(|p| p.starts_with(&prefix));
+    let outside_text: Vec<String> = outside
+        .iter()
+        .filter_map(|p| fs::read_to_string(root.join(p)).ok())
+        .collect();
+    let mut images: Vec<String> = Vec::new();
+    for p in inside {
+        let Ok(text) = fs::read_to_string(root.join(&p)) else {
+            continue;
+        };
+        for a in attachment_refs(&text) {
+            if !images.contains(&a)
+                && root.join(&a).is_file()
+                && !outside_text.iter().any(|o| attachment_refs(o).contains(&a))
+            {
+                images.push(a);
+            }
+        }
+    }
+    images
+}
+
+/// 删除领域：领域的文件夹（连同里面的笔记）和只有这些笔记在用的图片，一起放进 Windows 回收站
+#[derive(serde::Serialize)]
+struct DeletedDomain {
+    notes: usize,
+    images: Vec<String>,
+}
+
+fn delete_domain_at(root: &std::path::Path, domain: &str) -> Result<DeletedDomain, String> {
+    check_segment(domain)?;
+    if domain == "附件" || domain.starts_with('.') {
+        return Err("这个文件夹不能当领域删除".into());
+    }
+    let dir = root.join(domain);
+    if !dir.is_dir() {
+        return Ok(DeletedDomain {
+            notes: 0,
+            images: vec![],
+        });
+    }
+    let notes = count_notes_at(root, domain)?;
+    let wanted_images = images_only_in_domain(root, domain);
+    trash::delete(&dir).map_err(|e| format!("无法放进回收站：{e}"))?;
+    let images = wanted_images
+        .into_iter()
+        .filter(|a| trash::delete(root.join(a)).is_ok())
+        .collect();
+    Ok(DeletedDomain { notes, images })
+}
+
+#[tauri::command]
+fn delete_domain(root: String, domain: String) -> Result<DeletedDomain, String> {
+    delete_domain_at(&PathBuf::from(root), &domain)
+}
+
+/// 撤销删除领域：把文件夹和图片从回收站还原
+#[tauri::command]
+fn restore_domain(root: String, domain: String, images: Vec<String>) -> Result<(), String> {
+    check_segment(&domain)?;
+    let root = PathBuf::from(root);
+    let mut wanted = vec![root.join(&domain)];
+    for a in &images {
+        wanted.push(inside_root(&root, a)?);
+    }
+    restore_from_trash(&wanted)
 }
 
 #[derive(serde::Serialize)]
@@ -990,6 +1091,9 @@ fn main() {
             save_note,
             delete_note,
             restore_note,
+            count_domain_notes,
+            delete_domain,
+            restore_domain,
             draft_write,
             draft_list,
             draft_read,
