@@ -5,8 +5,16 @@ import type { Editor } from '@tiptap/core'
 import type * as TiptapVue from '@tiptap/vue-3'
 import ConfirmPage, { type EditInfo } from './ConfirmPage.vue'
 import { defaultConfig } from '../core/config'
-import type { Job } from '../core/pipeline'
-import { saveNote, writeNote } from '../shell/tauri'
+import type { Job, JobImage } from '../core/pipeline'
+import type { NoteImage } from '../core/note'
+import type * as ImageTools from '../core/image'
+import { cropForSave } from '../core/image'
+import { saveNote, writeNote, writeAttachment, removeAttachment } from '../shell/tauri'
+
+vi.mock('../core/image', async (original) => ({
+  ...(await original<typeof ImageTools>()),
+  cropForSave: vi.fn(),
+}))
 
 let editor: Editor | undefined
 // 只捕获真实 useEditor 返回的实例，编辑/序列化/组件 DOM 均使用项目实际实现。
@@ -32,6 +40,16 @@ let app: App
 beforeEach(() => {
   vi.resetAllMocks()
   vi.stubGlobal('matchMedia', () => ({ matches: true }))
+  vi.stubGlobal(
+    'URL',
+    class extends URL {
+      static createObjectURL = vi.fn(() => 'blob:isolated')
+      static revokeObjectURL = vi.fn()
+    },
+  )
+  vi.mocked(cropForSave).mockResolvedValue(new Blob(['cropped'], { type: 'image/png' }))
+  vi.mocked(writeAttachment).mockResolvedValue('附件/2026-10/新裁剪.png')
+  vi.mocked(removeAttachment).mockResolvedValue(undefined)
 })
 afterEach(() => {
   app?.unmount()
@@ -39,13 +57,14 @@ afterEach(() => {
   editor = undefined
   vi.unstubAllGlobals()
 })
-async function mount(body = '原始正文', editMode = true) {
+async function mount(body = '原始正文', editMode = true, pictures?: { files: JobImage[]; saved: NoteImage[] }) {
   const config = defaultConfig()
   const job: Job = {
     fileName: '旧标题.md',
     type: '文字',
     mode: '原文精修',
     steps: [],
+    images: pictures?.files,
     draft: {
       title: '旧标题',
       domainId: 1,
@@ -67,9 +86,9 @@ async function mount(body = '原始正文', editMode = true) {
       platform: '',
       author: '',
       created: '2026-10-23',
-      cover: '',
+      cover: pictures?.saved[0]?.path ?? '',
     },
-    images: [],
+    images: pictures?.saved ?? [],
     missing: 0,
     canOpen: false,
   }
@@ -103,6 +122,112 @@ async function mount(body = '原始正文', editMode = true) {
   }
   return { root, dirty, saved, save, setTitle, flush, editor: currentEditor, job }
 }
+async function cropFirst(root: HTMLElement) {
+  const button = root.querySelector<HTMLButtonElement>('.pic-tools button')
+  if (!button) throw new Error('编辑页没有裁剪入口')
+  button.click()
+  await nextTick()
+  const img = document.querySelector<HTMLImageElement>('.dialog .frame img')
+  const stage = document.querySelector<HTMLElement>('.dialog .stage')
+  if (!img || !stage) throw new Error('裁剪弹窗没有打开')
+  Object.defineProperties(stage, { clientWidth: { value: 600 }, clientHeight: { value: 500 } })
+  Object.defineProperties(img, { naturalWidth: { value: 400 }, naturalHeight: { value: 300 } })
+  img.dispatchEvent(new Event('load'))
+  await nextTick()
+  const left = document.querySelector<HTMLButtonElement>('.dialog .handle.w')
+  const done = document.querySelector<HTMLButtonElement>('.dialog .buttons button.primary')
+  if (!left || !done) throw new Error('缺少裁剪控件')
+  left.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', shiftKey: true, bubbles: true }))
+  done.click()
+  await nextTick()
+}
+function picture() {
+  return {
+    files: [{ file: new File(['original'], '原图.png', { type: 'image/png' }), noteImageIndex: 0 }],
+    saved: [{ path: '../附件/原图.png', caption: '原始说明' }],
+  }
+}
+it('编辑页仅裁剪图片也触发待保存，另存附件并同步正文与封面，原附件保留', async () => {
+  const pictures = picture()
+  const view = await mount('正文不变', true, pictures)
+  await cropFirst(view.root)
+  expect(view.save.disabled).toBe(false)
+  vi.mocked(saveNote).mockResolvedValue('为人处世/旧标题.md')
+  view.save.click()
+  await view.flush()
+  expect(cropForSave).toHaveBeenCalledWith(pictures.files[0].file, { x: 10, y: 0, w: 390, h: 300 })
+  const content = vi.mocked(saveNote).mock.calls[0][4]
+  expect(content).toContain('cover: "../附件/2026-10/新裁剪.png"')
+  expect(content).toContain('![原始说明](../附件/2026-10/新裁剪.png)')
+  expect(content).toContain('正文不变')
+  expect(pictures.saved[0].path).toBe('../附件/原图.png')
+  expect(removeAttachment).not.toHaveBeenCalled()
+  expect(view.save.disabled).toBe(true)
+})
+it('编辑页裁剪后笔记保存失败，清理新副本并保留原引用和待保存状态', async () => {
+  const pictures = picture()
+  const view = await mount('正文', true, pictures)
+  await cropFirst(view.root)
+  vi.mocked(saveNote).mockRejectedValue(new Error('模拟保存失败'))
+  view.save.click()
+  await view.flush()
+  expect(removeAttachment).toHaveBeenCalledWith('', '附件/2026-10/新裁剪.png')
+  expect(removeAttachment).toHaveBeenCalledTimes(1)
+  expect(pictures.saved[0].path).toBe('../附件/原图.png')
+  expect(view.dirty).toHaveBeenLastCalledWith(true)
+})
+it('前面的图片缺失时，裁剪后面的图片不替换错引用或说明', async () => {
+  const pictures = picture()
+  pictures.saved.unshift({ path: '../附件/缺失.png', caption: '缺失说明' })
+  pictures.files[0].noteImageIndex = 1
+  const view = await mount('正文', true, pictures)
+  await cropFirst(view.root)
+  vi.mocked(saveNote).mockResolvedValue('为人处世/旧标题.md')
+  view.save.click()
+  await view.flush()
+  const content = vi.mocked(saveNote).mock.calls[0][4]
+  expect(content).toContain('![缺失说明](../附件/缺失.png)')
+  expect(content).toContain('![原始说明](../附件/2026-10/新裁剪.png)')
+})
+it('裁剪保存期间的新正文继续待保存，后续只改文字不重复写图片', async () => {
+  const view = await mount('原始正文', true, picture())
+  await cropFirst(view.root)
+  let finish: (path: string) => void = () => {}
+  vi.mocked(saveNote).mockImplementationOnce(() => new Promise((resolve) => (finish = resolve)))
+  view.save.click()
+  await view.flush()
+  view.editor.commands.insertContent('保存期间新正文')
+  await nextTick()
+  finish('为人处世/旧标题.md')
+  await view.flush()
+  expect(view.save.disabled).toBe(false)
+  expect(vi.mocked(saveNote).mock.calls[0][4]).not.toContain('保存期间新正文')
+  vi.mocked(saveNote).mockResolvedValue('为人处世/旧标题.md')
+  view.save.click()
+  await view.flush()
+  expect(writeAttachment).toHaveBeenCalledTimes(1)
+  expect(vi.mocked(saveNote).mock.calls[1][4]).toContain('![原始说明](../附件/2026-10/新裁剪.png)')
+  expect(vi.mocked(saveNote).mock.calls[1][4]).toContain('保存期间新正文')
+  expect(view.save.disabled).toBe(true)
+})
+it('本次编辑中裁剪保存后恢复原图，再保存使用原始文件而不是重复裁剪', async () => {
+  const pictures = picture()
+  const view = await mount('正文', true, pictures)
+  await cropFirst(view.root)
+  vi.mocked(saveNote).mockResolvedValue('为人处世/旧标题.md')
+  view.save.click()
+  await view.flush()
+  const restore = view.root.querySelector<HTMLButtonElement>('.pic-tools button:nth-child(2)')
+  if (!restore) throw new Error('缺少恢复原图按钮')
+  restore.click()
+  await nextTick()
+  expect(view.save.disabled).toBe(false)
+  view.save.click()
+  await view.flush()
+  expect(cropForSave).toHaveBeenLastCalledWith(pictures.files[0].file, null)
+  expect(writeAttachment).toHaveBeenCalledTimes(2)
+  expect(view.save.disabled).toBe(true)
+})
 it('笔记保存只确认已提交的标题和正文，新编辑可继续保存', async () => {
   const view = await mount()
   await view.setTitle('提交标题')

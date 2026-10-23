@@ -95,7 +95,10 @@ const transcript = props.job.transcript ?? ''
 
 // ---------------- 图片（F29）----------------
 // 图片放在正文前面，按裁剪框显示；悬停时可以调整裁剪或恢复原图
-const pics = props.job.images ?? []
+const pics = reactive(props.job.images ?? [])
+let savedImages = props.edit?.images.map((img) => ({ ...img })) ?? []
+let savedCrops = pics.map((p) => (p.crop ? { ...p.crop } : null))
+let savedCover = props.edit?.meta.cover ?? ''
 const picUrls = pics.map((p) => URL.createObjectURL(p.file))
 const naturals = ref(pics.map(() => ({ w: 0, h: 0 })))
 function onPicLoad(i: number, e: Event) {
@@ -146,7 +149,8 @@ const editor = useEditor({
 // ---------------- 打开已有笔记：有没有改动 ----------------
 const bodyTick = ref(0)
 const snapshot = () =>
-  JSON.stringify([form.title, form.domainId, form.tags, form.keywords, form.summary]) + editorBody()
+  JSON.stringify([form.title, form.domainId, form.tags, form.keywords, form.summary, pics.map((p) => p.crop ?? null)]) +
+  editorBody()
 const baseline = ref<string | null>(null)
 // 只改属性时不让编辑器的格式规范化或不支持节点改写原文。
 let originalBody = start.body
@@ -346,6 +350,13 @@ const EXT: Record<string, string> = {
   'image/gif': 'gif',
 }
 
+async function writeImage(title: string, root: string, picture: { file: File; crop: Rect | null }, index: number) {
+  const blob = await cropForSave(picture.file, picture.crop)
+  const ext = EXT[blob.type] ?? picture.file.name.split('.').pop() ?? 'png'
+  const name = `${created}-${safeFileTitle(title).slice(0, 20)}-${index + 1}.${ext}`
+  return writeAttachment(root, created.slice(0, 7), name, blob)
+}
+
 /** 图片按裁剪框写进 附件/年-月/（方案第 10.4 节）。写不进去的跳过并记下，笔记照样保存 */
 async function writeImages(
   title: string,
@@ -355,13 +366,9 @@ async function writeImages(
   const images: NoteImage[] = []
   const written: string[] = []
   const failed: string[] = []
-  const base = safeFileTitle(title).slice(0, 20)
   for (const [i, p] of pictures.entries()) {
     try {
-      const blob = await cropForSave(p.file, p.crop ?? null)
-      const ext = EXT[blob.type] ?? p.file.name.split('.').pop() ?? 'png'
-      const name = `${created}-${base}-${i + 1}.${ext}`
-      const rel = await writeAttachment(root, created.slice(0, 7), name, blob)
+      const rel = await writeImage(title, root, p, i)
       written.push(rel)
       images.push({ path: `../${rel}`, caption: d.image_captions[i] ?? '' })
     } catch {
@@ -380,23 +387,43 @@ async function saveEdit(e: EditInfo) {
   const submittedSnapshot = snapshot()
   const submittedEditorBody = editorBody()
   const submittedBody = bodyToSave()
-  const md = buildMarkdown(
-    {
-      title,
-      domainId: form.domainId,
-      tags: form.tags,
-      keywords: form.keywords,
-      summary: form.summary.trim(),
-      body: submittedBody,
-      image_captions: [],
-    },
-    { ...e.meta, domain },
-    e.images,
-  )
+  const root = notesRoot(props.config)
+  const submitted: NoteDraft = {
+    title,
+    domainId: form.domainId,
+    tags: [...form.tags],
+    keywords: [...form.keywords],
+    summary: form.summary.trim(),
+    body: submittedBody,
+    image_captions: [],
+  }
+  const images = savedImages.map((img) => ({ ...img }))
+  const submittedCrops = pics.map((p) => (p.crop ? { ...p.crop } : null))
+  const pictures = pics.map((p, i) => ({
+    file: p.file,
+    crop: submittedCrops[i],
+    index: p.noteImageIndex ?? i,
+    changed: JSON.stringify(submittedCrops[i]) !== JSON.stringify(savedCrops[i]),
+  }))
+  const meta = { ...e.meta, domain, cover: savedCover }
+  const written: string[] = []
   try {
+    for (const p of pictures) {
+      if (!p.changed) continue
+      const previous = images[p.index]
+      const rel = await writeImage(title, root, p, p.index)
+      written.push(rel)
+      const path = `../${rel}`
+      images[p.index] = { ...previous, path }
+      if (meta.cover === previous.path) meta.cover = path
+    }
+    const md = buildMarkdown(submitted, meta, images)
     // 文件名跟着标题走；标题没改过就不动文件名（笔记可能重名时加过日期，或在 Obsidian 里改过名）
     const stem = title === savedTitle ? e.stem : safeFileTitle(title)
-    const rel = await saveNote(notesRoot(props.config), e.path, domain, stem, md)
+    const rel = await saveNote(root, e.path, domain, stem, md)
+    savedImages = images
+    savedCrops = submittedCrops
+    savedCover = meta.cover
     savedTitle = title
     baseline.value = submittedSnapshot
     originalBody = submittedBody
@@ -411,6 +438,8 @@ async function saveEdit(e: EditInfo) {
     )
     emit('updated', rel)
   } catch (err) {
+    // 只清理本次新建的副本，旧附件可能还被其他笔记引用。
+    for (const rel of written) await removeAttachment(root, rel).catch(() => {})
     saveError.value = saveFailure(String(err))
     failDialog.value = true
   }
@@ -553,12 +582,12 @@ onBeforeUnmount(() => {
             <div class="pic-crop" :style="cropView(i).box">
               <img
                 :src="picUrls[i]"
-                :alt="d.image_captions[i] ?? ''"
+                :alt="edit ? (edit.images[p.noteImageIndex ?? i]?.caption ?? '') : (d.image_captions[i] ?? '')"
                 :style="cropView(i).img"
                 @load="onPicLoad(i, $event)"
               />
             </div>
-            <div v-if="!edit" class="pic-tools">
+            <div class="pic-tools">
               <button v-press @click="cropping = i">调整裁剪</button>
               <button v-if="p.crop" v-press @click="p.crop = null">恢复原图</button>
             </div>

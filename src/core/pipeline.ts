@@ -39,6 +39,8 @@ export interface StepState {
 /** 一张图片：原文件、发给看图服务的压缩版、自动裁剪框和用户调整后的裁剪框（null 表示不裁） */
 export interface JobImage {
   file: File
+  /** 编辑已有笔记时，对应原图片列表的位置；缺失图片不在加载列表里。 */
+  noteImageIndex?: number
   aiUrl?: string
   autoCrop?: Rect | null
   crop?: Rect | null
