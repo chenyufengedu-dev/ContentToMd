@@ -60,6 +60,7 @@ const pendingPage = ref<Page | null>(null)
 /** 设置页有没保存的改动：切换页面前问“保存 / 放弃更改 / 取消” */
 const settings = ref<InstanceType<typeof SettingsPage>>()
 const settingsPending = ref(false)
+const settingsDomainBusy = ref(false)
 const askSettings = ref<Page | null>(null)
 const savingSettings = ref(false)
 async function saveSettingsAndGo() {
@@ -80,6 +81,10 @@ function discardSettingsAndGo() {
   if (to) navigate(to)
 }
 function navigate(p: Page) {
+  if (page.value === 'settings' && p !== 'settings' && settingsDomainBusy.value) {
+    toast('正在处理领域，请完成后再切换页面。', { kind: 'error' })
+    return
+  }
   if (page.value === 'settings' && p !== 'settings' && settingsPending.value) {
     askSettings.value = p
     return
@@ -159,6 +164,7 @@ async function onSaved(c: Config) {
         :first-run="firstRun"
         @saved="onSaved"
         @pending="(v) => (settingsPending = v)"
+        @domain-busy="(v) => (settingsDomainBusy = v)"
       />
       <div v-show="page === 'home'">
         <p v-if="vaultMissing" class="fatal">收藏库文件夹“{{ notesRoot(config) }}”找不到了，请到设置里重新选择。</p>
