@@ -1,5 +1,6 @@
 <script setup lang="ts">
 // 顶部居中的小提示条：在 App 最外层放一个，任何地方调用 toast('已保存。') 都会显示在这里（见 useToast.ts）
+import { vPress } from './pressFeedback'
 import { Check, CircleAlert } from './icons'
 import { current, dismiss } from './useToast'
 </script>
@@ -14,7 +15,7 @@ import { current, dismiss } from './useToast'
         aria-hidden="true"
       />
       <span>{{ current.text }}</span>
-      <button v-if="current.action" class="action" @click="(current.action.run(), dismiss())">
+      <button v-if="current.action" v-press class="action" @click="(current.action.run(), dismiss())">
         {{ current.action.label }}
       </button>
     </div>

@@ -7,17 +7,17 @@ import './icons.css'
  * 少数图标悬停时有动画（样式在 icons.css）。没重画的几个仍用 lucide，也从这里导出。
  * 下面的 SVG 片段都是源码里写死的常量，不含用户内容。
  */
-/** 深浅线只在这个尺寸以上显示；小图标里浅色线条显得发虚，统一当单色画 */
+/** 默认小图标使用单色；需要保持深浅线的编辑提示可明确指定 duotone。 */
 const DUO_MIN_SIZE = 20
 
 function icon(name: string, inner: string): Component {
   return defineComponent({
     name,
-    props: { size: { type: [Number, String], default: 16 } },
+    props: { size: { type: [Number, String], default: 16 }, duotone: Boolean },
     setup(props) {
       return () =>
         h('svg', {
-          class: Number(props.size) >= DUO_MIN_SIZE ? 'ai' : 'ai ai-mono',
+          class: props.duotone || Number(props.size) >= DUO_MIN_SIZE ? 'ai' : 'ai ai-mono',
           xmlns: 'http://www.w3.org/2000/svg',
           viewBox: '0 0 18 18',
           width: props.size,

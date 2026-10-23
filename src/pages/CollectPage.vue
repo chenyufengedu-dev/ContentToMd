@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // 投放页：放入内容 → 处理中 / 失败 → 确认页 → 保存成功（方案第 6、11 节）。
 // 一次只放一种内容：一个音视频文件、一个 MD / TXT 文件，或者 1～9 张图片（设计稿 设计稿/投放页/*.webp）
+import { vPress } from '../components/pressFeedback'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef } from 'vue'
 import {
   type Config,
@@ -314,9 +315,6 @@ const keepDraft = (withFiles = false) => job.value && void saveDraft(job.value, 
 const dropDraft = () => void clearDraft().catch(() => {})
 
 const autoPicked = computed(() => kind.value && mode.value === preselectMode(kind.value))
-const pickedHint = computed(() =>
-  kind.value === '图片' ? '已按截图自动选择' : kind.value ? `已按${kind.value}自动选择` : '',
-)
 
 /** 文件那一行的灰字：时长 · 大小，或者 字数 · 编码 */
 const itemInfo = computed(() =>
@@ -604,21 +602,27 @@ onBeforeUnmount(() => {
       <div v-if="pendingDraft && !hasContent" class="draft-line">
         <Clock :size="16" aria-hidden="true" />
         <span class="draft-text">有 1 条未保存的草稿：{{ draftLabel }}</span>
-        <button class="soft small" :class="{ danger: confirmingDrop }" @click="discardDraft">
+        <button
+          v-press="confirmingDrop ? 'tactile' : 'surface'"
+          class="soft small"
+          :class="{ danger: confirmingDrop }"
+          @click="discardDraft"
+        >
           {{ confirmingDrop ? '确认放弃' : '放弃' }}
         </button>
-        <button class="primary small" @click="resumeDraft">继续</button>
+        <button v-press="'tactile'" class="primary small" @click="resumeDraft">继续</button>
       </div>
       <template v-if="images.length">
         <div class="thumbs">
           <figure v-for="(img, i) in images" :key="img.url" class="thumb">
             <img :src="img.url" :alt="img.file.name" />
-            <button class="thumb-x" :aria-label="`移除 ${img.file.name}`" @click="removeImage(i)">
+            <button v-press="'icon'" class="thumb-x" :aria-label="`移除 ${img.file.name}`" @click="removeImage(i)">
               <X :size="12" />
             </button>
           </figure>
           <button
             v-if="images.length < MAX_IMAGES"
+            v-press="'ripple'"
             class="thumb thumb-add"
             :class="{ dragging }"
             aria-label="继续添加图片"
@@ -646,12 +650,20 @@ onBeforeUnmount(() => {
           <span class="item-name">{{ textFile?.name ?? file!.name }}</span>
           <span class="item-info">{{ itemInfo }}</span>
         </span>
-        <button class="icon-x" aria-label="移除" @click="clearContent()"><X :size="16" /></button>
+        <button
+          v-press="'icon'"
+          class="icon-x item-remove"
+          aria-label="移除文件"
+          title="移除文件"
+          @click="clearContent()"
+        >
+          <X :size="18" />
+        </button>
       </div>
 
-      <button v-else class="drop" :class="{ dragging }" @click="fileInput?.click()">
-        <FilePlus2 :size="48" aria-hidden="true" />
-        <span class="big">拖入或粘贴内容</span>
+      <button v-else v-press="'ripple'" class="drop" :class="{ dragging }" @click="fileInput?.click()">
+        <FilePlus2 class="drop-icon" :size="48" aria-hidden="true" />
+        <span class="big">{{ dragging ? '松开即可放入' : '拖入或粘贴内容' }}</span>
         <span class="kinds" aria-label="支持音视频、截图、md / txt、pdf / docx">
           <span v-for="k in SUPPORTED" :key="k.label" class="kind">
             <FileTypeIcon :kind="k.kind" :size="18" />{{ k.label }}
@@ -668,18 +680,18 @@ onBeforeUnmount(() => {
       />
       <p v-for="e in errors" :key="e" class="notice">
         <CircleAlert :size="15" aria-hidden="true" /><span>{{ e }}</span>
-        <button class="icon-x" aria-label="关闭提示" @click="errors = errors.filter((x) => x !== e)">
+        <button v-press="'icon'" class="icon-x" aria-label="关闭提示" @click="errors = errors.filter((x) => x !== e)">
           <X :size="14" />
         </button>
       </p>
 
       <label class="field">
-        <span class="field-label">来源</span>
+        <span class="field-label">来源链接<span class="optional"> · 选填</span></span>
         <span class="input link-input">
           <Link2 v-if="!source" :size="16" aria-hidden="true" />
           <input
             v-model="source"
-            placeholder="粘贴链接或分享文字（选填）"
+            placeholder="粘贴链接或分享文字"
             spellcheck="false"
             @paste="onSourcePaste"
             @input="onSourceInput"
@@ -689,7 +701,7 @@ onBeforeUnmount(() => {
       <p v-if="share" class="share">
         <span>{{ [share.platform, share.author && `@${share.author}`].filter(Boolean).join(' · ') }}</span>
         <span class="share-from">已从分享文字识别</span>
-        <button class="link" @click="restoreShareText">改回原文</button>
+        <button v-press class="link" @click="restoreShareText">改回原文</button>
       </p>
 
       <div class="field">
@@ -698,6 +710,7 @@ onBeforeUnmount(() => {
           <button
             v-for="m in MODES"
             :key="m"
+            v-press
             class="mode"
             :class="{ on: mode === m }"
             :aria-pressed="mode === m"
@@ -705,12 +718,12 @@ onBeforeUnmount(() => {
           >
             <component :is="MODE_ICONS[m]" :size="16" aria-hidden="true" />{{ m }}
           </button>
-          <span v-if="autoPicked" class="hint">{{ pickedHint }}</span>
+          <span v-if="autoPicked" class="hint">已根据文件类型自动选择</span>
         </div>
       </div>
 
       <label class="field">
-        <span class="field-label">本次要求（选填）</span>
+        <span class="field-label">本次要求<span class="optional"> · 选填</span></span>
         <span class="input textarea">
           <textarea
             v-model="request"
@@ -730,11 +743,16 @@ onBeforeUnmount(() => {
       </p>
       <p v-if="missingService && hasContent" class="notice">
         <CircleAlert :size="15" aria-hidden="true" /><span>还没有配置{{ missingService }}，请先到设置中填写。</span>
-        <button class="link" @click="emit('goSettings')">去设置</button>
+        <button v-press class="link" @click="emit('goSettings')">去设置</button>
       </p>
 
       <div class="actions">
-        <button class="primary start" :disabled="!hasContent || !!missingService || !!lengthNotice" @click="start">
+        <button
+          v-press="'tactile'"
+          class="primary start"
+          :disabled="!hasContent || !!missingService || !!lengthNotice"
+          @click="start"
+        >
           开始处理 <span class="muted-on-primary">Ctrl+Enter</span>
         </button>
       </div>
@@ -814,7 +832,7 @@ onBeforeUnmount(() => {
   color: var(--err);
 }
 
-/* ---- 空白时的投放区：浅灰底，无边框 ---- */
+/* ---- 空白时的投放区：悬停浅靛蓝，拖入时显示细虚线 ---- */
 .drop {
   width: 100%;
   height: auto;
@@ -833,7 +851,15 @@ onBeforeUnmount(() => {
 }
 .drop:hover:not(:disabled),
 .drop.dragging {
-  background: var(--hover);
+  background: var(--accent-soft);
+}
+.drop.dragging {
+  outline: 1px dashed var(--accent);
+  outline-offset: -1px;
+}
+.drop:hover:not(:disabled) .drop-icon,
+.drop.dragging .drop-icon {
+  color: var(--accent);
 }
 .drop .big {
   margin-top: var(--sp-2);
@@ -879,8 +905,6 @@ onBeforeUnmount(() => {
   gap: var(--sp-2);
   height: 32px;
   padding: 0 var(--sp-3);
-  border-radius: var(--radius-md);
-  background: var(--card);
 }
 .item-text {
   flex: 1;
@@ -916,6 +940,27 @@ onBeforeUnmount(() => {
 .icon-x:hover:not(:disabled) {
   background: var(--hover);
   color: var(--fg);
+}
+.item-remove {
+  position: relative;
+  width: calc(var(--h-md) + var(--sp-2));
+  height: calc(var(--h-md) + var(--sp-2));
+}
+.item-remove::before {
+  content: '';
+  position: absolute;
+  inset: calc((var(--h-md) + var(--sp-2) - var(--file-remove-hover-size)) / 2);
+  border-radius: var(--radius-sm);
+  pointer-events: none;
+}
+.item-remove:hover:not(:disabled) {
+  background: none;
+}
+.item-remove:hover:not(:disabled)::before {
+  background: var(--hover);
+}
+.item-remove > svg {
+  position: relative;
 }
 
 /* ---- 已放入的图片 ---- */
@@ -997,6 +1042,10 @@ onBeforeUnmount(() => {
   margin-bottom: var(--sp-2);
   font-size: var(--fs-sm);
   color: var(--muted);
+}
+.optional {
+  font-size: var(--fs-xs);
+  color: var(--faint);
 }
 .input {
   display: flex;
@@ -1089,12 +1138,11 @@ onBeforeUnmount(() => {
   background: var(--card);
   color: var(--accent);
   font-weight: var(--fw-label);
-  box-shadow:
-    0 0 0 1px var(--line),
-    var(--shadow-card);
+  box-shadow: var(--shadow-card);
 }
 .modes .hint {
-  margin-left: var(--sp-2);
+  margin-left: var(--sp-4);
+  font-size: var(--fs-xs);
 }
 
 .actions {
@@ -1103,7 +1151,7 @@ onBeforeUnmount(() => {
   margin-top: var(--sp-4);
 }
 .muted-on-primary {
-  margin-left: var(--sp-1);
+  margin-left: var(--sp-3);
   opacity: 0.7;
   font-size: var(--fs-xs);
   font-weight: 400;

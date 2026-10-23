@@ -1,6 +1,7 @@
 <script setup lang="ts" generic="T extends string | number">
 // 自绘下拉框：系统自带的下拉列表样式改不了，和页面格格不入。支持键盘：上下选择、回车确定、Esc 关闭。
 // 列表挂到页面最外层、按按钮的位置浮出来：放在卡片里时不会被卡片边缘切掉，也不会被下一张卡片盖住
+import { vPress } from './pressFeedback'
 import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
 import { Check, ChevronDown } from './icons'
 
@@ -26,7 +27,7 @@ function follow(below: boolean) {
   if (r)
     menuStyle.value = {
       left: `${r.left}px`,
-      minWidth: `${r.width}px`,
+      width: `${r.width}px`,
       ...(below ? { top: `${r.bottom}px` } : { bottom: `${window.innerHeight - r.top}px` }),
     }
   frame = requestAnimationFrame(() => follow(below))
@@ -91,6 +92,7 @@ onBeforeUnmount(close)
 <template>
   <div ref="root" class="select" :class="[size ?? 'md', { open }]">
     <button
+      v-press
       type="button"
       class="trigger"
       :aria-label="ariaLabel"
@@ -107,13 +109,14 @@ onBeforeUnmount(close)
         <li
           v-for="(o, i) in options"
           :key="String(o.value)"
+          v-press
           role="option"
           :aria-selected="o.value === model"
           :class="{ highlighted: i === highlighted }"
           @pointerenter="highlighted = i"
           @click="choose(i)"
         >
-          <span>{{ o.label }}</span>
+          <span :title="o.label">{{ o.label }}</span>
           <Check v-if="o.value === model" :size="16" aria-hidden="true" />
         </li>
       </ul>
@@ -174,8 +177,9 @@ onBeforeUnmount(close)
 }
 .menu {
   position: fixed;
+  box-sizing: border-box;
   z-index: 60; /* 比提示框的遮罩（50）高：提示框里也能用 */
-  max-height: 320px;
+  max-height: var(--select-menu-max-height);
   margin: var(--sp-1) 0;
   overflow-y: auto;
   padding: var(--sp-1);
@@ -197,6 +201,14 @@ onBeforeUnmount(close)
   color: var(--fg);
   cursor: pointer;
   white-space: nowrap;
+}
+.menu li > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.menu li > svg {
+  flex: none;
 }
 .menu li.highlighted {
   background: var(--hover);

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // 收藏库页（F21，设计稿：设计稿/收藏库页/基准.webp）：左边按领域、标签筛选，顶部搜索，右边方块卡片。
 // 只显示设置里选中的存放文件夹里、各领域文件夹下的笔记。方块和列表两种显示，记住上次选的
+import { vPress } from '../components/pressFeedback'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { CircleAlert, Folder, Hash, Inbox, LayoutGrid, List, Search, X } from '../components/icons'
 import { type Config, notesRoot } from '../core/config'
@@ -115,12 +116,12 @@ defineExpose({ load })
       <p class="group-label">领域</p>
       <ul class="domains">
         <li>
-          <button class="domain" :aria-pressed="domain === null" @click="chooseDomain(null)">
+          <button v-press class="domain" :aria-pressed="domain === null" @click="chooseDomain(null)">
             <span>全部</span><span class="count">{{ notes.length }}</span>
           </button>
         </li>
         <li v-for="d in domains" :key="d.name">
-          <button class="domain" :aria-pressed="domain === d.name" @click="chooseDomain(d.name)">
+          <button v-press class="domain" :aria-pressed="domain === d.name" @click="chooseDomain(d.name)">
             <span>{{ d.name }}</span
             ><span class="count">{{ d.count }}</span>
           </button>
@@ -133,7 +134,9 @@ defineExpose({ load })
           <button
             v-for="t in tagList"
             :key="t.name"
+            v-press
             class="tag"
+            :title="t.name"
             :aria-pressed="tags.includes(t.name)"
             @click="toggleTag(t.name)"
           >
@@ -148,17 +151,19 @@ defineExpose({ load })
         <label class="search">
           <Search :size="16" aria-hidden="true" />
           <!-- 正在用的筛选条件：领域和标签颜色不同，点 × 取消这个条件 -->
-          <span v-if="domain !== null" class="chip chip-domain">
-            <Folder :size="13" aria-hidden="true" />{{ domain }}
-            <button type="button" :aria-label="`取消领域筛选：${domain}`" @click.prevent="chooseDomain(null)">
-              <X :size="12" aria-hidden="true" />
-            </button>
-          </span>
-          <span v-for="t in tags" :key="t" class="chip chip-tag">
-            <Hash :size="12" aria-hidden="true" />{{ t }}
-            <button type="button" :aria-label="`取消标签筛选：${t}`" @click.prevent="toggleTag(t)">
-              <X :size="12" aria-hidden="true" />
-            </button>
+          <span v-if="domain !== null || tags.length" class="filter-chips" aria-label="已选筛选条件">
+            <span v-if="domain !== null" class="chip chip-domain">
+              <Folder :size="13" aria-hidden="true" />{{ domain }}
+              <button v-press type="button" :aria-label="`取消领域筛选：${domain}`" @click.prevent="chooseDomain(null)">
+                <X :size="12" aria-hidden="true" />
+              </button>
+            </span>
+            <span v-for="t in tags" :key="t" class="chip chip-tag">
+              <Hash :size="12" aria-hidden="true" />{{ t }}
+              <button v-press type="button" :aria-label="`取消标签筛选：${t}`" @click.prevent="toggleTag(t)">
+                <X :size="12" aria-hidden="true" />
+              </button>
+            </span>
           </span>
           <input
             v-model="query"
@@ -169,21 +174,36 @@ defineExpose({ load })
           />
           <button
             v-if="(domain !== null ? 1 : 0) + tags.length >= 2"
+            v-press
             type="button"
             class="clear-all"
             @click.prevent="clearFilters"
           >
             清除条件
           </button>
-          <button v-if="query" class="clear" aria-label="清除搜索" @click="query = ''">
+          <button v-if="query" v-press class="clear" aria-label="清除搜索" @click="query = ''">
             <X :size="14" aria-hidden="true" />
           </button>
         </label>
         <div class="views" role="radiogroup" aria-label="显示方式">
-          <button class="view" role="radio" :aria-checked="view === 'list'" title="列表显示" @click="setView('list')">
+          <button
+            v-press
+            class="view"
+            role="radio"
+            :aria-checked="view === 'list'"
+            title="列表显示"
+            @click="setView('list')"
+          >
             <List :size="16" aria-hidden="true" />
           </button>
-          <button class="view" role="radio" :aria-checked="view === 'grid'" title="方块显示" @click="setView('grid')">
+          <button
+            v-press
+            class="view"
+            role="radio"
+            :aria-checked="view === 'grid'"
+            title="方块显示"
+            @click="setView('grid')"
+          >
             <LayoutGrid :size="16" aria-hidden="true" />
           </button>
         </div>
@@ -194,17 +214,17 @@ defineExpose({ load })
       <div v-else-if="loadError" class="empty">
         <CircleAlert :size="40" aria-hidden="true" />
         <p>{{ loadError }}</p>
-        <button class="primary" @click="emit('goSettings')">去设置里重新选择</button>
+        <button v-press="'tactile'" class="primary" @click="emit('goSettings')">去设置里重新选择</button>
       </div>
       <div v-else-if="!notes.length" class="empty">
         <Inbox :size="40" aria-hidden="true" />
         <p>还没有收藏</p>
-        <button class="primary" @click="emit('goHome')">去放入第一条</button>
+        <button v-press="'tactile'" class="primary" @click="emit('goHome')">去放入第一条</button>
       </div>
       <div v-else-if="!shown.length" class="empty">
         <p v-if="query">没有找到包含“{{ query }}”的收藏</p>
         <p v-else>这里还没有收藏</p>
-        <button v-if="query" class="link-quiet" @click="query = ''">清除搜索</button>
+        <button v-if="query" v-press class="link-quiet" @click="query = ''">清除搜索</button>
       </div>
       <template v-else>
         <div v-if="view === 'list'" class="list">
@@ -252,10 +272,11 @@ defineExpose({ load })
   align-self: start;
 }
 .group-label {
-  margin: 0 0 var(--sp-2);
+  margin: 0 0 var(--sp-4);
   padding-left: var(--px-sm);
-  font-size: var(--fs-sm);
-  color: var(--faint);
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-heading);
+  color: var(--fg);
 }
 .domains {
   margin: 0;
@@ -299,10 +320,15 @@ hr {
   display: flex;
   flex-wrap: wrap;
   gap: var(--sp-2);
+  padding-left: var(--px-sm);
 }
 .tag {
   height: var(--h-sm);
-  padding: 0 var(--px-sm);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 var(--sp-3);
   border: 0;
   border-radius: var(--radius-pill);
   background: var(--card); /* 浅灰页面上用白底才看得出是一个个胶囊 */
@@ -321,19 +347,19 @@ hr {
 
 /* ---- 右边 ---- */
 .toolbar {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 6ch;
   align-items: center;
   gap: var(--sp-4);
   margin-bottom: var(--sp-5);
 }
 .search {
-  flex: 1;
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: var(--sp-2);
-  min-height: var(--h-md);
-  padding: 4px var(--px-sm);
+  min-width: 0;
+  height: var(--h-md);
+  padding: var(--sp-1) var(--px-sm);
   border-radius: var(--radius-md);
   background: var(--card);
   color: var(--faint);
@@ -344,9 +370,24 @@ hr {
     0 0 0 1px var(--accent),
     0 0 0 4px var(--accent-soft);
 }
+.filter-chips {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  max-width: 50%;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.filter-chips::-webkit-scrollbar {
+  display: none;
+}
+.filter-chips .chip {
+  flex: none;
+}
 .search input {
   flex: 1;
-  min-width: 8em;
+  min-width: 4em;
   height: 24px;
   border: 0;
   outline: none;
@@ -393,6 +434,7 @@ hr {
   background: color-mix(in srgb, currentColor 14%, transparent);
 }
 .clear-all {
+  flex: none;
   height: 24px;
   padding: 0 var(--sp-3);
   border: 0;
@@ -404,6 +446,7 @@ hr {
   color: var(--fg);
 }
 .clear {
+  flex: none;
   display: grid;
   place-items: center;
   width: var(--h-xs);
@@ -453,7 +496,7 @@ hr {
   box-shadow: var(--shadow-card);
 }
 .list > * + * {
-  box-shadow: inset 0 1px 0 var(--line);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--line) 60%, transparent);
 }
 .sentinel {
   height: 1px;

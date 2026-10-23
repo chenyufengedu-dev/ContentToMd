@@ -4,6 +4,7 @@
 // “领域 · 日期”那一行往下滑开并淡出，摘录的第二行从左往右一点点写出来占住它的位置，缩略图变清楚并放大，旁边出现 ↗。
 // 摘录“变多”不改行数（会重新排版）：两行的摘录一直在，平时用遮罩只露第一行，抽出时第二行的遮罩从左往右拉开。
 // 写出来要慢一点才看得出“逐步”，所以单独用一段 0.5 秒的动画，不跟弹簧走
+import { vPress } from './pressFeedback'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { animate, motionValue } from 'motion'
 import { ArrowUpRight } from './icons'
@@ -89,6 +90,7 @@ watch(thumbUrl, () => apply(now()), { flush: 'post' })
 <template>
   <button
     ref="row"
+    v-press="'ripple'"
     class="note-row"
     :aria-label="`${num} ${note.title}，打开文档`"
     @pointerenter="pull(true)"
@@ -161,14 +163,14 @@ watch(thumbUrl, () => apply(now()), { flush: 'post' })
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: var(--sp-5);
+  gap: var(--sp-4);
   transform-origin: left center;
 }
 /* 序号和方块卡片一样用 Segoe UI 粗体（苹方在作者电脑上没有粗体文件） */
 .num {
   position: relative;
   flex: none;
-  width: 2.2em;
+  width: 1.8em;
   font-family: 'Segoe UI', 'PingFang SC', sans-serif;
   font-size: var(--fs-xl);
   font-weight: 700;

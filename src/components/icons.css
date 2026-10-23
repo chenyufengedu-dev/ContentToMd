@@ -133,7 +133,7 @@
   }
   :is(button, a, [data-ai-hover]):hover .ai .bar5 {
     animation-name: ai-bars;
-    animation-delay: 0.24s;
+    animation-delay: var(--icon-shoot-delay);
   }
   :is(button, a, [data-ai-hover]):hover .ai .mic-cap {
     animation-name: ai-mic;
@@ -159,6 +159,11 @@
   }
   :is(button, a, [data-ai-hover]):hover .ai .shoot {
     animation-name: ai-shoot;
+  }
+  /* 收藏卡片的箭头先显现，再播放向右上轻移和回位，避免只看见回程。 */
+  :is(.note-row, .note-card):hover .ai .shoot {
+    animation-delay: var(--icon-shoot-delay);
+    animation-timing-function: var(--motion-ease-out);
   }
   :is(button, a, [data-ai-hover]):hover .ai .undo-head {
     animation-name: ai-head-l;

@@ -2,6 +2,7 @@
 // 处理中 / 失败（设计稿：设计稿/处理状态和设置页/定稿-处理中-*.webp）。
 // 左边一个缩略图大小的预览框：整理前是笔记骨架加一道很淡的光泽；整理时 AI 生成的文字一个字一个字打出来，
 // 骨架被文字挤下去。右边是文件信息和步骤：已完成绿色虚线小圆环，进行中灰色虚线小圆环在转，没开始的不转
+import { vPress } from './pressFeedback'
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import FileTypeIcon from './FileTypeIcon.vue'
 import { kindOfName, type FileKind } from './fileKind'
@@ -87,8 +88,8 @@ function elapsed(s: { startedAt?: number; endedAt?: number }) {
 <template>
   <div class="proc">
     <!-- 左：预览框 -->
-    <div class="frame">
-      <div class="sheet">
+    <div class="frame note-preview-frame">
+      <div class="sheet note-preview-sheet">
         <div v-if="typed" ref="typingEl" class="typing" :class="{ overflowing }">
           <p class="typed">{{ typed }}<span v-if="!failed" class="caret" /></p>
         </div>
@@ -118,10 +119,10 @@ function elapsed(s: { startedAt?: number; endedAt?: number }) {
       <ol class="steps">
         <li v-for="s in visibleSteps" :key="s.id" class="step" :class="s.status">
           <svg class="ring" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6" /></svg>
-          <span class="step-name">{{ STEP_LABELS[s.id] }}</span>
+          <span class="step-name">{{ s.status === 'running' ? `正在${STEP_LABELS[s.id]}` : STEP_LABELS[s.id] }}</span>
           <span class="step-time">{{
             s.status === 'running'
-              ? [s.note, elapsed(s)].filter(Boolean).join(' · ')
+              ? [s.note, s.startedAt ? `已用时 ${elapsed(s)}` : ''].filter(Boolean).join(' · ')
               : s.status === 'failed'
                 ? '失败'
                 : s.status === 'done'
@@ -139,15 +140,15 @@ function elapsed(s: { startedAt?: number; endedAt?: number }) {
           <pre>{{ error.detail }}</pre>
         </details>
         <div class="buttons">
-          <button v-if="isAuthError" class="primary" @click="emit('goSettings')">去设置</button>
-          <button v-else-if="canRetry" class="primary" @click="emit('retry')">重试</button>
-          <button :class="canRetry || isAuthError ? 'soft' : 'primary'" @click="emit('back')">返回修改</button>
+          <button v-if="isAuthError" v-press="'tactile'" class="primary" @click="emit('goSettings')">去设置</button>
+          <button v-else-if="canRetry" v-press="'tactile'" class="primary" @click="emit('retry')">重试</button>
+          <button v-press :class="canRetry || isAuthError ? 'soft' : 'primary'" @click="emit('back')">返回修改</button>
         </div>
       </template>
       <template v-else>
-        <p class="hint">通常需要 20～40 秒，完成后自动进入确认</p>
+        <p class="hint wait-hint">通常需要 20～40 秒，完成后会自动进入确认页。</p>
         <div class="buttons">
-          <button class="soft" @click="emit('cancel')">取消</button>
+          <button v-press class="soft" @click="emit('cancel')">取消</button>
         </div>
       </template>
     </div>
@@ -166,25 +167,8 @@ function elapsed(s: { startedAt?: number; endedAt?: number }) {
 }
 
 /* ---- 预览框：一圈厚而淡的灰边，像缩略图的相框 ---- */
-.frame {
-  position: relative;
-  flex: none;
-  width: 400px;
-  height: 260px;
-  padding: 6px;
-  border-radius: 20px;
-  background: var(--hover);
-}
 .sheet {
-  height: 100%;
-  box-sizing: border-box;
-  padding: var(--sp-5);
-  display: flex;
-  flex-direction: column;
   gap: var(--sp-4);
-  border-radius: 14px;
-  background: var(--card);
-  overflow: hidden;
 }
 /* 打出来的字：框满后贴着底部，旧的行往上移出去，顶部渐隐 */
 .typing {
@@ -282,10 +266,6 @@ function elapsed(s: { startedAt?: number; endedAt?: number }) {
   align-items: center;
   gap: var(--sp-2);
   padding: var(--sp-2) var(--sp-3);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--card);
-  box-shadow: var(--shadow-card);
   font-size: var(--fs-xs);
   color: var(--fg);
   white-space: nowrap;
@@ -355,7 +335,7 @@ function elapsed(s: { startedAt?: number; endedAt?: number }) {
 }
 .step {
   display: grid;
-  grid-template-columns: 14px 88px auto;
+  grid-template-columns: 14px max-content 1fr;
   align-items: center;
   gap: var(--sp-2);
   color: var(--faint);
@@ -372,6 +352,7 @@ function elapsed(s: { startedAt?: number; endedAt?: number }) {
   stroke-dasharray: 2.2 2.5;
 }
 .step-time {
+  margin-left: var(--sp-2);
   font-size: var(--fs-sm);
   color: var(--faint);
 }
@@ -395,6 +376,9 @@ function elapsed(s: { startedAt?: number; endedAt?: number }) {
   margin: var(--sp-3) 0 0;
   font-size: var(--fs-sm);
   color: var(--faint);
+}
+.wait-hint {
+  font-size: var(--fs-xs);
 }
 .fail-reason {
   color: var(--err);

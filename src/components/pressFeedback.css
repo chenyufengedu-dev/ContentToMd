@@ -1,0 +1,36 @@
+:root {
+  --press-down: 60ms;
+  --press-release: 190ms;
+  --press-surface-down: 40ms;
+  --press-surface-release: 140ms;
+  --press-icon-release: 150ms;
+  --press-ripple-time: 460ms;
+  --press-scale: 0.985;
+  --press-rebound: 1.002;
+  --press-icon-scale: 0.94;
+  --press-ripple-opacity: 0.12;
+  --press-state-color: color-mix(in srgb, var(--fg-strong) 8%, transparent);
+}
+:where([data-press-feedback]) {
+  position: relative;
+}
+.press-content {
+  display: inline-block;
+}
+.press-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+}
+.press-surface {
+  background: var(--press-state-color);
+}
+.press-wave {
+  position: absolute;
+  border-radius: var(--radius-pill);
+  background: currentColor;
+  pointer-events: none;
+}

@@ -4,6 +4,16 @@
  * 作者选定后写进 docs/设计规范.md，再把这里的默认值改成选定的值。
  */
 :root {
+  --brand-logo-size: 28px;
+  --brand-font-size: 22px;
+  --brand-baseline-offset: 4.2px;
+  --file-remove-hover-size: 33px;
+  --note-preview-width: 400px;
+  --note-preview-height: 260px;
+  --icon-shoot-delay: 240ms;
+  --motion-ease-out: cubic-bezier(0.2, 0, 0, 1);
+  --select-menu-max-height: 280px;
+  --settings-folder-width: 560px;
   /* ---- 主色（调节页：主色） ---- */
   --primary: #1f2937;
   --primary-hover: color-mix(in srgb, #1f2937 86%, black);
@@ -39,6 +49,7 @@
   --new: #f0524f; /* “新标签”角标 */
   --ok: #1a7f4b;
   --err: #d14343;
+  --err-hover: color-mix(in srgb, var(--err) 92%, black);
   --warn: #b25e09;
   --tag: #2b8577; /* 标签的颜色（青绿），领域用强调色 */
   --attention: #f59e0b; /* 提醒用的亮橙色小点（比如价格改了还没保存） */
@@ -63,6 +74,7 @@
   --fs-xs: 11px; /* 辅助信息 */
   --fs-sm: 12px; /* 标签、说明 */
   --fs-md: 13px; /* 界面默认：按钮、输入框、属性 */
+  --fs-action: 14px; /* 普通操作与返回入口 */
   --fs-lg: 15px; /* 正文、摘要 */
   --fs-xl: 18px; /* 正文小标题 */
   --fs-2xl: 26px; /* 笔记标题 */
@@ -86,7 +98,7 @@
   --h-sm: 28px; /* 标签、关键词 */
   --h-md: 36px; /* 按钮、输入框、下拉框 */
 
-  --titlebar-h: 44px;
+  --titlebar-h: 52px;
   --ease: 180ms cubic-bezier(0.2, 0, 0, 1);
 
   /* 苹方优先（作者电脑已装），没装的电脑退回微软雅黑 */
@@ -154,6 +166,12 @@ button.primary {
 }
 button.primary:hover:not(:disabled) {
   background: var(--primary-hover);
+}
+button.primary:disabled {
+  background: var(--hover);
+  border-color: transparent;
+  color: var(--faint);
+  opacity: 1;
 }
 button.link {
   height: auto;
@@ -230,4 +248,25 @@ button.link.danger {
     transform: translateX(48px);
     opacity: 0;
   }
+}
+
+/* 处理中和保存成功共用的笔记相框。 */
+.note-preview-frame {
+  position: relative;
+  flex: none;
+  width: var(--note-preview-width);
+  height: var(--note-preview-height);
+  padding: var(--sp-1);
+  border-radius: var(--sp-5);
+  background: var(--hover);
+}
+.note-preview-sheet {
+  height: 100%;
+  box-sizing: border-box;
+  padding: var(--sp-5);
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--panel-radius);
+  background: var(--card);
+  overflow: hidden;
 }
