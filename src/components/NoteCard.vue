@@ -8,6 +8,7 @@
 // 领域往下挪到标签的位置，清楚的那层淡入、图片弹一下，右上角 ↗ 弹出来。快速来回时弹簧带着速度转向，不会顿。
 // 轻量：模糊那层固定不动（封面用提前模糊好的图，正文只模糊一次），动的只是叠在上面的清楚层的透明度；列表里只放缩略图
 // 平时卡片是普通静态画面，只有正在动的那张才交给显卡（is-live），停稳后还回去
+import { vPress } from './pressFeedback'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ArrowUpRight } from './icons'
 import { cardDate, previewLines, type LibraryNote } from '../core/library'
@@ -86,6 +87,7 @@ watch(thumbUrl, () => apply(now()), { flush: 'post' })
 <template>
   <button
     ref="card"
+    v-press="'ripple'"
     class="note-card"
     :aria-label="`${num} ${note.title}，打开文档`"
     @pointerenter="pull(true)"
@@ -134,7 +136,7 @@ watch(thumbUrl, () => apply(now()), { flush: 'post' })
 <style scoped>
 /* 像一张竖着的文档（3:4）；外面一圈粗边框 */
 .note-card {
-  --ring: var(--sp-1);
+  --ring: calc(var(--sp-4) / 4);
   position: relative;
   display: block;
   width: 100%;

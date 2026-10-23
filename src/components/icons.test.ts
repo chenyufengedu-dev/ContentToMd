@@ -42,6 +42,15 @@ describe('图标', () => {
     expect(await render(icons.FilePlus2, { size: 48 })).toContain('class="ai"')
   })
 
+  it('编辑提示可以在不同尺寸下明确保留深浅线', async () => {
+    for (const size of [16, 20]) {
+      const html = await render(icons.Pencil, { size, duotone: true })
+      expect(html).toContain('class="ai"')
+      expect(html).toContain(`width="${size}"`)
+      expect(html).not.toContain('ai-mono')
+    }
+  })
+
   it('作者、话筒、音频、视频是四个不同的图标', async () => {
     const htmls = await Promise.all([icons.User, icons.Mic, icons.AudioLines, icons.Video].map((i) => render(i)))
     expect(new Set(htmls).size).toBe(4)

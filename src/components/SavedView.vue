@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // 保存成功（设计稿：设计稿/保存成功/定稿-保存成功.webp）。和处理中成一对：
 // 左边同一个预览框，放这条笔记的真实文字缩略预览；右边“已保存”、文件名、所在文件夹和两个按钮
+import { vPress } from './pressFeedback'
 import { computed } from 'vue'
 import { Check, CircleAlert, Coins, ExternalLink, Folder } from './icons'
 import type { SavedNote } from '../pages/ConfirmPage.vue'
@@ -30,8 +31,8 @@ const lines = computed(() =>
 
 <template>
   <div class="saved">
-    <div class="frame">
-      <div class="sheet">
+    <div class="frame note-preview-frame">
+      <div class="sheet note-preview-sheet">
         <p class="pv-title">{{ note.title }}</p>
         <p v-if="note.summary" class="pv-summary">{{ note.summary }}</p>
         <div class="pv-body">
@@ -43,7 +44,11 @@ const lines = computed(() =>
     <div class="status">
       <p class="done"><Check :size="14" aria-hidden="true" />已保存</p>
       <p class="file-name" :title="fileName">{{ fileName }}</p>
-      <p class="folder"><Folder :size="14" aria-hidden="true" />{{ folder }}</p>
+      <p class="folder" :title="folder">
+        <Folder :size="14" aria-hidden="true" />
+        <span class="folder-location">{{ [location, ...parts.slice(0, -2)].join(' / ') }}</span>
+        <span class="folder-domain">/ {{ parts.at(-2) }}</span>
+      </p>
       <p v-if="cost !== undefined" class="cost">
         <Coins :size="14" aria-hidden="true" />本条花费{{ formatYuan(cost) }}
       </p>
@@ -56,10 +61,13 @@ const lines = computed(() =>
       </div>
 
       <div class="buttons">
-        <button class="soft" @click="emit('open')"><ExternalLink :size="14" aria-hidden="true" />打开文档</button>
-        <button class="primary" @click="emit('next')">继续收藏</button>
+        <button v-press class="soft" @click="emit('open')">
+          <ExternalLink :size="14" aria-hidden="true" />打开文档
+        </button>
+        <button v-press="'tactile'" class="primary" @click="emit('next')">
+          继续收藏<span class="kbd">Ctrl+Enter</span>
+        </button>
       </div>
-      <p class="kbd-hint">Ctrl+Enter 继续收藏</p>
     </div>
   </div>
 </template>
@@ -76,24 +84,6 @@ const lines = computed(() =>
 }
 
 /* ---- 预览框：和处理中同一个相框 ---- */
-.frame {
-  flex: none;
-  width: 400px;
-  height: 260px;
-  padding: 6px;
-  border-radius: 20px;
-  background: var(--hover);
-}
-.sheet {
-  height: 100%;
-  box-sizing: border-box;
-  padding: var(--sp-5);
-  border-radius: 14px;
-  display: flex;
-  flex-direction: column;
-  background: var(--card);
-  overflow: hidden;
-}
 .sheet p {
   margin: 0;
 }
@@ -169,6 +159,20 @@ const lines = computed(() =>
   font-size: var(--fs-sm);
   color: var(--faint);
 }
+.folder-location {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.folder-domain {
+  flex: none;
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
 .folder svg,
 .cost svg {
   flex: none;
@@ -203,10 +207,12 @@ const lines = computed(() =>
 }
 .buttons button {
   flex: 1;
+  padding: 0 var(--px-sm);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: var(--sp-2);
+  white-space: nowrap;
 }
 .soft {
   border: 0;
@@ -215,11 +221,10 @@ const lines = computed(() =>
 .soft:hover:not(:disabled) {
   background: var(--line);
 }
-.kbd-hint {
-  margin-top: var(--sp-2) !important;
-  text-align: center;
+.kbd {
   font-size: var(--fs-xs);
-  color: var(--faint);
+  font-weight: 400;
+  opacity: 0.7;
 }
 .open-err {
   margin-top: var(--sp-2) !important;

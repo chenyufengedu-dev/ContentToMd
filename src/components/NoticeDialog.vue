@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // 居中的小提示框（设计稿：设计稿/确认页/定稿-保存失败弹窗.webp、定稿-关闭确认弹窗.webp）：
 // 细线图标 + 标题，几行说明，右下两个按钮。出错时图标和标题是红色，其他时候墨黑。Esc、点遮罩等于点左边按钮
+import { vPress } from './pressFeedback'
 import { onBeforeUnmount, onMounted } from 'vue'
 import { CircleAlert, Info } from './icons'
 
@@ -32,9 +33,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
       </h2>
       <div class="body"><slot /></div>
       <div class="buttons">
-        <button v-if="neutralText" class="neutral" @click="emit('neutral')">{{ neutralText }}</button>
-        <button class="soft" @click="emit('cancel')">{{ cancelText }}</button>
-        <button :class="danger ? 'danger' : 'primary'" @click="emit('ok')">{{ okText }}</button>
+        <button v-if="neutralText" v-press class="neutral" @click="emit('neutral')">{{ neutralText }}</button>
+        <button v-press class="soft" @click="emit('cancel')">{{ cancelText }}</button>
+        <button v-press="'tactile'" :class="danger ? 'danger' : 'primary'" @click="emit('ok')">{{ okText }}</button>
       </div>
     </section>
   </div>
@@ -104,7 +105,7 @@ h2.error {
   color: var(--on-primary);
 }
 .danger:hover:not(:disabled) {
-  filter: brightness(0.92);
+  background: var(--err-hover);
 }
 .soft {
   border: 0;

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // 正文编辑栏：固定在正文上方的一排浅灰图标，没有底色和边框，平时几乎不被注意。
 // 按钮用 mousedown.prevent，点按钮时正文不会失去焦点
+import { vPress } from './pressFeedback'
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import type { Editor } from '@tiptap/vue-3'
 import { Undo2, Redo2, Bold, ListBullet, ListOrdered, Quote } from './icons'
@@ -24,6 +25,7 @@ const setHeading = () => props.editor.chain().focus().setHeading({ level: 3 }).r
 <template>
   <div class="toolbar" role="toolbar" aria-label="正文编辑" @mousedown.prevent>
     <button
+      v-press="'icon'"
       class="tool"
       aria-label="撤销"
       title="撤销 Ctrl+Z"
@@ -33,6 +35,7 @@ const setHeading = () => props.editor.chain().focus().setHeading({ level: 3 }).r
       <Undo2 :size="16" />
     </button>
     <button
+      v-press="'icon'"
       class="tool"
       aria-label="重做"
       title="重做 Ctrl+Y"
@@ -43,11 +46,16 @@ const setHeading = () => props.editor.chain().focus().setHeading({ level: 3 }).r
     </button>
     <span class="divider" />
     <div class="segmented" role="group" aria-label="段落类型">
-      <button class="seg" :class="{ on: !isHeading() }" @click="setText">正文</button>
-      <button class="seg" :class="{ on: isHeading() }" @click="setHeading">小标题</button>
+      <button v-press="'icon'" class="seg" :class="{ on: !isHeading() }" @click="setText">
+        <span class="press-content">正文</span>
+      </button>
+      <button v-press="'icon'" class="seg" :class="{ on: isHeading() }" @click="setHeading">
+        <span class="press-content">小标题</span>
+      </button>
     </div>
     <span class="divider" />
     <button
+      v-press="'icon'"
       class="tool"
       :class="{ on: active('bold') }"
       aria-label="加粗"
@@ -57,6 +65,7 @@ const setHeading = () => props.editor.chain().focus().setHeading({ level: 3 }).r
       <Bold :size="16" />
     </button>
     <button
+      v-press="'icon'"
       class="tool"
       :class="{ on: active('bulletList') }"
       aria-label="列表"
@@ -66,6 +75,7 @@ const setHeading = () => props.editor.chain().focus().setHeading({ level: 3 }).r
       <ListBullet :size="16" />
     </button>
     <button
+      v-press="'icon'"
       class="tool"
       :class="{ on: active('orderedList') }"
       aria-label="编号列表"
@@ -75,6 +85,7 @@ const setHeading = () => props.editor.chain().focus().setHeading({ level: 3 }).r
       <ListOrdered :size="16" />
     </button>
     <button
+      v-press="'icon'"
       class="tool"
       :class="{ on: active('blockquote') }"
       aria-label="引用"

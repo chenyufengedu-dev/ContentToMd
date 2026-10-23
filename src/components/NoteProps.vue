@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // 笔记的领域、标签、关键词：右栏「属性信息」里竖着排，所有修改都在这里做。
 // 对照原文时标题下那一行只是显示（见 ConfirmPage 的 meta-row），不能改
+import { vPress } from './pressFeedback'
 import { computed, nextTick, ref } from 'vue'
 import { Plus, X } from './icons'
 import type { Domain } from '../core/config'
@@ -80,7 +81,9 @@ const TIPS = {
       <div class="chips">
         <span v-for="t in tags" :key="t" class="chip">
           {{ t }}
-          <button class="chip-x" :aria-label="`删除标签 ${t}`" @click="removeTag(t)"><X :size="13" /></button>
+          <button v-press="'icon'" class="chip-x" :aria-label="`删除标签 ${t}`" @click="removeTag(t)">
+            <X :size="13" />
+          </button>
           <span v-if="!known.has(t)" class="new-dot" title="新标签：收藏库里还没有，保存后会新建" />
         </span>
         <input
@@ -94,7 +97,7 @@ const TIPS = {
           @blur="commit"
           @keyup.esc="adding = null"
         />
-        <button v-else class="chip-add" aria-label="添加标签" @click="startAdding('tags')">
+        <button v-else v-press="'icon'" class="chip-add" aria-label="添加标签" @click="startAdding('tags')">
           <Plus :size="14" /><span>添加标签</span>
         </button>
       </div>
@@ -108,7 +111,9 @@ const TIPS = {
       <div class="chips">
         <span v-for="k in keywords" :key="k" class="chip">
           {{ k }}
-          <button class="chip-x" :aria-label="`删除关键词 ${k}`" @click="removeKeyword(k)"><X :size="13" /></button>
+          <button v-press="'icon'" class="chip-x" :aria-label="`删除关键词 ${k}`" @click="removeKeyword(k)">
+            <X :size="13" />
+          </button>
         </span>
         <input
           v-if="adding === 'keywords'"
@@ -121,7 +126,7 @@ const TIPS = {
           @blur="commit"
           @keyup.esc="adding = null"
         />
-        <button v-else class="chip-add" aria-label="添加关键词" @click="startAdding('keywords')">
+        <button v-else v-press="'icon'" class="chip-add" aria-label="添加关键词" @click="startAdding('keywords')">
           <Plus :size="14" /><span>添加关键词</span>
         </button>
       </div>

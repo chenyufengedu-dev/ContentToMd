@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { vPress } from '../components/pressFeedback'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useEditor, EditorContent } from '@tiptap/vue-3'
 import {
@@ -460,8 +461,8 @@ onBeforeUnmount(() => {
   <main ref="confirmEl" class="confirm" :class="{ comparing }">
     <article ref="paperEl" class="paper" @scroll="updateLink">
       <div class="paper-inner">
-        <button v-if="edit" class="back" @click="emit('back')">
-          <ChevronLeft :size="16" aria-hidden="true" />收藏库
+        <button v-if="edit" v-press class="back" @click="emit('back')">
+          <ChevronLeft :size="18" aria-hidden="true" />收藏库
         </button>
         <label class="editable title-line" style="view-transition-name: note-title">
           <textarea
@@ -474,18 +475,19 @@ onBeforeUnmount(() => {
             spellcheck="false"
             @keydown.enter.prevent
           />
-          <Pencil class="edit-hint" :size="20" aria-hidden="true" />
+          <Pencil class="edit-hint" :size="20" duotone aria-hidden="true" />
         </label>
         <p v-if="titleMissing" class="field-error">标题不能为空。</p>
 
         <label class="editable summary" style="view-transition-name: note-summary">
           <textarea v-model="form.summary" rows="1" aria-label="这条讲什么" placeholder="一句话说清这条讲什么" />
-          <Pencil class="edit-hint" :size="16" aria-hidden="true" />
+          <Pencil class="edit-hint" :size="16" duotone aria-hidden="true" />
         </label>
 
         <!-- 对照原文时才出现：右栏属性的只读摘要，点一下回到属性信息去修改 -->
         <button
           v-if="comparing"
+          v-press
           class="meta-row"
           style="view-transition-name: meta-row"
           title="在右边的属性信息里修改"
@@ -512,8 +514,8 @@ onBeforeUnmount(() => {
               />
             </div>
             <div v-if="!edit" class="pic-tools">
-              <button @click="cropping = i">调整裁剪</button>
-              <button v-if="p.crop" @click="p.crop = null">恢复原图</button>
+              <button v-press @click="cropping = i">调整裁剪</button>
+              <button v-if="p.crop" v-press @click="p.crop = null">恢复原图</button>
             </div>
           </figure>
           <p v-if="cropNote && !edit" class="pic-note">{{ cropNote }}</p>
@@ -537,10 +539,12 @@ onBeforeUnmount(() => {
     <aside class="side">
       <div class="tabs" role="tablist" aria-label="右栏">
         <!-- 图片没有转写原文，只有属性信息 -->
-        <button v-if="transcript" role="tab" class="tab" :aria-selected="comparing" @click="setComparing(true)">
+        <button v-if="transcript" v-press role="tab" class="tab" :aria-selected="comparing" @click="setComparing(true)">
           原文对照
         </button>
-        <button role="tab" class="tab" :aria-selected="!comparing" @click="setComparing(false)">属性信息</button>
+        <button v-press role="tab" class="tab" :aria-selected="!comparing" @click="setComparing(false)">
+          属性信息
+        </button>
       </div>
 
       <div v-if="!comparing" class="side-main props-area" style="view-transition-name: props-card">
@@ -606,7 +610,7 @@ onBeforeUnmount(() => {
             </div>
           </dl>
         </div>
-        <button v-if="edit?.canOpen" class="btn btn-secondary open-obsidian" @click="emit('open')">
+        <button v-if="edit?.canOpen" v-press class="btn btn-secondary open-obsidian" @click="emit('open')">
           <ExternalLink :size="14" aria-hidden="true" />在 Obsidian 中打开
         </button>
       </div>
@@ -627,31 +631,38 @@ onBeforeUnmount(() => {
           <CircleAlert :size="14" aria-hidden="true" />
           <span><b>没有保存：</b>{{ saveError.reason }}</span>
           <template v-if="saveError.toSettings">
-            ·<button class="link" @click="emit('goSettings')">去设置</button>
+            ·<button v-press class="link" @click="emit('goSettings')">去设置</button>
           </template>
         </p>
         <!-- 保存前就知道会存到哪：跟着领域变 -->
         <p v-else-if="!confirmingDiscard" class="save-to" :title="`${storeLabel(config)} / ${domainName}`">
-          <Folder :size="14" aria-hidden="true" /><span>存到：{{ storeLabel(config) }} / {{ domainName }}</span>
+          <Folder :size="14" aria-hidden="true" />
+          <span class="save-location">存到：{{ storeLabel(config) }}</span>
+          <span class="save-domain">/ {{ domainName }}</span>
         </p>
         <div v-if="edit" class="action-row">
-          <button class="btn btn-secondary btn-delete" @click="emit('remove')">
+          <button v-press="'tactile'" class="btn btn-secondary btn-delete" @click="emit('remove')">
             <Trash2 :size="16" aria-hidden="true" />删除
           </button>
-          <button class="btn btn-primary" :disabled="saving || titleMissing || !dirty" @click="save">
+          <button
+            v-press="'tactile'"
+            class="btn btn-primary"
+            :disabled="saving || titleMissing || !dirty"
+            @click="save"
+          >
             {{ saving ? '保存中…' : saveError ? '重新保存' : '保存修改' }}<span class="kbd">Ctrl+S</span>
           </button>
         </div>
         <template v-else-if="confirmingDiscard">
-          <p class="discard-ask">确定放弃这一条吗？已整理的内容不会保存。</p>
+          <p class="discard-ask">确定不保存并返回吗？本次整理结果将被丢弃。</p>
           <div class="action-row">
-            <button class="btn btn-secondary" @click="confirmingDiscard = false">取消</button>
-            <button class="btn btn-danger" @click="emit('discard')">放弃这一条</button>
+            <button v-press class="btn btn-secondary" @click="confirmingDiscard = false">继续编辑</button>
+            <button v-press="'tactile'" class="btn btn-danger" @click="emit('discard')">不保存并返回</button>
           </div>
         </template>
         <div v-else class="action-row">
-          <button class="btn btn-secondary" @click="confirmingDiscard = true">放弃</button>
-          <button class="btn btn-primary" :disabled="saving || titleMissing" @click="save">
+          <button v-press class="btn btn-secondary" @click="confirmingDiscard = true">放弃</button>
+          <button v-press="'tactile'" class="btn btn-primary" :disabled="saving || titleMissing" @click="save">
             {{ saving ? '保存中…' : saveError ? '重新保存' : '保存' }}<span class="kbd">Ctrl+S</span>
           </button>
         </div>
@@ -669,7 +680,8 @@ onBeforeUnmount(() => {
     >
       <p>{{ saveError.reason }}</p>
       <p v-if="saveError.toSettings">
-        到<button class="link" @click="emit('goSettings')">设置</button>{{ saveError.next.replace(/^到设置/, '') }}
+        到<button v-press class="link" @click="emit('goSettings')">设置</button
+        >{{ saveError.next.replace(/^到设置/, '') }}
       </p>
       <p v-else>{{ saveError.next }}</p>
     </NoticeDialog>
@@ -789,11 +801,11 @@ onBeforeUnmount(() => {
 }
 .edit-hint {
   flex: none;
-  color: var(--line-strong);
+  color: var(--faint);
   transition: color var(--ease);
 }
 .editable:hover .edit-hint {
-  color: var(--faint);
+  color: var(--muted);
 }
 .editable:focus-within .edit-hint {
   color: var(--accent);
@@ -1117,13 +1129,15 @@ onBeforeUnmount(() => {
   align-items: center;
   height: var(--h-md);
   padding: 0 var(--px-sm);
-  border: 1px solid var(--line);
+  border: 0;
   border-radius: var(--radius-md);
-  background: var(--card);
+  background: var(--card-muted);
 }
 .name-input:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  background: var(--card);
+  box-shadow:
+    0 0 0 1px var(--accent),
+    0 0 0 4px var(--accent-soft);
 }
 .name-input input {
   flex: 1;
@@ -1216,12 +1230,14 @@ onBeforeUnmount(() => {
   color: var(--on-primary);
   font-weight: 600;
 }
+.btn-primary:disabled {
+  background: var(--hover);
+  border-color: transparent;
+  color: var(--faint);
+  opacity: 1;
+}
 .btn-primary:hover:not(:disabled) {
   background: var(--primary-hover);
-}
-.btn-primary:disabled {
-  background: var(--line-strong);
-  opacity: 1;
 }
 .kbd {
   font-weight: 400;
@@ -1242,6 +1258,9 @@ onBeforeUnmount(() => {
   color: var(--on-primary);
   font-weight: 600;
 }
+.btn-danger:hover:not(:disabled) {
+  background: var(--err-hover);
+}
 .discard-ask {
   margin: 0 0 var(--sp-3);
   font-size: var(--fs-sm);
@@ -1259,10 +1278,19 @@ onBeforeUnmount(() => {
 .save-to svg {
   flex: none;
 }
-.save-to span {
+.save-location {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.save-domain {
+  flex: none;
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
 }
 .save-fail {
   display: flex;
@@ -1352,20 +1380,27 @@ onBeforeUnmount(() => {
 
 /* ---------------- 打开已有笔记（F22）---------------- */
 .back {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 2px;
-  margin: 0 0 var(--sp-3) calc(-1 * var(--sp-1));
+  gap: var(--sp-1);
+  height: var(--sp-6);
+  margin: 0 0 var(--sp-1) calc(-1 * var(--sp-1));
   padding: var(--sp-1) var(--sp-2) var(--sp-1) var(--sp-1);
   border: 0;
   border-radius: var(--radius-md);
   background: none;
   color: var(--muted);
-  font-size: var(--fs-sm);
+  font-size: var(--fs-action);
   cursor: pointer;
 }
+.back::before {
+  content: '';
+  position: absolute;
+  inset: calc(-1 * (var(--h-md) + var(--sp-2) - var(--sp-6)) / 2) 0;
+}
 .back:hover {
-  background: var(--hover);
+  background: none;
   color: var(--fg);
 }
 .pic-missing {

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { vPress } from '../components/pressFeedback'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import {
   type Config,
@@ -41,7 +42,7 @@ import SelectBox from '../components/SelectBox.vue'
 import NoticeDialog from '../components/NoticeDialog.vue'
 import UnsavedDialog from '../components/UnsavedDialog.vue'
 import { toast } from '../components/useToast'
-import { Check, ChevronRight, Circle, CircleCheck, X } from '../components/icons'
+import { Check, ChevronRight, Circle, CircleCheck, Plus, X } from '../components/icons'
 
 const props = defineProps<{ config: Config; firstRun: boolean }>()
 const emit = defineEmits<{ saved: [Config]; pending: [boolean] }>()
@@ -94,27 +95,35 @@ const priceText = reactive(
   >,
 )
 /** 输入框文字 → 单价：空着是没填（undefined），不是非负数是填错了（NaN） */
-const parsePrice = (raw: string) => (raw.trim() ? (Number(raw) >= 0 ? Number(raw) : NaN) : undefined)
+const parsePrice = (raw: string) => {
+  if (!raw.trim()) return undefined
+  const value = Number(raw)
+  return Number.isFinite(value) && value >= 0 ? value : NaN
+}
 const savedPrice = (k: ServiceKind) => (JSON.parse(saved.value) as Config).services[k].price
-/** 填的不是数字的那一项（“完成”因此不能点） */
-const badPrice = (k: ServiceKind) => priceFields(k).find((f) => Number.isNaN(parsePrice(priceText[k][f.key])))
+/** 填的不是数字的那一项 */
+const priceError = (k: ServiceKind) => {
+  const field = priceFields(k).find((f) => Number.isNaN(parsePrice(priceText[k][f.key])))
+  return field ? `${SERVICE_LABELS[k]}的「${field.label}」价格要填有限的非负数，比如 0.02。` : undefined
+}
 /** 价格改了还没保存：收起后“价格（选填）”旁边有个橙色小点 */
 const priceDirty = (k: ServiceKind) =>
-  JSON.stringify(savedPrice(k) ?? null) !== JSON.stringify(draft.services[k].price ?? null)
+  !!priceError(k) || JSON.stringify(savedPrice(k) ?? null) !== JSON.stringify(draft.services[k].price ?? null)
 /** 保存设置后，价格改过的服务在“价格（选填）”旁边闪几秒“✓ 已保存” */
 const priceJustSaved = reactive<Partial<Record<ServiceKind, boolean>>>({})
-/** 取消：恢复成上次保存的价格，然后收起 */
-function cancelPrice(k: ServiceKind) {
+/** 撤销设置时同时恢复价格输入框里的原样文字。 */
+function resetPrice(k: ServiceKind) {
   const p = savedPrice(k)
   draft.services[k].price = p ? { ...p } : undefined
   Object.assign(priceText[k], priceTexts(p))
   priceOpen[k] = false
 }
-/** 空着或填错的项当没填；三项都没填时整个价格去掉 */
+/** 错误输入保留原价，保存时统一拦截；全部清空才去掉价格。 */
 function setPrice(k: ServiceKind, f: keyof Price, raw: string) {
   priceText[k][f] = raw
   const v = parsePrice(raw)
-  const price: Price = { ...draft.services[k].price, [f]: Number.isNaN(v) ? undefined : v }
+  if (Number.isNaN(v)) return
+  const price: Price = { ...draft.services[k].price, [f]: v }
   draft.services[k].price = Object.values(price).some((x) => x !== undefined) ? price : undefined
 }
 
@@ -270,8 +279,7 @@ const NOT_VAULT = '这个文件夹不是 Obsidian 仓库（里面没有 .obsidia
 const vaultName = computed(() => draft.vaultPath.split(/[\\/]/).filter(Boolean).at(-1) ?? '')
 const connected = computed(() => draft.vault.kind === 'obsidian' && !!draft.vaultPath && pathIsVault.value === true)
 
-// 存到哪个文件夹：下拉框列出仓库里已有的文件夹；最后一项“新建文件夹…”让这一行原地变成输入框，点「新建」马上建好
-const NEW_FOLDER = ':new' // 文件夹名里不能有冒号，不会和真的文件夹撞
+// 下拉框只列出已有文件夹；旁边的新建入口让这一行切换为输入框。
 const subfolders = ref<string[]>([])
 async function loadSubfolders() {
   const p = draft.vaultPath
@@ -282,16 +290,11 @@ watch(connected, loadSubfolders, { immediate: true })
 const subfolderOptions = computed(() => {
   const cur = draft.vault.subfolder.trim()
   const all = cur && !subfolders.value.includes(cur) ? [cur, ...subfolders.value] : subfolders.value
-  return [
-    { value: '', label: '仓库最外层（不另建文件夹）' },
-    ...all.map((f) => ({ value: f, label: f })),
-    { value: NEW_FOLDER, label: '新建文件夹…' },
-  ]
+  return [{ value: '', label: '仓库最外层（不另建文件夹）' }, ...all.map((f) => ({ value: f, label: f }))]
 })
 const subfolderChoice = computed({
   get: () => draft.vault.subfolder.trim(),
   set: (v: string) => {
-    if (v === NEW_FOLDER) return startNewFolder()
     draft.vault.subfolder = v
     createdFolder.value = ''
   },
@@ -397,11 +400,6 @@ function applyKey(k: ServiceKind) {
     draft.services[k].apiKey = newKey[k].trim()
     newKey[k] = ''
   }
-}
-
-function copyFromText(k: ServiceKind) {
-  const t = draft.services.text
-  draft.services[k] = { ...draft.services[k], baseUrl: t.baseUrl, apiKey: t.apiKey }
 }
 
 async function runTest(k: ServiceKind) {
@@ -532,7 +530,7 @@ const justSaved = ref(false)
 let justSavedTimer: number | undefined
 
 /** 有没保存的改动（含刚粘贴、还没写进配置的新密钥） */
-const pending = computed(() => dirty.value || KINDS.some((k) => newKey[k].trim()))
+const pending = computed(() => dirty.value || KINDS.some((k) => newKey[k].trim() || priceError(k)))
 /** 保存条：有改动、第一次使用、刚保存完（显示“已保存”）时浮在底部，其余时间不出现 */
 const barShown = computed(() => pending.value || props.firstRun || justSaved.value)
 onBeforeUnmount(() => window.clearTimeout(justSavedTimer))
@@ -542,12 +540,21 @@ function revert() {
   Object.assign(draft, JSON.parse(saved.value) as Config)
   for (const k of KINDS) {
     newKey[k] = ''
-    cancelPrice(k)
+    resetPrice(k)
   }
   saveError.value = null
 }
 /** 保存设置；成功返回 true（切换页面前“保存”按钮要知道能不能继续） */
 async function save(): Promise<boolean> {
+  for (const k of KINDS) {
+    const error = priceError(k)
+    if (error) {
+      priceOpen[k] = true
+      saveError.value = error
+      void activate('services')
+      return false
+    }
+  }
   KINDS.forEach(applyKey)
   const priceChanged = KINDS.filter(priceDirty)
   saveError.value = null
@@ -625,6 +632,7 @@ onMounted(() => {
           v-for="v in VAULT_KINDS"
           ref="kindEls"
           :key="v.kind"
+          v-press
           class="vault-kind"
           :class="{ on: draft.vault.kind === v.kind }"
           role="radio"
@@ -636,7 +644,7 @@ onMounted(() => {
       </div>
       <div v-if="draft.vault.kind === 'folder'" class="row">
         <span class="path" :class="{ missing: !draft.vaultPath }">{{ draft.vaultPath || '未配置' }}</span>
-        <button class="soft" @click="chooseVault">选择文件夹</button>
+        <button v-press class="soft" @click="chooseVault">选择文件夹</button>
       </div>
       <div v-else class="obsidian">
         <div v-if="showVaultList" class="field">
@@ -647,6 +655,7 @@ onMounted(() => {
           <ul v-if="obsidianVaults.length" class="vault-list" role="radiogroup" aria-label="Obsidian 仓库">
             <li v-for="v in obsidianVaults" :key="v.path">
               <button
+                v-press
                 class="vault-item"
                 role="radio"
                 :aria-checked="draft.vaultPath === v.path"
@@ -658,25 +667,25 @@ onMounted(() => {
                   class="vault-radio"
                   aria-hidden="true"
                 />
-                <span class="vault-name">{{ v.name }}</span>
-                <span class="vault-path">{{ v.path }}</span>
+                <span class="vault-name" :title="v.name">{{ v.name }}</span>
+                <span class="vault-path" :title="v.path">{{ v.path }}</span>
               </button>
             </li>
           </ul>
         </div>
         <div v-if="showVaultList">
-          <button class="vault-other" @click="pickObsidianFolder">
+          <button v-press class="vault-other" @click="pickObsidianFolder">
             {{ obsidianVaults.length ? '选择其他文件夹' : '选择文件夹' }}
           </button>
         </div>
         <p v-if="connected" class="ok vault-state">
           <Check :size="16" aria-hidden="true" />已连接 Obsidian 仓库：{{ vaultName }}
-          <button class="vault-other" @click="changingVault = !changingVault">
+          <button v-press class="vault-other" @click="changingVault = !changingVault">
             {{ changingVault ? '收起' : '更换' }}
           </button>
         </p>
         <p v-else-if="pickedHere && pathIsVault === false" class="err vault-state">{{ NOT_VAULT }}</p>
-        <div v-if="connected" class="field">
+        <div v-if="connected" class="field folder-field">
           <span>存放文件夹</span>
           <div v-if="newFolder" class="new-folder">
             <input
@@ -689,8 +698,9 @@ onMounted(() => {
               @keydown.enter.prevent="createFolder"
               @keydown.esc.prevent="newFolder = false"
             />
-            <button class="soft" @click="newFolder = false">取消</button>
+            <button v-press class="soft" @click="newFolder = false">取消</button>
             <button
+              v-press
               class="primary"
               :disabled="!newFolderName.trim() || !!newFolderProblem || creatingFolder"
               @click="createFolder"
@@ -698,7 +708,10 @@ onMounted(() => {
               {{ creatingFolder ? '新建中…' : '新建' }}
             </button>
           </div>
-          <SelectBox v-else v-model="subfolderChoice" :options="subfolderOptions" aria-label="存放文件夹" size="md" />
+          <div v-else class="folder-choice">
+            <SelectBox v-model="subfolderChoice" :options="subfolderOptions" aria-label="存放文件夹" size="md" />
+            <button v-press class="soft" @click="startNewFolder"><Plus :size="16" />新建文件夹</button>
+          </div>
           <span v-if="newFolder && (createError || newFolderProblem)" class="err">{{
             createError || newFolderProblem
           }}</span>
@@ -706,7 +719,7 @@ onMounted(() => {
           <span v-else-if="subfolderError" class="err">{{ subfolderError }}</span>
           <template v-else>
             <span v-if="createdFolder" class="ok vault-state">
-              <Check :size="16" aria-hidden="true" />已新建文件夹「{{ createdFolder }}」
+              <Check :size="16" aria-hidden="true" />文件夹「{{ createdFolder }}」已创建，保存设置后用于存放笔记。
             </span>
             <span class="vault-hint">笔记会存成：{{ notePathPreview }}</span>
           </template>
@@ -726,7 +739,6 @@ onMounted(() => {
         <div class="service-head">
           <h3>{{ SERVICE_LABELS[k] }}</h3>
           <span v-if="!isServiceConfigured(draft.services[k]) && !newKey[k]" class="tag-missing">未配置</span>
-          <button v-if="k !== 'text'" class="link" @click="copyFromText(k)">与文字整理用同一家</button>
         </div>
         <div class="fields">
           <label class="field">
@@ -752,10 +764,10 @@ onMounted(() => {
           {{ checkBaseUrl(draft.services[k].baseUrl) }}
         </p>
         <div class="row">
-          <button class="soft small" :disabled="test[k].status === 'testing'" @click="runTest(k)">
+          <button v-press class="soft small" :disabled="test[k].status === 'testing'" @click="runTest(k)">
             {{ test[k].status === 'testing' ? '测试中…' : '测试连接' }}
           </button>
-          <button class="price-toggle" :aria-expanded="priceOpen[k]" @click="priceOpen[k] = !priceOpen[k]">
+          <button v-press class="price-toggle" :aria-expanded="priceOpen[k]" @click="priceOpen[k] = !priceOpen[k]">
             价格（{{ draft.services[k].price ? '已填' : '选填' }}）<ChevronRight
               :size="14"
               class="chev"
@@ -792,9 +804,10 @@ onMounted(() => {
             }}
           </p>
           <div class="price-actions">
-            <span v-if="badPrice(k)" class="price-status">「{{ badPrice(k)!.label }}」要填数字，比如 0.02</span>
-            <button class="soft small" @click="cancelPrice(k)">取消</button>
-            <button class="primary small" :disabled="!!badPrice(k)" @click="priceOpen[k] = false">完成</button>
+            <span v-if="priceError(k)" class="price-status">{{ priceError(k) }}</span>
+            <button v-press class="price-collapse" @click="priceOpen[k] = false">
+              收起<ChevronRight :size="14" class="collapse-arrow" />
+            </button>
           </div>
         </div>
         <details v-if="test[k].status === 'fail' && test[k].detail" class="detail">
@@ -816,13 +829,14 @@ onMounted(() => {
         <li v-for="d in draft.domains" :key="d.id">
           <template v-if="editingId === d.id">
             <input v-model="editingName" @keyup.enter="finishRename" @keyup.esc="editingId = null" />
-            <button class="link" @click="finishRename">确定</button>
-            <button class="link" @click="editingId = null">取消</button>
+            <button v-press class="link" @click="finishRename">确定</button>
+            <button v-press class="link" @click="editingId = null">取消</button>
           </template>
           <template v-else>
             <button class="chip-name" title="点击改名" @click="startRename(d.id, d.name)">{{ d.name }}</button>
             <button
               v-if="d.id !== OTHER_DOMAIN_ID"
+              v-press="'icon'"
               class="chip-x"
               :aria-label="`删除领域 ${d.name}`"
               @click="removeDomain(d.id)"
@@ -834,7 +848,7 @@ onMounted(() => {
       </ul>
       <div class="row">
         <input v-model="newDomain" class="grow" placeholder="新领域名" @keyup.enter="addDomain" />
-        <button class="soft" @click="addDomain">添加</button>
+        <button v-press class="soft" @click="addDomain">添加</button>
       </div>
       <p v-if="domainError" class="err">{{ domainError }}</p>
     </SettingCard>
@@ -891,8 +905,8 @@ onMounted(() => {
         <span v-if="saveError" class="err">保存失败：{{ saveError }}</span>
         <span v-else-if="justSaved && !pending" class="saved-ok"><Check :size="16" aria-hidden="true" />已保存</span>
         <span v-else class="bar-text">{{ firstRun && !pending ? '填好后点“保存设置”' : '有改动还没保存' }}</span>
-        <button v-if="pending && !firstRun" class="soft" :disabled="saving" @click="revert">撤销</button>
-        <button class="primary" :disabled="saving || (!pending && !firstRun)" @click="save">
+        <button v-if="pending && !firstRun" v-press class="soft" :disabled="saving" @click="revert">撤销</button>
+        <button v-press="'tactile'" class="primary" :disabled="saving || (!pending && !firstRun)" @click="save">
           {{ saving ? '保存中…' : '保存设置' }}
         </button>
       </div>
@@ -1009,8 +1023,25 @@ h3 {
   font-size: var(--fs-xs);
   color: var(--warn);
 }
-.price-actions button {
+.price-collapse {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-1);
   min-width: 64px;
+  height: var(--h-sm);
+  padding: 0 var(--px-sm);
+  border: 0;
+  background: var(--card);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+.price-collapse:hover:not(:disabled) {
+  background: var(--card);
+  color: var(--fg);
+}
+.collapse-arrow {
+  transform: rotate(-90deg);
 }
 .dot {
   width: 6px;
@@ -1175,6 +1206,11 @@ input:focus {
   color: var(--accent);
 }
 .vault-name {
+  flex: none;
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: var(--fw-label);
 }
 .vault-path {
@@ -1206,6 +1242,30 @@ input:focus {
   display: flex;
   gap: var(--sp-2);
 }
+.folder-choice {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--sp-2);
+}
+.folder-choice button,
+.new-folder button {
+  height: var(--h-md);
+  font-size: var(--fs-action);
+  white-space: nowrap;
+}
+.folder-choice .select,
+.new-folder input {
+  align-self: center;
+}
+.folder-choice button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.folder-field {
+  width: 100%;
+  max-width: var(--settings-folder-width);
+}
 .new-folder input {
   flex: 1;
 }
@@ -1234,10 +1294,6 @@ input:focus {
   gap: var(--sp-2);
   align-items: center;
   margin-bottom: var(--sp-2);
-}
-.service-head .link {
-  margin-left: auto;
-  color: var(--accent);
 }
 .fields {
   display: grid;

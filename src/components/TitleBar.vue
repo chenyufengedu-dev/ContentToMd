@@ -4,6 +4,7 @@ export type Page = 'home' | 'library' | 'settings'
 
 <script setup lang="ts">
 // 自绘标题栏：软件名、正中间的页面切换（胶囊形分段）、窗口按钮。空白处可以拖动窗口、双击最大化
+import { vPress } from './pressFeedback'
 import { Minus, Square, X } from './icons'
 import { minimizeWindow, toggleMaximizeWindow, closeWindow } from '../shell/tauri'
 
@@ -20,8 +21,8 @@ const PAGES: { id: Page; label: string }[] = [
 <template>
   <header class="titlebar" data-tauri-drag-region>
     <div class="brand" data-tauri-drag-region>
-      <span class="logo" aria-hidden="true" />
-      <span data-tauri-drag-region>ContentToMd</span>
+      <img class="logo" src="../assets/app-mark.svg" alt="" />
+      <span class="brand-name" data-tauri-drag-region>ContentToMd</span>
     </div>
     <nav class="nav" aria-label="页面">
       <!-- 当前页下面的白色底块，切换时滑过去 -->
@@ -29,6 +30,7 @@ const PAGES: { id: Page; label: string }[] = [
       <button
         v-for="x in PAGES"
         :key="x.id"
+        v-press
         class="nav-item"
         :aria-current="page === x.id ? 'page' : undefined"
         :disabled="onlySettings && x.id !== 'settings'"
@@ -38,9 +40,9 @@ const PAGES: { id: Page; label: string }[] = [
       </button>
     </nav>
     <div class="window-controls">
-      <button class="win" aria-label="最小化" @click="minimizeWindow"><Minus :size="16" /></button>
-      <button class="win" aria-label="最大化" @click="toggleMaximizeWindow"><Square :size="13" /></button>
-      <button class="win close" aria-label="关闭" @click="closeWindow"><X :size="16" /></button>
+      <button v-press class="win" aria-label="最小化" @click="minimizeWindow"><Minus :size="16" /></button>
+      <button v-press class="win" aria-label="最大化" @click="toggleMaximizeWindow"><Square :size="13" /></button>
+      <button v-press class="win close" aria-label="关闭" @click="closeWindow"><X :size="16" /></button>
     </div>
   </header>
 </template>
@@ -62,18 +64,15 @@ const PAGES: { id: Page; label: string }[] = [
   color: var(--fg-strong);
 }
 .logo {
-  width: 18px;
-  height: 18px;
-  border-radius: 5px;
-  background: var(--primary);
-  position: relative;
+  height: var(--brand-logo-size);
+  width: auto;
 }
-.logo::after {
-  content: '';
-  position: absolute;
-  inset: 5px;
-  border-radius: 2px;
-  border: 1.5px solid var(--on-primary);
+.brand-name {
+  /* 艺术体：Gabriola（Windows 自带，装饰书法、基本直立），不用斜体字，免得和向右斜的羽毛方向叠在一起 */
+  font-family: 'Gabriola', 'Palatino Linotype', serif;
+  font-size: var(--brand-font-size);
+  line-height: 1;
+  transform: translateY(var(--brand-baseline-offset));
 }
 .nav {
   position: absolute;

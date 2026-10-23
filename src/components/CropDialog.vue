@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // 调整裁剪（F29）：居中的大浮层，原图上叠一个裁剪框，拖四边、四角调整大小，拖框内移动。
 // 多张图时底部缩略图切换；“恢复原图”= 这张不裁。点“完成”才生效，“取消”或 Esc 不改
+import { vPress } from './pressFeedback'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { X } from './icons'
 import type { Rect } from '../core/image'
@@ -105,7 +106,7 @@ onBeforeUnmount(() => {
     <section class="dialog" role="dialog" aria-modal="true" aria-label="调整裁剪">
       <header class="head">
         <h2>调整裁剪</h2>
-        <button class="close" aria-label="关闭" @click="emit('cancel')"><X :size="18" /></button>
+        <button v-press="'icon'" class="close" aria-label="关闭" @click="emit('cancel')"><X :size="18" /></button>
       </header>
 
       <div ref="stageEl" class="stage">
@@ -131,6 +132,7 @@ onBeforeUnmount(() => {
           <button
             v-for="(img, i) in images"
             :key="img.url"
+            v-press
             class="thumb"
             :class="{ on: i === index }"
             :aria-label="`第 ${i + 1} 张`"
@@ -140,9 +142,9 @@ onBeforeUnmount(() => {
           </button>
         </div>
         <div class="buttons">
-          <button class="link" :disabled="!cropped" @click="restore">恢复原图</button>
-          <button class="secondary" @click="emit('cancel')">取消</button>
-          <button class="primary" @click="emit('done', crops)">完成</button>
+          <button v-press class="link" :disabled="!cropped" @click="restore">恢复原图</button>
+          <button v-press class="secondary" @click="emit('cancel')">取消</button>
+          <button v-press="'tactile'" class="primary" @click="emit('done', crops)">完成</button>
         </div>
       </footer>
     </section>
