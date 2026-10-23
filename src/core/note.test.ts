@@ -300,3 +300,11 @@ describe('parseNoteFile', () => {
     expect(f.mode).toBe('要点提炼')
   })
 })
+it('拆出正文时保留代码块内空行和段落原始分隔', () => {
+  const body = '```js\nconst a = 1\n\n\nconst b = 2\n```\n\n\n下一段  \n第二行'
+  expect(parseNoteBody('> [!summary] 这条讲什么\n> 摘要\n\n' + body).body).toBe(body)
+})
+it.each(['', '> [!summary] 这条讲什么\n> 摘要\n\n'])('保留正文首行的代码缩进：%s', (prefix) => {
+  const body = '    const first = 1\n    const second = 2'
+  expect(parseNoteBody(prefix + body).body).toBe(body)
+})

@@ -143,11 +143,35 @@ const editor = useEditor({
 // ---------------- 打开已有笔记：有没有改动 ----------------
 const bodyTick = ref(0)
 const snapshot = () =>
-  JSON.stringify([form.title, form.domainId, form.tags, form.keywords, form.summary]) +
-  (editor.value ? fixCallouts(editor.value.getMarkdown()) : '')
+  JSON.stringify([form.title, form.domainId, form.tags, form.keywords, form.summary]) + editorBody()
 const baseline = ref<string | null>(null)
+// 只改属性时不让编辑器的格式规范化或不支持节点改写原文。
+let originalBody = start.body
+let originalEditorBody: string | undefined
+const editorBody = () => (editor.value ? fixCallouts(editor.value.getMarkdown()) : '')
+function bodyToSave() {
+  const current = editorBody()
+  return current === originalEditorBody ? originalBody : current
+}
+const bodyReadOnly = ref(false)
 // 编辑器读进去再导出的 Markdown 可能和文件里写的有细微差别，所以以刚读好时的为准
-watch(editor, (e) => e && props.edit && baseline.value === null && (baseline.value = snapshot()), { immediate: true })
+watch(
+  editor,
+  (e) => {
+    if (!e || originalEditorBody !== undefined) return
+    originalEditorBody = editorBody()
+    // 用现有 Markdown 词法器识别未安装对应节点的格式，不自行解析 Markdown。
+    const parser = e.markdown?.instance
+    if (parser)
+      parser.walkTokens(parser.lexer(start.body), (token) => {
+        if (['table', 'image', 'html'].includes(token.type) || (token.type === 'list_item' && token.task))
+          bodyReadOnly.value = true
+      })
+    e.setEditable(!bodyReadOnly.value, false)
+    if (props.edit) baseline.value = snapshot()
+  },
+  { immediate: true },
+)
 // 正文每改一次 bodyTick 加一，让这里重新比对（编辑器里的内容本身不是响应式的）
 const dirty = computed(
   () => !!props.edit && baseline.value !== null && bodyTick.value >= 0 && snapshot() !== baseline.value,
@@ -166,7 +190,7 @@ function rememberEdits() {
       ...form,
       tags: [...form.tags],
       keywords: [...form.keywords],
-      body: fixCallouts(editor.value.getMarkdown()),
+      body: bodyToSave(),
     })
   }, 800)
 }
@@ -320,17 +344,21 @@ const EXT: Record<string, string> = {
 }
 
 /** 图片按裁剪框写进 附件/年-月/（方案第 10.4 节）。写不进去的跳过并记下，笔记照样保存 */
-async function writeImages(title: string): Promise<{ images: NoteImage[]; written: string[]; failed: string[] }> {
+async function writeImages(
+  title: string,
+  root: string,
+  pictures: { file: File; crop: Rect | null }[],
+): Promise<{ images: NoteImage[]; written: string[]; failed: string[] }> {
   const images: NoteImage[] = []
   const written: string[] = []
   const failed: string[] = []
   const base = safeFileTitle(title).slice(0, 20)
-  for (const [i, p] of pics.entries()) {
+  for (const [i, p] of pictures.entries()) {
     try {
       const blob = await cropForSave(p.file, p.crop ?? null)
       const ext = EXT[blob.type] ?? p.file.name.split('.').pop() ?? 'png'
       const name = `${created}-${base}-${i + 1}.${ext}`
-      const rel = await writeAttachment(notesRoot(props.config), created.slice(0, 7), name, blob)
+      const rel = await writeAttachment(root, created.slice(0, 7), name, blob)
       written.push(rel)
       images.push({ path: `../${rel}`, caption: d.image_captions[i] ?? '' })
     } catch {
@@ -344,29 +372,36 @@ let savedTitle = start.title.trim()
 /** 打开已有笔记再保存：改原来的文件；领域或文件名变了，外壳会把它挪到新位置（不覆盖别的笔记） */
 async function saveEdit(e: EditInfo) {
   if (!editor.value) return
+  const title = form.title.trim()
+  const domain = domainName.value
+  const submittedSnapshot = snapshot()
+  const submittedEditorBody = editorBody()
+  const submittedBody = bodyToSave()
   const md = buildMarkdown(
     {
-      title: form.title.trim(),
+      title,
       domainId: form.domainId,
       tags: form.tags,
       keywords: form.keywords,
       summary: form.summary.trim(),
-      body: fixCallouts(editor.value.getMarkdown()).trim(),
+      body: submittedBody,
       image_captions: [],
     },
-    { ...e.meta, domain: domainName.value },
+    { ...e.meta, domain },
     e.images,
   )
   try {
     // 文件名跟着标题走；标题没改过就不动文件名（笔记可能重名时加过日期，或在 Obsidian 里改过名）
-    const stem = form.title.trim() === savedTitle ? e.stem : safeFileTitle(form.title)
-    const rel = await saveNote(notesRoot(props.config), e.path, domainName.value, stem, md)
-    savedTitle = form.title.trim()
-    baseline.value = snapshot()
+    const stem = title === savedTitle ? e.stem : safeFileTitle(title)
+    const rel = await saveNote(notesRoot(props.config), e.path, domain, stem, md)
+    savedTitle = title
+    baseline.value = submittedSnapshot
+    originalBody = submittedBody
+    originalEditorBody = submittedEditorBody
     // 点完保存告诉用户结果：改了领域就说移到了哪里，改了文件名就说新名字
     toast(
       rel.split('/')[0] !== e.path.split('/')[0]
-        ? `已保存，笔记已移到「${domainName.value}」文件夹。`
+        ? `已保存，笔记已移到「${domain}」文件夹。`
         : stem !== e.stem
           ? `已保存，文件名已改为「${stem}」。`
           : '已保存。',
@@ -389,19 +424,25 @@ async function save() {
     return
   }
   const title = form.title.trim()
-  const { images, written, failed } = await writeImages(title)
+  const root = notesRoot(props.config)
+  const domain = domainName.value
+  const text = editor.value.getText({ blockSeparator: '\n' })
+  const submitted: NoteDraft = {
+    ...d,
+    ...form,
+    title,
+    summary: form.summary.trim(),
+    tags: [...form.tags],
+    keywords: [...form.keywords],
+    body: bodyToSave(),
+    image_captions: [...d.image_captions],
+  }
+  const pictures = pics.map((p) => ({ file: p.file, crop: p.crop ? { ...p.crop } : null }))
+  const { images, written, failed } = await writeImages(title, root, pictures)
   const md = buildMarkdown(
+    submitted,
     {
-      title,
-      domainId: form.domainId,
-      tags: form.tags,
-      keywords: form.keywords,
-      summary: form.summary.trim(),
-      body: fixCallouts(editor.value.getMarkdown()).trim(),
-      image_captions: d.image_captions,
-    },
-    {
-      domain: domainName.value,
+      domain,
       type: props.job.type,
       mode: props.job.mode,
       source: props.job.source ?? '',
@@ -413,17 +454,17 @@ async function save() {
     images,
   )
   try {
-    const rel = await writeNote(notesRoot(props.config), domainName.value, safeFileTitle(title), created, md)
+    const rel = await writeNote(root, domain, safeFileTitle(title), created, md)
     emit('saved', {
       path: rel,
       failedImages: failed,
       title,
-      summary: form.summary.trim(),
-      text: editor.value.getText({ blockSeparator: '\n' }),
+      summary: submitted.summary,
+      text,
     })
   } catch (e) {
     // 保存失败时编辑中的内容保留（方案第 7 节）；刚写进去的图片删掉，不留没人引用的文件
-    for (const rel of written) await removeAttachment(notesRoot(props.config), rel).catch(() => {})
+    for (const rel of written) await removeAttachment(root, rel).catch(() => {})
     saveError.value = saveFailure(String(e))
     failDialog.value = true
   } finally {
@@ -458,7 +499,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main ref="confirmEl" class="confirm" :class="{ comparing }">
+  <main ref="confirmEl" class="confirm" :class="{ comparing }" :inert="saving && !edit" :aria-busy="saving">
     <article ref="paperEl" class="paper" @scroll="updateLink">
       <div class="paper-inner">
         <button v-if="edit" v-press class="back" @click="emit('back')">
@@ -527,11 +568,17 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="toolbar-row">
-          <EditorToolbar v-if="editor" :editor="editor" />
+          <EditorToolbar v-if="editor && !bodyReadOnly" :editor="editor" />
         </div>
 
+        <p v-if="bodyReadOnly" class="body-notice">
+          正文含暂不支持的格式，已保留原文。这里可修改属性，正文请在保存后的文档中编辑。
+        </p>
         <div class="body-wrap" style="view-transition-name: note-body">
-          <EditorContent :editor="editor" class="body" @click="onBodyClick" />
+          <pre v-if="bodyReadOnly" class="body-raw" role="region" aria-label="原始正文（只读）" tabindex="0">{{
+            originalBody
+          }}</pre>
+          <EditorContent v-else :editor="editor" class="body" @click="onBodyClick" />
         </div>
       </div>
     </article>
@@ -748,6 +795,22 @@ onBeforeUnmount(() => {
   border: 1px solid var(--panel-border);
   border-radius: var(--panel-radius);
   box-shadow: var(--shadow-card);
+}
+
+.body :deep(a) {
+  color: var(--accent);
+}
+.body-raw {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  color: var(--fg);
+}
+.body-notice {
+  margin: 0 0 var(--sp-4);
+  color: var(--muted);
+  font-size: var(--fs-sm);
 }
 
 /* ---------------- 左：纸面 ---------------- */

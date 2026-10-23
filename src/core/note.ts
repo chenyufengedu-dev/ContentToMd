@@ -206,11 +206,15 @@ const IMAGE_LINE = /^!\[([^\]]*)\]\((<[^>]+>|[^)\s]+)\)$/
  * 只认正文最前面连着的这几块，别处的图片留在正文里
  */
 export function parseNoteBody(content: string): { summary: string; images: NoteImage[]; body: string } {
-  const blocks = content.trim().split(/\n\s*\n/)
+  // 分隔符也留下，正文部分直接拼回，避免压缩代码块内的空行。
+  const blocks = content
+    .replace(/^\s*\n/, '')
+    .trimEnd()
+    .split(/(\n\s*\n)/)
   let summary = ''
   const images: NoteImage[] = []
   let i = 0
-  for (; i < blocks.length; i++) {
+  for (; i < blocks.length; i += 2) {
     const b = blocks[i].trim()
     const lines = b.split('\n')
     if (b.startsWith('> [!summary]') && !summary) {
@@ -226,7 +230,7 @@ export function parseNoteBody(content: string): { summary: string; images: NoteI
       images.push({ caption: m[1], path: m[2].replace(/^<|>$/g, '') })
     } else break
   }
-  return { summary, images, body: blocks.slice(i).join('\n\n').trim() }
+  return { summary, images, body: blocks.slice(i).join('').trimEnd() }
 }
 
 /** 文件名：非法字符换成“-”，截短到 60 字以内（方案第 8 节） */
