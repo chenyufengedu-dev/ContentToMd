@@ -90,7 +90,8 @@
   --ease: 180ms cubic-bezier(0.2, 0, 0, 1);
 
   /* 苹方优先（作者电脑已装），没装的电脑退回微软雅黑 */
-  font-family: 'PingFang SC', '苹方', 'Microsoft YaHei UI', 'Microsoft YaHei', system-ui, sans-serif;
+  font-family:
+    'HarmonyOS Sans SC', 'PingFang SC', '苹方', 'Microsoft YaHei UI', 'Microsoft YaHei', system-ui, sans-serif;
   font-size: var(--fs-md);
   color: var(--fg);
   background: var(--bg);

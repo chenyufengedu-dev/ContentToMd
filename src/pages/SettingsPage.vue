@@ -23,23 +23,28 @@ import { describeError } from '../core/errors'
 import {
   saveConfig,
   pickFolder,
-  folderHasNotes,
+  countDomainNotes,
+  deleteDomain,
+  restoreDomain,
   httpFetch,
   readUsage,
   dirExists,
   listObsidianVaults,
   ensureSubfolder,
   listSubfolders,
+  guardClose,
+  destroyWindow,
 } from '../shell/tauri'
 import { formatYuan, keyId, summarize, type Price, type UsageRecord } from '../core/cost'
 import SettingCard from '../components/SettingCard.vue'
 import SelectBox from '../components/SelectBox.vue'
 import NoticeDialog from '../components/NoticeDialog.vue'
+import UnsavedDialog from '../components/UnsavedDialog.vue'
 import { toast } from '../components/useToast'
 import { Check, ChevronRight, Circle, CircleCheck, X } from 'lucide-vue-next'
 
 const props = defineProps<{ config: Config; firstRun: boolean }>()
-const emit = defineEmits<{ saved: [Config] }>()
+const emit = defineEmits<{ saved: [Config]; pending: [boolean] }>()
 
 // 在副本上编辑，点“保存设置”才写入
 const draft = reactive<Config>(JSON.parse(JSON.stringify(props.config)))
@@ -416,12 +421,31 @@ async function runTest(k: ServiceKind) {
 }
 
 // ---- 领域 ----
+// 领域列表的增加、改名、删除马上生效、马上写进配置，不排在“保存设置”后面（它们本来就直接动收藏库里的文件夹）；
+// 其余设置仍然点“保存设置”才生效，所以这里只把领域写进“上次保存的配置”，不连带保存别的未保存改动
+/** 上次保存的配置里的收藏库位置（领域的文件夹操作都按它，不按还没保存的新位置） */
+const savedRoot = () => notesRoot(JSON.parse(saved.value) as Config)
+async function persistDomains(): Promise<boolean> {
+  const base = JSON.parse(saved.value) as Config
+  base.domains = JSON.parse(JSON.stringify(draft.domains))
+  try {
+    await saveConfig(base)
+  } catch (e) {
+    draft.domains = (JSON.parse(saved.value) as Config).domains // 没存成就恢复成存好的样子
+    domainError.value = `没能保存领域列表：${String(e)}。`
+    return false
+  }
+  saved.value = JSON.stringify(base)
+  emit('saved', base)
+  return true
+}
+
 const newDomain = ref('')
 const domainError = ref<string | null>(null)
 const editingId = ref<number | null>(null)
 const editingName = ref('')
 
-function addDomain() {
+async function addDomain() {
   const err = checkDomainName(newDomain.value, draft.domains)
   domainError.value = err
   if (err) return
@@ -431,7 +455,9 @@ function addDomain() {
     id: nextDomainId(draft.domains),
     name: newDomain.value.trim(),
   })
+  const name = newDomain.value.trim()
   newDomain.value = ''
+  if (await persistDomains()) toast(`已新增领域「${name}」。`)
 }
 
 function startRename(id: number, name: string) {
@@ -440,7 +466,7 @@ function startRename(id: number, name: string) {
   domainError.value = null
 }
 
-function finishRename() {
+async function finishRename() {
   const d = draft.domains.find((x) => x.id === editingId.value)
   if (!d) return
   const err = checkDomainName(editingName.value, draft.domains, d.id)
@@ -448,31 +474,61 @@ function finishRename() {
   if (err) return
   d.name = editingName.value.trim()
   editingId.value = null
+  if (await persistDomains()) toast(`领域已改名为「${d.name}」。`)
 }
 
-/** 点 × 先问一句；这里的删除只是把领域从列表里去掉，收藏库里的同名文件夹不会被删 */
-const askRemove = ref<Domain | null>(null)
+/** 点 × 先问一句；有笔记时再确认一次；确认后文件夹进回收站、领域马上从列表里去掉，几秒内可以撤销 */
+const askRemove = ref<{ domain: Domain; notes: number; step: 1 | 2 } | null>(null)
 async function removeDomain(id: number) {
   const d = draft.domains.find((x) => x.id === id)
   if (!d) return
-  // 领域下还有笔记时不允许删除（方案第 10.2 节）
-  if (draft.vaultPath && (await folderHasNotes(`${notesRoot(draft)}\\${d.name}`))) {
-    domainError.value = `“${d.name}”里还有笔记，请先把这些笔记移走再删除`
-    return
-  }
   domainError.value = null
-  askRemove.value = d
+  try {
+    const notes = draft.vaultPath ? await countDomainNotes(savedRoot(), d.name) : 0
+    askRemove.value = { domain: d, notes, step: 1 }
+  } catch (e) {
+    domainError.value = `没能查看“${d.name}”文件夹：${String(e)}。`
+  }
 }
 
-function confirmRemove() {
-  const d = askRemove.value
+/** 第一次确认通过：里面有笔记时再确认一次，没有笔记就直接删 */
+function nextRemoveStep() {
+  const a = askRemove.value
+  if (!a) return
+  if (a.notes > 0 && a.step === 1) a.step = 2
+  else void confirmRemove()
+}
+
+/** 把文件夹（连同笔记和只有它们在用的图片）放进回收站，再把领域从列表里去掉并马上保存；几秒内可以撤销 */
+async function confirmRemove() {
+  const a = askRemove.value
   askRemove.value = null
-  if (!d) return
+  if (!a) return
+  const d = a.domain
   const at = draft.domains.findIndex((x) => x.id === d.id)
   if (at < 0) return
+  let images: string[] = []
+  try {
+    if (draft.vaultPath) images = (await deleteDomain(savedRoot(), d.name)).images
+  } catch (e) {
+    domainError.value = `没能删除“${d.name}”文件夹：${String(e)}。`
+    return
+  }
   draft.domains.splice(at, 1)
-  toast(`已删除领域「${d.name}」。`, {
-    action: { label: '撤销', run: () => draft.domains.splice(Math.min(at, draft.domains.length), 0, d) },
+  if (!(await persistDomains())) return
+  toast(`已删除领域「${d.name}」，${a.notes ? `文件夹和 ${a.notes} 篇笔记` : '文件夹'}已放进回收站。`, {
+    action: {
+      label: '撤销',
+      run: async () => {
+        try {
+          if (draft.vaultPath) await restoreDomain(savedRoot(), d.name, images)
+          draft.domains.splice(Math.min(at, draft.domains.length), 0, d)
+          if (await persistDomains()) toast(`已恢复领域「${d.name}」。`)
+        } catch (e) {
+          toast(`没能撤销：${String(e)}。`, { kind: 'error' })
+        }
+      },
+    },
   })
 }
 
@@ -498,13 +554,20 @@ function revert() {
   }
   saveError.value = null
 }
-async function save() {
+/** 保存设置；成功返回 true（切换页面前“保存”按钮要知道能不能继续） */
+async function save(): Promise<boolean> {
   KINDS.forEach(applyKey)
   const priceChanged = KINDS.filter(priceDirty)
   saveError.value = null
   if (draft.vault.kind === 'obsidian') {
-    if (!connected.value) return (saveError.value = '请先选一个 Obsidian 仓库。')
-    if (subfolderError.value) return (saveError.value = subfolderError.value)
+    if (!connected.value) {
+      saveError.value = '请先选一个 Obsidian 仓库。'
+      return false
+    }
+    if (subfolderError.value) {
+      saveError.value = subfolderError.value
+      return false
+    }
   }
   saving.value = true
   try {
@@ -520,12 +583,34 @@ async function save() {
       justSaved.value = false
       for (const k of KINDS) priceJustSaved[k] = false
     }, 1200)
+    return true
   } catch (e) {
     saveError.value = String(e)
+    return false
   } finally {
     saving.value = false
   }
 }
+
+// ---- 有没保存的改动：告诉外面（切换页面前要问），关闭软件时自己问 ----
+watch(pending, (v) => emit('pending', v))
+defineExpose({ save })
+
+const askClose = ref(false)
+async function saveAndClose() {
+  if (await save()) await destroyWindow()
+  else askClose.value = false // 没存成：留在设置页，保存条上会写原因
+}
+let unguard: (() => void) | undefined
+onBeforeUnmount(() => unguard?.())
+onMounted(() => {
+  guardClose(
+    () => pending.value && !props.firstRun,
+    () => (askClose.value = true),
+  )
+    .then((f) => (unguard = f))
+    .catch(() => {}) // 浏览器预览里没有窗口
+})
 </script>
 
 <template>
@@ -762,18 +847,41 @@ async function save() {
       <p v-if="domainError" class="err">{{ domainError }}</p>
     </SettingCard>
 
+    <UnsavedDialog
+      v-if="askClose"
+      :busy="saving"
+      @save="saveAndClose"
+      @discard="destroyWindow()"
+      @stay="askClose = false"
+    />
+
+    <!-- 删除领域：说清里面有多少篇笔记，有笔记时再确认一次；文件夹和笔记放进回收站，几秒内可以撤销 -->
     <NoticeDialog
       v-if="askRemove"
-      :title="`删除领域「${askRemove.name}」？`"
+      :title="
+        askRemove.step === 2
+          ? `再确认一次：删除「${askRemove.domain.name}」和 ${askRemove.notes} 篇笔记？`
+          : `删除领域「${askRemove.domain.name}」？`
+      "
       tone="error"
-      danger
+      :danger="askRemove.step === 2 || askRemove.notes === 0"
       cancel-text="取消"
-      ok-text="删除"
+      :ok-text="askRemove.step === 1 && askRemove.notes > 0 ? '继续' : '删除'"
       @cancel="askRemove = null"
-      @ok="confirmRemove"
+      @ok="nextRemoveStep"
     >
-      <p>只删除这个领域，不会删除收藏库里的同名文件夹。</p>
-      <p>删除后几秒内可以撤销。</p>
+      <template v-if="askRemove.step === 2">
+        <p>这个领域的文件夹和里面的 {{ askRemove.notes }} 篇笔记，还有只有它们在用的图片，会一起放进回收站。</p>
+        <p>删除后几秒内可以撤销，之后也可以从回收站找回。</p>
+      </template>
+      <template v-else-if="askRemove.notes > 0">
+        <p>这个领域的文件夹里有 {{ askRemove.notes }} 篇笔记。</p>
+        <p>删除领域会把文件夹和里面的笔记一起删除，下一步还会再确认一次。</p>
+      </template>
+      <template v-else>
+        <p>这个领域的文件夹里没有笔记。删除后，文件夹也会放进回收站。</p>
+        <p>删除后几秒内可以撤销。</p>
+      </template>
     </NoticeDialog>
 
     <SettingCard

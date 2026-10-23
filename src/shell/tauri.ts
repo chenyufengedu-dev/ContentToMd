@@ -60,6 +60,12 @@ export const deleteNote = (root: string, relPath: string) => invoke<string[]>('d
 /** 撤销删除：把刚放进回收站的笔记和图片还原到原位置 */
 export const restoreNote = (root: string, relPath: string, images: string[]) =>
   invoke<void>('restore_note', { root, relPath, images })
+// 删除领域：文件夹和里面的笔记整个放进回收站（作者定：删领域就是彻底删文件夹，先问清楚有多少篇笔记）
+export const countDomainNotes = (root: string, domain: string) => invoke<number>('count_domain_notes', { root, domain })
+export const deleteDomain = (root: string, domain: string) =>
+  invoke<{ notes: number; images: string[] }>('delete_domain', { root, domain })
+export const restoreDomain = (root: string, domain: string, images: string[]) =>
+  invoke<void>('restore_domain', { root, domain, images })
 export const listSubfolders = (vault: string) => invoke<string[]>('list_subfolders', { vault })
 export const ensureSubfolder = (vault: string, sub: string) => invoke<void>('ensure_subfolder', { vault, sub })
 export const writeNote = (vault: string, domain: string, title: string, date: string, content: string) =>

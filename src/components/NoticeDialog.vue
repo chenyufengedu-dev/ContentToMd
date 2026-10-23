@@ -5,24 +5,34 @@ import { onBeforeUnmount, onMounted } from 'vue'
 import { CircleAlert, Info } from 'lucide-vue-next'
 
 /** danger：确认的是删除这类不可恢复的操作，确认按钮用红色 */
-defineProps<{ title: string; tone?: 'error' | 'info'; cancelText: string; okText: string; danger?: boolean }>()
-const emit = defineEmits<{ cancel: []; ok: [] }>()
+/** neutralText：多一个放在最左边的“取消”（比如保存 / 放弃更改 / 取消 三选一），Esc 和点框外算它，不算“放弃” */
+const props = defineProps<{
+  title: string
+  tone?: 'error' | 'info'
+  cancelText: string
+  okText: string
+  danger?: boolean
+  neutralText?: string
+}>()
+const emit = defineEmits<{ cancel: []; ok: []; neutral: [] }>()
+const dismiss = () => (props.neutralText ? emit('neutral') : emit('cancel'))
 
 function onKey(e: KeyboardEvent) {
-  if (e.key === 'Escape') emit('cancel')
+  if (e.key === 'Escape') dismiss()
 }
 onMounted(() => window.addEventListener('keydown', onKey))
 onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 </script>
 
 <template>
-  <div class="mask" @click.self="emit('cancel')">
+  <div class="mask" @click.self="dismiss">
     <section class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="notice-title">
       <h2 id="notice-title" :class="tone ?? 'info'">
         <component :is="tone === 'error' ? CircleAlert : Info" :size="20" aria-hidden="true" />{{ title }}
       </h2>
       <div class="body"><slot /></div>
       <div class="buttons">
+        <button v-if="neutralText" class="neutral" @click="emit('neutral')">{{ neutralText }}</button>
         <button class="soft" @click="emit('cancel')">{{ cancelText }}</button>
         <button :class="danger ? 'danger' : 'primary'" @click="emit('ok')">{{ okText }}</button>
       </div>
@@ -77,6 +87,16 @@ h2.error {
 }
 .buttons button {
   padding: 0 var(--px-md);
+}
+.neutral {
+  margin-right: auto;
+  border: 0;
+  background: none;
+  color: var(--muted);
+}
+.neutral:hover:not(:disabled) {
+  color: var(--fg);
+  background: none;
 }
 .danger {
   border: 0;
