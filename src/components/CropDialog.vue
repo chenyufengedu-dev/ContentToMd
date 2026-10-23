@@ -5,9 +5,12 @@ import { vPress } from './pressFeedback'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { X } from './icons'
 import type { Rect } from '../core/image'
+import { useModal } from './useModal'
 
 const props = defineProps<{ images: { url: string; crop: Rect | null }[]; start: number }>()
 const emit = defineEmits<{ done: [(Rect | null)[]]; cancel: [] }>()
+const dialog = ref<HTMLElement>()
+useModal(dialog, () => emit('cancel'))
 
 const crops = ref(props.images.map((i) => (i.crop ? { ...i.crop } : null)))
 const index = ref(props.start)
@@ -46,6 +49,17 @@ const cropped = computed(() => !!crops.value[index.value])
 // ---- 拖动 ----
 type Dir = 'move' | 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw'
 const HANDLES: Dir[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
+const HANDLE_LABELS: Record<Dir, string> = {
+  move: '移动裁剪框',
+  n: '调整上边界',
+  s: '调整下边界',
+  e: '调整右边界',
+  w: '调整左边界',
+  ne: '调整右上角',
+  nw: '调整左上角',
+  se: '调整右下角',
+  sw: '调整左下角',
+}
 let drag: { dir: Dir; x: number; y: number; start: Rect } | null = null
 
 function onDown(e: PointerEvent, dir: Dir) {
@@ -57,21 +71,25 @@ function onMove(e: PointerEvent) {
   if (!drag || !scale.value) return
   const dx = (e.clientX - drag.x) / scale.value
   const dy = (e.clientY - drag.y) / scale.value
+  adjust(drag.dir, drag.start, dx, dy)
+}
+function adjust(dir: Dir, s: Rect, dx: number, dy: number) {
   const { w: W, h: H } = natural.value
-  const s = drag.start
+  const minW = Math.min(MIN, W)
+  const minH = Math.min(MIN, H)
   let x0 = s.x
   let y0 = s.y
   let x1 = s.x + s.w
   let y1 = s.y + s.h
-  if (drag.dir === 'move') {
+  if (dir === 'move') {
     const nx = Math.min(Math.max(0, s.x + dx), W - s.w)
     const ny = Math.min(Math.max(0, s.y + dy), H - s.h)
     ;[x0, y0, x1, y1] = [nx, ny, nx + s.w, ny + s.h]
   } else {
-    if (drag.dir.includes('w')) x0 = Math.min(Math.max(0, s.x + dx), x1 - MIN)
-    if (drag.dir.includes('e')) x1 = Math.max(Math.min(W, x1 + dx), x0 + MIN)
-    if (drag.dir.includes('n')) y0 = Math.min(Math.max(0, s.y + dy), y1 - MIN)
-    if (drag.dir.includes('s')) y1 = Math.max(Math.min(H, y1 + dy), y0 + MIN)
+    if (dir.includes('w')) x0 = Math.min(Math.max(0, s.x + dx), x1 - minW)
+    if (dir.includes('e')) x1 = Math.max(Math.min(W, x1 + dx), x0 + minW)
+    if (dir.includes('n')) y0 = Math.min(Math.max(0, s.y + dy), y1 - minH)
+    if (dir.includes('s')) y1 = Math.max(Math.min(H, y1 + dy), y0 + minH)
   }
   const r = { x: Math.round(x0), y: Math.round(y0), w: Math.round(x1 - x0), h: Math.round(y1 - y0) }
   // 框回到整张图时等于不裁
@@ -85,25 +103,41 @@ function restore() {
   crops.value[index.value] = null
 }
 
-function onKey(e: KeyboardEvent) {
-  if (e.key === 'Escape') {
-    e.stopPropagation()
-    emit('cancel')
+function onAdjustKey(e: KeyboardEvent, dir: Dir) {
+  if (!scale.value || e.ctrlKey || e.altKey || e.metaKey) return
+  const step = e.shiftKey ? 10 : 1
+  let dx = 0
+  let dy = 0
+  switch (e.key) {
+    case 'ArrowLeft':
+      dx = -step
+      break
+    case 'ArrowRight':
+      dx = step
+      break
+    case 'ArrowUp':
+      dy = -step
+      break
+    case 'ArrowDown':
+      dy = step
+      break
+    default:
+      return
   }
+  e.preventDefault()
+  adjust(dir, box.value, dx, dy)
 }
 onMounted(() => {
-  window.addEventListener('keydown', onKey, true)
   window.addEventListener('resize', measure)
 })
 onBeforeUnmount(() => {
-  window.removeEventListener('keydown', onKey, true)
   window.removeEventListener('resize', measure)
 })
 </script>
 
 <template>
   <div class="mask" @click.self="emit('cancel')">
-    <section class="dialog" role="dialog" aria-modal="true" aria-label="调整裁剪">
+    <section ref="dialog" class="dialog" role="dialog" aria-modal="true" aria-label="调整裁剪" tabindex="-1">
       <header class="head">
         <h2>调整裁剪</h2>
         <button v-press="'icon'" class="close" aria-label="关闭" @click="emit('cancel')"><X :size="18" /></button>
@@ -120,9 +154,26 @@ onBeforeUnmount(() => {
             @load="measure"
           />
           <div v-if="scale" class="box" :class="{ full: !cropped }" :style="boxStyle">
-            <div class="move" @pointerdown="onDown($event, 'move')" />
+            <button
+              type="button"
+              class="move"
+              :aria-label="HANDLE_LABELS.move"
+              title="方向键微调，Shift 加速"
+              @pointerdown="onDown($event, 'move')"
+              @keydown="onAdjustKey($event, 'move')"
+            />
             <span class="grid" aria-hidden="true" />
-            <span v-for="h in HANDLES" :key="h" class="handle" :class="h" @pointerdown.stop="onDown($event, h)" />
+            <button
+              v-for="h in HANDLES"
+              :key="h"
+              type="button"
+              class="handle"
+              :class="h"
+              :aria-label="HANDLE_LABELS[h]"
+              title="方向键微调，Shift 加速"
+              @pointerdown.stop="onDown($event, h)"
+              @keydown="onAdjustKey($event, h)"
+            />
           </div>
         </div>
       </div>
@@ -221,7 +272,14 @@ onBeforeUnmount(() => {
 .box.full {
   box-shadow: none;
 }
-.move {
+.move,
+.move:hover:not(:disabled) {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
   position: absolute;
   inset: 0;
   cursor: move;
@@ -237,7 +295,10 @@ onBeforeUnmount(() => {
     linear-gradient(to bottom, transparent 33.2%, rgb(255 255 255 / 45%) 33.3%, transparent 33.4%),
     linear-gradient(to bottom, transparent 66.6%, rgb(255 255 255 / 45%) 66.7%, transparent 66.8%);
 }
-.handle {
+.handle,
+.handle:hover:not(:disabled) {
+  padding: 0;
+  border: 0;
   position: absolute;
   width: 12px;
   height: 12px;
@@ -245,6 +306,11 @@ onBeforeUnmount(() => {
   border-radius: 50%;
   background: #fff;
   box-shadow: 0 0 0 1px rgb(0 0 0 / 20%);
+}
+.move:focus-visible,
+.handle:focus-visible {
+  outline: auto var(--accent);
+  outline-offset: var(--sp-1);
 }
 .nw {
   left: 0;
