@@ -33,23 +33,26 @@ const domainChoice = computed({
 type Field = 'tags' | 'keywords'
 const adding = ref<Field | null>(null)
 const draft = ref('')
-const inputEl = ref<HTMLInputElement[]>([])
+const inputEl = ref<HTMLInputElement | null>(null)
 
 async function startAdding(f: Field) {
   adding.value = f
   draft.value = ''
   await nextTick()
-  inputEl.value[0]?.focus()
+  inputEl.value?.focus()
 }
 
 /** 一次可以输入多个，用逗号或顿号分开；去空白、去重 */
 function commit() {
-  const list = adding.value === 'tags' ? tags.value : keywords.value
+  const field = adding.value
+  if (!field) return
+  adding.value = null
+  const list = field === 'tags' ? tags.value : keywords.value
   const next = [...list]
   for (const x of draft.value.split(/[,，、]/).map((s) => s.trim())) if (x && !next.includes(x)) next.push(x)
-  if (adding.value === 'tags') tags.value = next
+  if (field === 'tags') tags.value = next
   else keywords.value = next
-  adding.value = null
+  draft.value = ''
 }
 
 const removeTag = (t: string) => (tags.value = tags.value.filter((x) => x !== t))
