@@ -127,6 +127,11 @@ function onUpdated(rel: string) {
   changed.value = true
 }
 
+function onConfigChanged(c: Config) {
+  cfg.value = c
+  emit('configChanged', c)
+}
+
 // ---- 有改动还没保存时离开 ----
 const isDirty = ref(false)
 const askLeave = ref(false)
@@ -173,7 +178,7 @@ const openInObsidian = () =>
     @open="openInObsidian"
     @dirty="onDirty"
     @go-settings="emit('goSettings')"
-    @config-changed="(c) => (cfg = c)"
+    @config-changed="onConfigChanged"
   />
 
   <NoticeDialog

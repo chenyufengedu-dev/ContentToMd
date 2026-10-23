@@ -52,7 +52,10 @@ export interface EditInfo {
   canOpen: boolean
 }
 
-const props = defineProps<{ config: Config; job: Job; existingTags: string[]; edit?: EditInfo }>()
+const props = withDefaults(
+  defineProps<{ config: Config; job: Job; existingTags: string[]; edit?: EditInfo; active?: boolean }>(),
+  { active: true, edit: undefined },
+)
 /** 保存成功页要用的：笔记相对收藏库的路径、没写进去的图片（比如“第 2 张”），以及左边预览框的文字 */
 export interface SavedNote {
   path: string
@@ -241,7 +244,7 @@ function refreshCoverage() {
   )
 }
 
-const active = ref<{ from: number; to: number } | 'none' | null>(null)
+const activeMatch = ref<{ from: number; to: number } | 'none' | null>(null)
 
 /** 在编辑器里标出点中的段落（用编辑器的装饰，见 linkedBlock.ts）；pos 为 null 时清除 */
 function markBlock(pos: number | null) {
@@ -265,13 +268,13 @@ function onBodyClick(e: MouseEvent) {
   refreshCoverage() // 正文可能刚改过
   // 段落或列表项在编辑器里的起点：元素内部的位置减一
   markBlock(editor.value.view.posAtDOM(blocks[idx], 0) - 1)
-  active.value = coverage.value.matches[idx] ?? 'none'
+  activeMatch.value = coverage.value.matches[idx] ?? 'none'
   void nextTick(() => setTimeout(updateLink, 350)) // 等原文滚动到位
 }
 
 function clearLink() {
   markBlock(null)
-  active.value = null
+  activeMatch.value = null
   link.value = null
 }
 
@@ -476,6 +479,7 @@ const confirmingDiscard = ref(false)
 
 // 快捷键：Ctrl+S 保存；Esc 先收起原文，再关放弃确认（方案第 11 节）
 function onKey(e: KeyboardEvent) {
+  if (!props.active) return
   if (e.ctrlKey && e.key.toLowerCase() === 's') {
     e.preventDefault()
     save()
@@ -669,7 +673,7 @@ onBeforeUnmount(() => {
         style="view-transition-name: source-panel"
         :sentences="coverage.sentences"
         :unused="coverage.unused"
-        :active="active"
+        :active="activeMatch"
         @scroll="updateLink"
       />
 

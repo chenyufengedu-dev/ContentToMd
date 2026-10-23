@@ -164,6 +164,7 @@ async function onSaved(c: Config) {
         <p v-if="vaultMissing" class="fatal">收藏库文件夹“{{ notesRoot(config) }}”找不到了，请到设置里重新选择。</p>
         <CollectPage
           v-if="prompts && !firstRun"
+          :active="page === 'home'"
           :config="config"
           :prompts="prompts"
           @go-settings="page = 'settings'"

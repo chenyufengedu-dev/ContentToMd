@@ -50,7 +50,7 @@ import {
   X,
 } from '../components/icons'
 
-const props = defineProps<{ config: Config; prompts: Prompts }>()
+const props = withDefaults(defineProps<{ config: Config; prompts: Prompts; active?: boolean }>(), { active: true })
 const emit = defineEmits<{ goSettings: []; configChanged: [Config]; openNote: [path: string] }>()
 
 type Phase = 'drop' | 'processing' | 'failed' | 'confirm' | 'saved'
@@ -107,7 +107,17 @@ const kind = computed<SourceType | null>(() =>
 )
 const hasContent = computed(() => !!kind.value)
 
+// 文件读取和文档解析不能中途停止，用同一取消信号丢弃被替换、移除或卸载后的结果。
+let importController: AbortController | null = null
+function cancelImport() {
+  importController?.abort()
+  importController = null
+}
+
 function accept(files: File[]) {
+  if (!files.length) return
+  cancelImport()
+  importController = new AbortController()
   errors.value = []
   const media = files.filter((f) => !f.type.startsWith('image/'))
   const pics = files.filter((f) => f.type.startsWith('image/'))
@@ -116,7 +126,7 @@ function accept(files: File[]) {
       errors.value.push('一次只能放一个文件，或者几张图片，不能混在一起。')
       return
     }
-    acceptFile(media[0])
+    acceptFile(media[0], importController.signal)
     return
   }
   if (file.value || textFile.value) {
@@ -130,14 +140,14 @@ function accept(files: File[]) {
   mode.value = preselectMode('图片')
 }
 
-function acceptFile(f: File) {
+function acceptFile(f: File, signal: AbortSignal) {
   const ext = f.name.split('.').pop()?.toLowerCase() ?? ''
   if (TEXT.includes(ext)) {
-    void acceptText(f)
+    void acceptText(f, signal)
     return
   }
   if (DOC.includes(ext)) {
-    void acceptDoc(f, ext)
+    void acceptDoc(f, ext, signal)
     return
   }
   const type: SourceType | null = VIDEO.includes(ext) ? '视频' : AUDIO.includes(ext) ? '音频' : null
@@ -151,20 +161,21 @@ function acceptFile(f: File) {
     errors.value.push(importFailed(f.name, '文件太大，超过了 1GB 的上限。请压缩或截取后再放入。'))
     return
   }
+  clearFile()
   file.value = f
   fileType.value = type
   fileUrl.value = URL.createObjectURL(f)
   duration.value = null
   mode.value = preselectMode(type)
-  probeMedia(f, type)
+  probeMedia(f, type, signal)
 }
 
 /** 放入音视频时先让浏览器内核试着读一下：读不出来的格式（比如部分 H.265 视频）现在就说，不等到“提取声音”那一步才报错 */
-function probeMedia(f: File, type: SourceType) {
+function probeMedia(f: File, type: SourceType, signal: AbortSignal) {
   const el = document.createElement(type === '视频' ? 'video' : 'audio')
   el.preload = 'metadata'
   el.onerror = () => {
-    if (file.value !== f) return // 用户已经移除或换了别的文件
+    if (signal.aborted || file.value !== f) return // 用户已经移除或换了别的文件
     clearContent(true)
     errors.value.push(
       importFailed(
@@ -179,12 +190,20 @@ function probeMedia(f: File, type: SourceType) {
 }
 
 /** MD / TXT：认不出编码或是空文件时不加入（方案第 8 节） */
-async function acceptText(f: File) {
+async function acceptText(f: File, signal: AbortSignal) {
   if (f.size > MAX_TEXT_BYTES) {
     errors.value.push(importFailed(f.name, '文件太大，超过了 10MB 的上限。请截取后再放入。'))
     return
   }
-  const decoded = decodeText(await f.arrayBuffer())
+  let buf: ArrayBuffer
+  try {
+    buf = await f.arrayBuffer()
+  } catch {
+    if (!signal.aborted) errors.value.push(importFailed(f.name, '文件无法读取，可能已损坏。'))
+    return
+  }
+  if (signal.aborted) return
+  const decoded = decodeText(buf)
   if (!decoded) {
     errors.value.push(importFailed(f.name, '无法识别文件编码。请另存为 UTF-8 后重试。'))
     return
@@ -194,6 +213,7 @@ async function acceptText(f: File) {
     return
   }
   if (tooLongToAccept(f.name, decoded.text)) return
+  clearFile()
   textFile.value = { name: f.name, text: decoded.text, type: '文字', encoding: decoded.encoding }
   mode.value = defaultMode('文字', decoded.text.length)
 }
@@ -210,7 +230,7 @@ const defaultMode = (type: SourceType, chars: number): Mode =>
   chars > MAX_CHARS.原文精修 ? '要点提炼' : preselectMode(type)
 
 /** PDF / Word：只取文字（F15、F16）；扫描版、有密码、读不出的不加入（方案 US7） */
-async function acceptDoc(f: File, ext: string) {
+async function acceptDoc(f: File, ext: string, signal: AbortSignal) {
   if (f.size > MAX_DOC_BYTES) {
     errors.value.push(importFailed(f.name, '文件太大，超过了 50MB 的上限。请截取后再放入。'))
     return
@@ -218,7 +238,9 @@ async function acceptDoc(f: File, ext: string) {
   try {
     setPdfWorker(pdfWorker)
     const buf = await f.arrayBuffer()
+    if (signal.aborted) return
     const doc = await (ext === 'pdf' ? readPdf(buf) : readDocx(buf))
+    if (signal.aborted) return
     if (ext === 'pdf' && isScanned(doc)) {
       errors.value.push(importFailed(f.name, '这是扫描版 PDF，里面没有可读的文字。可以截图后放入。'))
       return
@@ -228,9 +250,11 @@ async function acceptDoc(f: File, ext: string) {
       return
     }
     if (tooLongToAccept(f.name, doc.text)) return
+    clearFile()
     textFile.value = { name: f.name, text: doc.text, type: '文档', pages: doc.pages }
     mode.value = defaultMode('文档', doc.text.length)
   } catch (e) {
+    if (signal.aborted) return
     const locked = e instanceof Error && e.name === 'PasswordException'
     errors.value.push(
       locked
@@ -270,7 +294,7 @@ function onPick(e: Event) {
 }
 /** Ctrl+V 粘贴截图；剪贴板里的图片没有像样的文件名，按顺序起名 */
 function onPaste(e: ClipboardEvent) {
-  if (phase.value !== 'drop') return
+  if (!props.active || phase.value !== 'drop') return
   const target = e.target as HTMLElement
   if (target.closest('input, textarea')) return // 正在输入链接时照常粘贴文字
   const files = [...(e.clipboardData?.files ?? [])]
@@ -292,21 +316,26 @@ function removeImage(i: number) {
   images.value.splice(i, 1)
   job.value = null
 }
-/** keepDraftFile：从草稿恢复前清空界面时，不能把草稿也删了 */
-function clearContent(keepDraftFile = false) {
-  longOk = false
-  images.value.forEach((x) => URL.revokeObjectURL(x.url))
-  images.value = []
+function clearFile() {
   if (fileUrl.value) URL.revokeObjectURL(fileUrl.value)
   fileUrl.value = ''
   file.value = null
   fileType.value = null
   textFile.value = null
+  duration.value = null
+  job.value = null
+  longOk = false
+}
+/** keepDraftFile：从草稿恢复前清空界面时，不能把草稿也删了 */
+function clearContent(keepDraftFile = false) {
+  cancelImport()
+  clearFile()
+  images.value.forEach((x) => URL.revokeObjectURL(x.url))
+  images.value = []
   source.value = ''
   share.value = null
   request.value = ''
   errors.value = []
-  job.value = null
   if (!keepDraftFile) dropDraft()
 }
 
@@ -375,6 +404,7 @@ const askLong = ref(false)
 let longOk = false
 async function start() {
   if (!hasContent.value || missingService.value || lengthNotice.value || phase.value !== 'drop') return
+  cancelImport()
   if (textFile.value && textFile.value.text.length > LONG_TEXT_CHARS && !longOk) {
     askLong.value = true
     return
@@ -534,7 +564,7 @@ function next() {
 
 // 快捷键：Ctrl+Enter 开始处理（方案第 11 节）
 function onKey(e: KeyboardEvent) {
-  if (!(e.ctrlKey && e.key === 'Enter')) return
+  if (!props.active || !(e.ctrlKey && e.key === 'Enter')) return
   if (phase.value === 'drop') start()
   else if (phase.value === 'saved') next()
 }
@@ -550,6 +580,7 @@ onMounted(() => {
     .catch(() => {})
 })
 onBeforeUnmount(() => {
+  cancelImport()
   unguard?.()
   window.removeEventListener('keydown', onKey)
   window.removeEventListener('paste', onPaste)
@@ -561,6 +592,7 @@ onBeforeUnmount(() => {
 <template>
   <ConfirmPage
     v-if="phase === 'confirm' && job?.draft"
+    :active="active"
     :config="config"
     :job="job"
     :existing-tags="existingTags"
