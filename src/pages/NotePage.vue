@@ -2,7 +2,7 @@
 // 笔记页（F22）：在收藏库里点一条笔记进来，直接复用确认页的界面修改正文和属性、改领域、删除。
 // 这里管读笔记、读图片、删除确认、有改动还没保存时的提示；编辑和保存在 ConfirmPage 里
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { CircleAlert } from 'lucide-vue-next'
+import { CircleAlert } from '../components/icons'
 import { type Config, type Domain, nextDomainId, notesRoot, OTHER_DOMAIN_ID } from '../core/config'
 import { resolveAttachment } from '../core/library'
 import { parseNoteBody } from '../core/note'

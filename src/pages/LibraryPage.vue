@@ -2,7 +2,7 @@
 // 收藏库页（F21，设计稿：设计稿/收藏库页/基准.webp）：左边按领域、标签筛选，顶部搜索，右边方块卡片。
 // 只显示设置里选中的存放文件夹里、各领域文件夹下的笔记。方块和列表两种显示，记住上次选的
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { CircleAlert, Folder, Hash, Inbox, LayoutGrid, List, Search, X } from 'lucide-vue-next'
+import { CircleAlert, Folder, Hash, Inbox, LayoutGrid, List, Search, X } from '../components/icons'
 import { type Config, notesRoot } from '../core/config'
 import { domainCounts, filterNotes, tagCounts, type LibraryNote } from '../core/library'
 import { listNotes } from '../shell/tauri'

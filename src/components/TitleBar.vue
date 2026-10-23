@@ -4,7 +4,7 @@ export type Page = 'home' | 'library' | 'settings'
 
 <script setup lang="ts">
 // 自绘标题栏：软件名、正中间的页面切换（胶囊形分段）、窗口按钮。空白处可以拖动窗口、双击最大化
-import { Minus, Square, X } from 'lucide-vue-next'
+import { Minus, Square, X } from './icons'
 import { minimizeWindow, toggleMaximizeWindow, closeWindow } from '../shell/tauri'
 
 /** onlySettings：第一次使用、还没配置完时只能停在设置页 */

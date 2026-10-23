@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 顶部居中的小提示条：在 App 最外层放一个，任何地方调用 toast('已保存。') 都会显示在这里（见 useToast.ts）
-import { Check, CircleAlert } from 'lucide-vue-next'
+import { Check, CircleAlert } from './icons'
 import { current, dismiss } from './useToast'
 </script>
 
@@ -11,7 +11,6 @@ import { current, dismiss } from './useToast'
         :is="current.kind === 'error' ? CircleAlert : Check"
         :class="{ error: current.kind === 'error' }"
         :size="16"
-        :stroke-width="2.5"
         aria-hidden="true"
       />
       <span>{{ current.text }}</span>

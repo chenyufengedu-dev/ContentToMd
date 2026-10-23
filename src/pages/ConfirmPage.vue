@@ -15,8 +15,10 @@ import {
   Trash2,
   ExternalLink,
   ChevronLeft,
+  User,
+  AudioLines,
   ImageOff,
-} from 'lucide-vue-next'
+} from '../components/icons'
 import { type Config, addDomain, notesRoot, storeLabel } from '../core/config'
 import type { Job } from '../core/pipeline'
 import { buildMarkdown, safeFileTitle, today, type NoteDraft, type NoteImage, type NoteMeta } from '../core/note'
@@ -569,7 +571,7 @@ onBeforeUnmount(() => {
               <dd>{{ pics.length }} 张</dd>
             </div>
             <div v-else-if="!edit" class="fact">
-              <dt><Video :size="16" />{{ job.type }}文件</dt>
+              <dt><AudioLines v-if="job.type === '音频'" :size="16" /><Video v-else :size="16" />{{ job.type }}文件</dt>
               <dd class="file">{{ job.fileName }}</dd>
             </div>
             <div v-if="edit && edit.meta.platform" class="fact">
@@ -577,7 +579,7 @@ onBeforeUnmount(() => {
               <dd>{{ edit.meta.platform }}</dd>
             </div>
             <div v-if="edit && edit.meta.author" class="fact">
-              <dt><Mic :size="16" />作者</dt>
+              <dt><User :size="16" />作者</dt>
               <dd class="file">{{ edit.meta.author }}</dd>
             </div>
             <div v-if="duration" class="fact">
@@ -1198,6 +1200,9 @@ onBeforeUnmount(() => {
 .btn {
   /* 底部两个按钮等宽，靠颜色区分主次，不靠长短 */
   flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   height: var(--h-md);
   padding: 0 var(--px-md);
   border-radius: var(--radius-md);
@@ -1205,9 +1210,6 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 .btn-primary {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   gap: var(--sp-2);
   border: 0;
   background: var(--primary);

@@ -2,7 +2,7 @@
 // 居中的小提示框（设计稿：设计稿/确认页/定稿-保存失败弹窗.webp、定稿-关闭确认弹窗.webp）：
 // 细线图标 + 标题，几行说明，右下两个按钮。出错时图标和标题是红色，其他时候墨黑。Esc、点遮罩等于点左边按钮
 import { onBeforeUnmount, onMounted } from 'vue'
-import { CircleAlert, Info } from 'lucide-vue-next'
+import { CircleAlert, Info } from './icons'
 
 /** danger：确认的是删除这类不可恢复的操作，确认按钮用红色 */
 /** neutralText：多一个放在最左边的“取消”（比如保存 / 放弃更改 / 取消 三选一），Esc 和点框外算它，不算“放弃” */

@@ -37,7 +37,17 @@ import NoticeDialog from '../components/NoticeDialog.vue'
 import ConfirmPage, { type SavedNote } from './ConfirmPage.vue'
 import SavedView from '../components/SavedView.vue'
 import ProcessingView from '../components/ProcessingView.vue'
-import { CircleAlert, Clock, FilePlus2, FileText, Image as ImageIcon, Link2, PenLine, Plus, X } from 'lucide-vue-next'
+import {
+  CircleAlert,
+  Clock,
+  FilePlus2,
+  FileText,
+  Image as ImageIcon,
+  Link2,
+  PenLine,
+  Plus,
+  X,
+} from '../components/icons'
 
 const props = defineProps<{ config: Config; prompts: Prompts }>()
 const emit = defineEmits<{ goSettings: []; configChanged: [Config]; openNote: [path: string] }>()
@@ -640,7 +650,7 @@ onBeforeUnmount(() => {
       </div>
 
       <button v-else class="drop" :class="{ dragging }" @click="fileInput?.click()">
-        <FilePlus2 :size="26" aria-hidden="true" />
+        <FilePlus2 :size="48" aria-hidden="true" />
         <span class="big">拖入或粘贴内容</span>
         <span class="kinds" aria-label="支持音视频、截图、md / txt、pdf / docx">
           <span v-for="k in SUPPORTED" :key="k.label" class="kind">

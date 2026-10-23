@@ -2,7 +2,7 @@
 // 保存成功（设计稿：设计稿/保存成功/定稿-保存成功.webp）。和处理中成一对：
 // 左边同一个预览框，放这条笔记的真实文字缩略预览；右边“已保存”、文件名、所在文件夹和两个按钮
 import { computed } from 'vue'
-import { Check, CircleAlert, Coins, ExternalLink, Folder } from 'lucide-vue-next'
+import { Check, CircleAlert, Coins, ExternalLink, Folder } from './icons'
 import type { SavedNote } from '../pages/ConfirmPage.vue'
 import { formatYuan } from '../core/cost'
 

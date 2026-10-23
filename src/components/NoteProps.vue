@@ -2,7 +2,7 @@
 // 笔记的领域、标签、关键词：右栏「属性信息」里竖着排，所有修改都在这里做。
 // 对照原文时标题下那一行只是显示（见 ConfirmPage 的 meta-row），不能改
 import { computed, nextTick, ref } from 'vue'
-import { Plus, X } from 'lucide-vue-next'
+import { Plus, X } from './icons'
 import type { Domain } from '../core/config'
 import SelectBox from './SelectBox.vue'
 import InfoTip from './InfoTip.vue'

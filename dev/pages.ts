@@ -50,6 +50,21 @@ if (vaultDemo) {
   })
 }
 
+// ?p=settings&domain=6：删除领域预览，只操作假数据，不读写收藏库。
+if (p === 'settings' && query.has('domain')) {
+  config.vaultPath = 'D:\\测试收藏库'
+  Object.assign(window, {
+    __TAURI_INTERNALS__: {
+      invoke: async (cmd: string) => {
+        if (cmd === 'count_domain_notes') return Number(query.get('domain'))
+        if (cmd === 'delete_domain') return { images: [] }
+        if (cmd === 'restore_domain' || cmd === 'save_config') return
+        throw new Error('预览里没有外壳')
+      },
+    },
+  })
+}
+
 // ?p=settings&usage=1：假装填了密钥、用过一阵，看设置页每把密钥的花费
 if (query.has('usage')) {
   config.services.text.apiKey = config.services.vision.apiKey = 'sk-demo'
