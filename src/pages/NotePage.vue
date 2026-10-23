@@ -62,12 +62,12 @@ onMounted(async () => {
     }
     const files: JobImage[] = []
     let missing = 0
-    for (const img of images) {
+    for (const [noteImageIndex, img] of images.entries()) {
       const rel = resolveAttachment(path.value, img.path)
       try {
         const blob = await readCover(root.value, rel)
         const name = rel.split('/').pop() ?? 'image'
-        files.push({ file: new File([blob], name, { type: imageType(name) }) })
+        files.push({ file: new File([blob], name, { type: imageType(name) }), noteImageIndex })
       } catch {
         missing++
       }

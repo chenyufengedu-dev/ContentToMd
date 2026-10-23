@@ -167,7 +167,7 @@ onBeforeUnmount(() => {
             :style="shown.w ? { width: `${shown.w}px`, height: `${shown.h}px` } : { visibility: 'hidden' }"
             @load="onImageLoad"
           />
-          <div v-if="scale" class="box" :class="{ full: !cropped }" :style="boxStyle">
+          <div v-if="scale" class="box" :style="boxStyle">
             <button
               ref="moveEl"
               type="button"
@@ -283,9 +283,6 @@ onBeforeUnmount(() => {
   position: absolute;
   box-shadow: 0 0 0 9999px rgb(15 18 25 / 45%);
   outline: 1.5px solid #fff;
-}
-.box.full {
-  box-shadow: none;
 }
 .move,
 .move:hover:not(:disabled) {
