@@ -191,3 +191,35 @@ it('裁剪手柄可键盘缩放和移动，边界受限，完成才提交', asyn
   required<HTMLButtonElement>('.buttons .primary').click()
   expect(done.mock.lastCall?.[0][0].w).toBe(24)
 })
+it('打开裁剪后直接按方向键生效，点击手柄切换键盘目标，窗口变化不抢焦点', async () => {
+  const done = vi.fn()
+  mount(() =>
+    h(CropDialog, {
+      images: [{ url: 'blob:isolated', crop: { x: 40, y: 30, w: 200, h: 150 } }],
+      start: 0,
+      onDone: done,
+    }),
+  )
+  const stage = required('.stage')
+  Object.defineProperties(stage, { clientWidth: { value: 600 }, clientHeight: { value: 500 } })
+  const img = required<HTMLImageElement>('.frame img')
+  Object.defineProperties(img, { naturalWidth: { value: 400 }, naturalHeight: { value: 300 } })
+  img.dispatchEvent(new Event('load'))
+  await nextTick()
+  const move = required<HTMLButtonElement>('.move')
+  expect(document.activeElement).toBe(move)
+  key(required(':focus'), 'ArrowDown')
+  const left = required<HTMLButtonElement>('.handle.w')
+  Object.defineProperty(left, 'setPointerCapture', { value: vi.fn() })
+  left.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true }))
+  expect(document.activeElement).toBe(left)
+  key(required(':focus'), 'ArrowRight', { shiftKey: true })
+  left.dispatchEvent(new MouseEvent('pointerup', { bubbles: true }))
+  const cancel = required<HTMLButtonElement>('.buttons .secondary')
+  cancel.focus()
+  window.dispatchEvent(new Event('resize'))
+  await nextTick()
+  expect(document.activeElement).toBe(cancel)
+  required<HTMLButtonElement>('.buttons .primary').click()
+  expect(done).toHaveBeenCalledWith([{ x: 50, y: 31, w: 190, h: 150 }])
+})

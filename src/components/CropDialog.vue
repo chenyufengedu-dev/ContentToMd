@@ -2,7 +2,7 @@
 // 调整裁剪（F29）：居中的大浮层，原图上叠一个裁剪框，拖四边、四角调整大小，拖框内移动。
 // 多张图时底部缩略图切换；“恢复原图”= 这张不裁。点“完成”才生效，“取消”或 Esc 不改
 import { vPress } from './pressFeedback'
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { X } from './icons'
 import type { Rect } from '../core/image'
 import { useModal } from './useModal'
@@ -16,6 +16,8 @@ const crops = ref(props.images.map((i) => (i.crop ? { ...i.crop } : null)))
 const index = ref(props.start)
 const imgEl = ref<HTMLImageElement>()
 const stageEl = ref<HTMLElement>()
+const moveEl = ref<HTMLButtonElement>()
+let initialFocus = true
 const natural = ref({ w: 0, h: 0 })
 const shown = ref({ w: 0, h: 0 }) // 图片在屏幕上显示的大小
 const MIN = 24 // 裁剪框最小边长（原图像素）
@@ -33,6 +35,15 @@ function measure() {
     (stage.clientHeight - pad * 2) / el.naturalHeight,
   )
   shown.value = { w: Math.round(el.naturalWidth * k), h: Math.round(el.naturalHeight * k) }
+}
+
+async function onImageLoad() {
+  measure()
+  // 首次加载后框才会渲染；窗口重测和切换图片不抢走用户后续选择的焦点。
+  if (!initialFocus) return
+  initialFocus = false
+  await nextTick()
+  moveEl.value?.focus({ preventScroll: true })
 }
 
 /** 当前这张的裁剪框；不裁时框就是整张图 */
@@ -64,7 +75,10 @@ let drag: { dir: Dir; x: number; y: number; start: Rect } | null = null
 
 function onDown(e: PointerEvent, dir: Dir) {
   e.preventDefault()
-  ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  const target = e.currentTarget
+  if (!(target instanceof HTMLElement)) return
+  target.focus({ preventScroll: true })
+  target.setPointerCapture(e.pointerId)
   drag = { dir, x: e.clientX, y: e.clientY, start: { ...box.value } }
 }
 function onMove(e: PointerEvent) {
@@ -151,10 +165,11 @@ onBeforeUnmount(() => {
             alt=""
             draggable="false"
             :style="shown.w ? { width: `${shown.w}px`, height: `${shown.h}px` } : { visibility: 'hidden' }"
-            @load="measure"
+            @load="onImageLoad"
           />
           <div v-if="scale" class="box" :class="{ full: !cropped }" :style="boxStyle">
             <button
+              ref="moveEl"
               type="button"
               class="move"
               :aria-label="HANDLE_LABELS.move"
