@@ -45,7 +45,7 @@ import { toast } from '../components/useToast'
 import { Check, ChevronRight, Circle, CircleCheck, Plus, X } from '../components/icons'
 
 const props = defineProps<{ config: Config; firstRun: boolean }>()
-const emit = defineEmits<{ saved: [Config]; pending: [boolean] }>()
+const emit = defineEmits<{ saved: [Config]; pending: [boolean]; domainBusy: [boolean] }>()
 
 // 在副本上编辑，点“保存设置”才写入
 const draft = reactive<Config>(JSON.parse(JSON.stringify(props.config)))
@@ -423,15 +423,20 @@ async function runTest(k: ServiceKind) {
 // 其余设置仍然点“保存设置”才生效，所以这里只把领域写进“上次保存的配置”，不连带保存别的未保存改动
 /** 上次保存的配置里的收藏库位置（领域的文件夹操作都按它，不按还没保存的新位置） */
 const savedRoot = () => notesRoot(JSON.parse(saved.value) as Config)
+const domainBusy = ref(false)
 async function persistDomains(): Promise<boolean> {
   const base = JSON.parse(saved.value) as Config
   base.domains = JSON.parse(JSON.stringify(draft.domains))
+  const wasBusy = domainBusy.value
+  domainBusy.value = true
   try {
     await saveConfig(base)
   } catch (e) {
     draft.domains = (JSON.parse(saved.value) as Config).domains // 没存成就恢复成存好的样子
     domainError.value = `没能保存领域列表：${String(e)}。`
     return false
+  } finally {
+    domainBusy.value = wasBusy
   }
   saved.value = JSON.stringify(base)
   emit('saved', base)
@@ -444,6 +449,7 @@ const editingId = ref<number | null>(null)
 const editingName = ref('')
 
 async function addDomain() {
+  if (domainBusy.value || saving.value) return
   const err = checkDomainName(newDomain.value, draft.domains)
   domainError.value = err
   if (err) return
@@ -459,12 +465,14 @@ async function addDomain() {
 }
 
 function startRename(id: number, name: string) {
+  if (domainBusy.value || saving.value) return
   editingId.value = id
   editingName.value = name
   domainError.value = null
 }
 
 async function finishRename() {
+  if (domainBusy.value || saving.value) return
   const d = draft.domains.find((x) => x.id === editingId.value)
   if (!d) return
   const err = checkDomainName(editingName.value, draft.domains, d.id)
@@ -478,48 +486,93 @@ async function finishRename() {
 /** 确认一次后文件夹进回收站、领域马上从列表里去掉，几秒内可以撤销 */
 const askRemove = ref<{ domain: Domain; notes: number } | null>(null)
 async function removeDomain(id: number) {
+  if (domainBusy.value || saving.value) return
   const d = draft.domains.find((x) => x.id === id)
   if (!d) return
   domainError.value = null
+  domainBusy.value = true
   try {
-    const notes = draft.vaultPath ? await countDomainNotes(savedRoot(), d.name) : 0
+    const notes = (JSON.parse(saved.value) as Config).vaultPath ? await countDomainNotes(savedRoot(), d.name) : 0
     askRemove.value = { domain: d, notes }
   } catch (e) {
     domainError.value = `没能查看“${d.name}”文件夹：${String(e)}。`
+  } finally {
+    domainBusy.value = false
   }
 }
 
 /** 把文件夹（连同笔记和只有它们在用的图片）放进回收站，再把领域从列表里去掉并马上保存；几秒内可以撤销 */
 async function confirmRemove() {
+  if (domainBusy.value || saving.value) return
   const a = askRemove.value
   askRemove.value = null
   if (!a) return
   const d = a.domain
   const at = draft.domains.findIndex((x) => x.id === d.id)
   if (at < 0) return
-  let images: string[] = []
+  const root = savedRoot()
+  const hasRoot = !!(JSON.parse(saved.value) as Config).vaultPath
+  domainBusy.value = true
   try {
-    if (draft.vaultPath) images = (await deleteDomain(savedRoot(), d.name)).images
-  } catch (e) {
-    domainError.value = `没能删除“${d.name}”文件夹：${String(e)}。`
-    return
-  }
-  draft.domains.splice(at, 1)
-  if (!(await persistDomains())) return
-  toast(`已删除领域「${d.name}」，${a.notes ? `文件夹和 ${a.notes} 篇笔记` : '文件夹'}已放进回收站。`, {
-    action: {
-      label: '撤销',
-      run: async () => {
+    let images: string[] = []
+    let deleted = false
+    try {
+      if (hasRoot) {
+        const result = await deleteDomain(root, d.name)
+        images = result.images
+        deleted = result.existed
+      }
+    } catch (e) {
+      domainError.value = `没能删除“${d.name}”文件夹：${String(e)}。`
+      return
+    }
+    draft.domains.splice(at, 1)
+    if (!(await persistDomains())) {
+      if (deleted) {
         try {
-          if (draft.vaultPath) await restoreDomain(savedRoot(), d.name, images)
-          draft.domains.splice(Math.min(at, draft.domains.length), 0, d)
-          if (await persistDomains()) toast(`已恢复领域「${d.name}」。`)
+          await restoreDomain(root, d.name, images)
+          domainError.value += ' 文件夹已恢复，删除未生效。'
         } catch (e) {
-          toast(`没能撤销：${String(e)}。`, { kind: 'error' })
+          domainError.value += ` 文件夹恢复失败：${String(e)}。请从 Windows 回收站恢复“${d.name}”及相关图片。`
         }
+      }
+      return
+    }
+    toast(
+      deleted
+        ? `已删除领域「${d.name}」，${a.notes ? `文件夹和 ${a.notes} 篇笔记` : '文件夹'}已放进回收站。`
+        : `已删除领域「${d.name}」。`,
+      {
+        action: {
+          label: '撤销',
+          run: async () => {
+            if (domainBusy.value || saving.value) {
+              domainError.value = '正在保存设置，暂时无法撤销。'
+              return
+            }
+            domainBusy.value = true
+            try {
+              if (deleted) await restoreDomain(root, d.name, images)
+              if (!draft.domains.some((x) => x.id === d.id || x.name === d.name))
+                draft.domains.splice(Math.min(at, draft.domains.length), 0, d)
+              const restoredDomains = [...draft.domains]
+              if (await persistDomains()) toast(`已恢复领域「${d.name}」。`)
+              else {
+                draft.domains = restoredDomains
+                domainError.value += ' 文件已恢复，领域列表尚未保存，请点击“保存设置”重试。'
+              }
+            } catch (e) {
+              toast(`没能撤销：${String(e)}。`, { kind: 'error' })
+            } finally {
+              domainBusy.value = false
+            }
+          },
+        },
       },
-    },
-  })
+    )
+  } finally {
+    domainBusy.value = false
+  }
 }
 
 // ---- 保存 ----
@@ -537,6 +590,7 @@ onBeforeUnmount(() => window.clearTimeout(justSavedTimer))
 
 /** 撤销：恢复成上次保存的样子 */
 function revert() {
+  if (domainBusy.value || saving.value) return
   Object.assign(draft, JSON.parse(saved.value) as Config)
   for (const k of KINDS) {
     newKey[k] = ''
@@ -546,7 +600,7 @@ function revert() {
 }
 /** 只确认本次提交的快照；没有剩余改动时才返回 true，允许切页或关闭。 */
 async function save(): Promise<boolean> {
-  if (saving.value) return false
+  if (saving.value || domainBusy.value) return false
   for (const k of KINDS) {
     const error = priceError(k)
     if (error) {
@@ -596,6 +650,7 @@ async function save(): Promise<boolean> {
 
 // ---- 有没保存的改动：告诉外面（切换页面前要问），关闭软件时自己问 ----
 watch(pending, (v) => emit('pending', v))
+watch(domainBusy, (v) => emit('domainBusy', v), { flush: 'sync' })
 defineExpose({ save })
 
 const askClose = ref(false)
@@ -607,8 +662,11 @@ let unguard: (() => void) | undefined
 onBeforeUnmount(() => unguard?.())
 onMounted(() => {
   guardClose(
-    () => pending.value && !props.firstRun,
-    () => (askClose.value = true),
+    () => domainBusy.value || (pending.value && !props.firstRun),
+    () => {
+      if (domainBusy.value) toast('正在处理领域，请完成后再关闭窗口。', { kind: 'error' })
+      else askClose.value = true
+    },
   )
     .then((f) => (unguard = f))
     .catch(() => {}) // 浏览器预览里没有窗口
@@ -828,7 +886,7 @@ onMounted(() => {
       :closing="closing === 'domains'"
       @activate="activate('domains')"
     >
-      <ul class="domains">
+      <ul class="domains" :inert="domainBusy || saving">
         <li v-for="d in draft.domains" :key="d.id">
           <template v-if="editingId === d.id">
             <input v-model="editingName" @keyup.enter="finishRename" @keyup.esc="editingId = null" />
@@ -850,8 +908,14 @@ onMounted(() => {
         </li>
       </ul>
       <div class="row">
-        <input v-model="newDomain" class="grow" placeholder="新领域名" @keyup.enter="addDomain" />
-        <button v-press class="soft" @click="addDomain">添加</button>
+        <input
+          v-model="newDomain"
+          class="grow"
+          :disabled="domainBusy || saving"
+          placeholder="新领域名"
+          @keyup.enter="addDomain"
+        />
+        <button v-press class="soft" :disabled="domainBusy || saving" @click="addDomain">添加</button>
       </div>
       <p v-if="domainError" class="err">{{ domainError }}</p>
     </SettingCard>
@@ -908,8 +972,15 @@ onMounted(() => {
         <span v-if="saveError" class="err">保存失败：{{ saveError }}</span>
         <span v-else-if="justSaved && !pending" class="saved-ok"><Check :size="16" aria-hidden="true" />已保存</span>
         <span v-else class="bar-text">{{ firstRun && !pending ? '填好后点“保存设置”' : '有改动还没保存' }}</span>
-        <button v-if="pending && !firstRun" v-press class="soft" :disabled="saving" @click="revert">撤销</button>
-        <button v-press="'tactile'" class="primary" :disabled="saving || (!pending && !firstRun)" @click="save">
+        <button v-if="pending && !firstRun" v-press class="soft" :disabled="saving || domainBusy" @click="revert">
+          撤销
+        </button>
+        <button
+          v-press="'tactile'"
+          class="primary"
+          :disabled="saving || domainBusy || (!pending && !firstRun)"
+          @click="save"
+        >
           {{ saving ? '保存中…' : '保存设置' }}
         </button>
       </div>

@@ -190,6 +190,28 @@ fn check_segment(s: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// 新文件尚不存在时检查最近的已存在上级；目录链接和文件链接都按真实位置判断。
+fn ensure_inside(root: &std::path::Path, path: &std::path::Path) -> Result<(), String> {
+    let canonical_root = root.canonicalize().map_err(|e| io_msg(root, e))?;
+    let mut existing = path;
+    loop {
+        match fs::symlink_metadata(existing) {
+            Ok(_) => {
+                let resolved = existing.canonicalize().map_err(|e| io_msg(existing, e))?;
+                return if resolved.starts_with(&canonical_root) {
+                    Ok(())
+                } else {
+                    Err("目标位置不在收藏库里".into())
+                };
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                existing = existing.parent().ok_or("目标位置不在收藏库里")?;
+            }
+            Err(e) => return Err(io_msg(existing, e)),
+        }
+    }
+}
+
 /// 写入笔记：收藏库/领域/标题.md；重名时依次尝试 标题-日期.md、标题-日期-2.md……绝不覆盖（方案第 10.4 节）。
 /// 先写临时文件再改名（方案第 10.5 节）。返回相对收藏库的路径
 #[tauri::command]
@@ -202,6 +224,7 @@ fn write_note(
 ) -> Result<String, String> {
     check_segment(&domain)?;
     check_segment(&title)?;
+    check_segment(&date)?;
     let vault = PathBuf::from(&vault);
     if !vault.is_dir() {
         return Err(format!(
@@ -210,15 +233,8 @@ fn write_note(
         ));
     }
     let dir = vault.join(&domain);
+    ensure_inside(&vault, &dir)?;
     fs::create_dir_all(&dir).map_err(|e| io_msg(&dir, e))?;
-    let canon_vault = vault.canonicalize().map_err(|e| io_msg(&vault, e))?;
-    if !dir
-        .canonicalize()
-        .map_err(|e| io_msg(&dir, e))?
-        .starts_with(&canon_vault)
-    {
-        return Err("目标位置不在收藏库里".into());
-    }
     let mut name = format!("{title}.md");
     let mut n = 1;
     while dir.join(&name).exists() {
@@ -231,6 +247,8 @@ fn write_note(
     }
     let target = dir.join(&name);
     let tmp = dir.join(format!(".{name}.tmp"));
+    ensure_inside(&vault, &target)?;
+    ensure_inside(&vault, &tmp)?;
     fs::write(&tmp, content).map_err(|e| io_msg(&tmp, e))?;
     if let Err(e) = fs::rename(&tmp, &target) {
         let _ = fs::remove_file(&tmp);
@@ -252,6 +270,7 @@ fn save_attachment(vault: &str, month: &str, name: &str, bytes: &[u8]) -> Result
         ));
     }
     let dir = vault.join("附件").join(month);
+    ensure_inside(&vault, &dir)?;
     fs::create_dir_all(&dir).map_err(|e| io_msg(&dir, e))?;
     let (stem, ext) = match name.rsplit_once('.') {
         Some((s, e)) => (s.to_string(), format!(".{e}")),
@@ -265,6 +284,8 @@ fn save_attachment(vault: &str, month: &str, name: &str, bytes: &[u8]) -> Result
     }
     let target = dir.join(&file);
     let tmp = dir.join(format!(".{file}.tmp"));
+    ensure_inside(&vault, &target)?;
+    ensure_inside(&vault, &tmp)?;
     fs::write(&tmp, bytes).map_err(|e| io_msg(&tmp, e))?;
     if let Err(e) = fs::rename(&tmp, &target) {
         let _ = fs::remove_file(&tmp);
@@ -306,7 +327,7 @@ fn remove_attachment(vault: String, rel_path: String) -> Result<(), String> {
     {
         return Err("只能删除附件文件夹里的图片".into());
     }
-    let path = PathBuf::from(vault).join(rel);
+    let path = inside_root(std::path::Path::new(&vault), &rel_path)?;
     fs::remove_file(&path).map_err(|e| io_msg(&path, e))
 }
 
@@ -346,11 +367,17 @@ fn list_vault_tags(vault: String) -> Vec<String> {
         return vec![];
     };
     for d in domains.flatten().filter(|d| d.path().is_dir()) {
+        if ensure_inside(std::path::Path::new(&vault), &d.path()).is_err() {
+            continue;
+        }
         let Ok(files) = fs::read_dir(d.path()) else {
             continue;
         };
         for f in files.flatten() {
             let p = f.path();
+            if ensure_inside(std::path::Path::new(&vault), &p).is_err() {
+                continue;
+            }
             if !p.extension().is_some_and(|x| x.eq_ignore_ascii_case("md")) {
                 continue;
             }
@@ -441,6 +468,10 @@ fn list_notes(root: String) -> Result<NoteList, String> {
         if domain.starts_with('.') || domain == "附件" {
             continue;
         }
+        if ensure_inside(&root, &d.path()).is_err() {
+            list.failed.push(domain);
+            continue;
+        }
         let Ok(files) = fs::read_dir(d.path()) else {
             continue;
         };
@@ -451,6 +482,10 @@ fn list_notes(root: String) -> Result<NoteList, String> {
             }
             let name = f.file_name().to_string_lossy().into_owned();
             let rel = format!("{domain}/{name}");
+            if ensure_inside(&root, &p).is_err() {
+                list.failed.push(rel);
+                continue;
+            }
             let Ok(text) = fs::read_to_string(&p) else {
                 list.failed.push(rel);
                 continue;
@@ -497,7 +532,7 @@ fn cover_bytes(root: &str, rel_path: &str) -> Result<Vec<u8>, String> {
     {
         return Err("只能读附件文件夹里的图片".into());
     }
-    let path = PathBuf::from(root).join(rel);
+    let path = inside_root(std::path::Path::new(root), rel_path)?;
     fs::read(&path).map_err(|e| io_msg(&path, e))
 }
 
@@ -600,7 +635,9 @@ fn inside_root(root: &std::path::Path, rel: &str) -> Result<PathBuf, String> {
     {
         return Err("笔记的位置不合法".into());
     }
-    Ok(root.join(r))
+    let path = root.join(r);
+    ensure_inside(root, &path)?;
+    Ok(path)
 }
 
 fn read_note_at(root: &std::path::Path, rel: &str) -> Result<NoteFile, String> {
@@ -676,6 +713,8 @@ fn save_note_at(
     }
     let dir = root.join(domain);
     let target = dir.join(format!("{stem}.md"));
+    ensure_inside(root, &dir)?;
+    ensure_inside(root, &target)?;
     let same = target.exists()
         && matches!((target.canonicalize(), old.canonicalize()), (Ok(a), Ok(b)) if a == b);
     if target.exists() && !same {
@@ -685,6 +724,7 @@ fn save_note_at(
     }
     fs::create_dir_all(&dir).map_err(|e| io_msg(&dir, e))?;
     let tmp = dir.join(format!(".{stem}.md.tmp"));
+    ensure_inside(root, &tmp)?;
     fs::write(&tmp, content).map_err(|e| io_msg(&tmp, e))?;
     if let Err(e) = fs::rename(&tmp, &target) {
         let _ = fs::remove_file(&tmp);
@@ -742,6 +782,9 @@ fn all_note_paths(root: &std::path::Path) -> Vec<String> {
         return v;
     };
     for d in domains.flatten().filter(|d| d.path().is_dir()) {
+        if ensure_inside(root, &d.path()).is_err() {
+            continue;
+        }
         let domain = d.file_name().to_string_lossy().into_owned();
         if domain.starts_with('.') || domain == "附件" {
             continue;
@@ -750,6 +793,9 @@ fn all_note_paths(root: &std::path::Path) -> Vec<String> {
             continue;
         };
         for f in files.flatten() {
+            if ensure_inside(root, &f.path()).is_err() {
+                continue;
+            }
             if f.path()
                 .extension()
                 .is_some_and(|x| x.eq_ignore_ascii_case("md"))
@@ -772,7 +818,7 @@ fn unused_attachments(root: &std::path::Path, rel: &str) -> Result<Vec<String>, 
         .collect();
     Ok(attachment_refs(&text)
         .into_iter()
-        .filter(|a| root.join(a).is_file())
+        .filter(|a| inside_root(root, a).is_ok_and(|p| p.is_file()))
         .filter(|a| !others.iter().any(|o| attachment_refs(o).contains(a)))
         .collect())
 }
@@ -784,7 +830,7 @@ fn delete_note_at(root: &std::path::Path, rel: &str) -> Result<Vec<String>, Stri
     trash::delete(&note).map_err(|e| format!("无法放进回收站：{e}"))?;
     Ok(images
         .into_iter()
-        .filter(|a| trash::delete(root.join(a)).is_ok())
+        .filter(|a| inside_root(root, a).is_ok_and(|p| trash::delete(p).is_ok()))
         .collect())
 }
 
@@ -830,6 +876,11 @@ fn restore_from_trash(wanted: &[PathBuf]) -> Result<(), String> {
             .max_by_key(|i| i.time_deleted)
         {
             chosen.push(it.clone());
+        } else {
+            return Err(format!(
+                "回收站里找不到“{}”，可能已经被清空或还原过",
+                w.display()
+            ));
         }
     }
     if chosen.is_empty() {
@@ -847,6 +898,7 @@ fn restore_note(root: String, rel_path: String, images: Vec<String>) -> Result<(
 fn count_notes_at(root: &std::path::Path, domain: &str) -> Result<usize, String> {
     check_segment(domain)?;
     let dir = root.join(domain);
+    ensure_inside(root, &dir)?;
     if !dir.is_dir() {
         return Ok(0);
     }
@@ -883,7 +935,7 @@ fn images_only_in_domain(root: &std::path::Path, domain: &str) -> Vec<String> {
         };
         for a in attachment_refs(&text) {
             if !images.contains(&a)
-                && root.join(&a).is_file()
+                && inside_root(root, &a).is_ok_and(|p| p.is_file())
                 && !outside_text.iter().any(|o| attachment_refs(o).contains(&a))
             {
                 images.push(a);
@@ -898,6 +950,7 @@ fn images_only_in_domain(root: &std::path::Path, domain: &str) -> Vec<String> {
 struct DeletedDomain {
     notes: usize,
     images: Vec<String>,
+    existed: bool,
 }
 
 fn delete_domain_at(root: &std::path::Path, domain: &str) -> Result<DeletedDomain, String> {
@@ -906,10 +959,12 @@ fn delete_domain_at(root: &std::path::Path, domain: &str) -> Result<DeletedDomai
         return Err("这个文件夹不能当领域删除".into());
     }
     let dir = root.join(domain);
+    ensure_inside(root, &dir)?;
     if !dir.is_dir() {
         return Ok(DeletedDomain {
             notes: 0,
             images: vec![],
+            existed: false,
         });
     }
     let notes = count_notes_at(root, domain)?;
@@ -917,9 +972,13 @@ fn delete_domain_at(root: &std::path::Path, domain: &str) -> Result<DeletedDomai
     trash::delete(&dir).map_err(|e| format!("无法放进回收站：{e}"))?;
     let images = wanted_images
         .into_iter()
-        .filter(|a| trash::delete(root.join(a)).is_ok())
+        .filter(|a| inside_root(root, a).is_ok_and(|p| trash::delete(p).is_ok()))
         .collect();
-    Ok(DeletedDomain { notes, images })
+    Ok(DeletedDomain {
+        notes,
+        images,
+        existed: true,
+    })
 }
 
 #[tauri::command]
@@ -932,7 +991,7 @@ fn delete_domain(root: String, domain: String) -> Result<DeletedDomain, String> 
 fn restore_domain(root: String, domain: String, images: Vec<String>) -> Result<(), String> {
     check_segment(&domain)?;
     let root = PathBuf::from(root);
-    let mut wanted = vec![root.join(&domain)];
+    let mut wanted = vec![inside_root(&root, &domain)?];
     for a in &images {
         wanted.push(inside_root(&root, a)?);
     }
@@ -990,7 +1049,13 @@ fn list_obsidian_vaults() -> Vec<ObsidianVault> {
 /// 返回相对仓库的路径，用 / 分层，按名称排序
 #[tauri::command]
 fn list_subfolders(vault: String) -> Vec<String> {
-    fn walk(dir: &std::path::Path, prefix: &str, depth: usize, out: &mut Vec<String>) {
+    fn walk(
+        root: &std::path::Path,
+        dir: &std::path::Path,
+        prefix: &str,
+        depth: usize,
+        out: &mut Vec<String>,
+    ) {
         if depth == 0 {
             return;
         }
@@ -999,7 +1064,10 @@ fn list_subfolders(vault: String) -> Vec<String> {
         };
         for e in entries.flatten() {
             let name = e.file_name().to_string_lossy().into_owned();
-            if name.starts_with('.') || !e.path().is_dir() {
+            if name.starts_with('.')
+                || !e.path().is_dir()
+                || ensure_inside(root, &e.path()).is_err()
+            {
                 continue;
             }
             let rel = if prefix.is_empty() {
@@ -1007,12 +1075,13 @@ fn list_subfolders(vault: String) -> Vec<String> {
             } else {
                 format!("{prefix}/{name}")
             };
-            walk(&e.path(), &rel, depth - 1, out);
+            walk(root, &e.path(), &rel, depth - 1, out);
             out.push(rel);
         }
     }
     let mut out = Vec::new();
-    walk(&PathBuf::from(vault), "", 3, &mut out);
+    let root = PathBuf::from(vault);
+    walk(&root, &root, "", 3, &mut out);
     out.sort();
     out
 }
@@ -1028,13 +1097,14 @@ fn ensure_subfolder(vault: String, sub: String) -> Result<(), String> {
         check_segment(part)?;
         dir.push(part);
     }
+    ensure_inside(std::path::Path::new(&vault), &dir)?;
     fs::create_dir_all(&dir).map_err(|e| io_msg(&dir, e))
 }
 
 /// 打开笔记：连接的是 Obsidian 仓库时在 Obsidian 里打开，否则用系统默认程序（F13、F31）
 #[tauri::command]
 fn open_note(vault: String, rel_path: String, in_obsidian: bool) -> Result<(), String> {
-    let path = PathBuf::from(&vault).join(rel_path.replace('/', "\\"));
+    let path = inside_root(std::path::Path::new(&vault), &rel_path)?;
     if !path.is_file() {
         return Err(format!("找不到这篇笔记：{}", path.display()));
     }
@@ -1137,6 +1207,82 @@ mod tests {
             "2026-10-20".into(),
             content.into(),
         )
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn path_boundary_junction_cannot_escape_vault() {
+        use std::os::windows::process::CommandExt;
+        let v = TempVault::new("path-boundary");
+        let base = v.0.canonicalize().unwrap();
+        let root = base.join("vault");
+        let outside = base.join("outside");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        let inside = root.join("safe");
+        fs::create_dir_all(&inside).unwrap();
+        fs::write(outside.join("a.md"), "---\ntags: [outside]\n---\nexternal").unwrap();
+        fs::write(outside.join("a.png"), b"outside").unwrap();
+        for (name, target) in [
+            ("domain", &outside),
+            ("附件", &outside),
+            ("internal", &inside),
+        ] {
+            let link = root.join(name);
+            assert!(link.starts_with(&base) && target.starts_with(&base));
+            let result = std::process::Command::new("cmd.exe")
+                .args(["/C", "mklink", "/J"])
+                .arg(&link)
+                .arg(target)
+                .creation_flags(0x08000000)
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+        }
+        assert!(inside_root(&root, "domain/a.md").is_err());
+        assert!(inside_root(&root, "internal/new.md").is_ok());
+        assert!(read_note_at(&root, "domain/a.md").is_err());
+        assert!(save_note_at(&root, "domain/a.md", "safe", "a", "bad").is_err());
+        assert!(cover_bytes(&root.to_string_lossy(), "附件/a.png").is_err());
+        assert!(save_attachment(&root.to_string_lossy(), "2026-10", "x.png", b"bad").is_err());
+        assert!(count_notes_at(&root, "domain").is_err());
+        assert!(delete_domain_at(&root, "domain").is_err());
+        assert!(delete_note_at(&root, "domain/a.md").is_err());
+        assert!(
+            restore_domain(root.to_string_lossy().into_owned(), "domain".into(), vec![]).is_err()
+        );
+        assert!(list_notes(root.to_string_lossy().into_owned())
+            .unwrap()
+            .notes
+            .is_empty());
+        assert!(list_vault_tags(root.to_string_lossy().into_owned()).is_empty());
+        assert!(!list_subfolders(root.to_string_lossy().into_owned()).contains(&"domain".into()));
+        assert!(
+            ensure_subfolder(root.to_string_lossy().into_owned(), "domain/new".into()).is_err()
+        );
+        assert!(!outside.join("2026-10").exists());
+        assert!(!outside.join("new").exists());
+        assert_eq!(fs::read(outside.join("a.png")).unwrap(), b"outside");
+        assert!(fs::read_to_string(outside.join("a.md"))
+            .unwrap()
+            .contains("external"));
+    }
+
+    #[test]
+    fn path_boundary_normal_nested_paths_and_absent_domain() {
+        let v = TempVault::new("path-boundary-normal");
+        ensure_subfolder(v.path(), "safe/nested".into()).unwrap();
+        write(&v, "safe", "a", "inside").unwrap();
+        assert_eq!(read_note_at(&v.0, "safe/a.md").unwrap().content, "inside");
+        save_note_at(&v.0, "safe/a.md", "new-domain", "b", "updated").unwrap();
+        let image = save_attachment(&v.path(), "2026-10", "a.png", b"image").unwrap();
+        assert_eq!(cover_bytes(&v.path(), &image).unwrap(), b"image");
+        assert!(inside_root(&v.0, "../outside.md").is_err());
+        assert!(!delete_domain_at(&v.0, "absent").unwrap().existed);
     }
 
     #[test]
