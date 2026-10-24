@@ -629,7 +629,7 @@ onBeforeUnmount(() => {
   </main>
 
   <!-- 投放（设计稿 设计稿/投放页/基准-已放视频.webp 和 状态-*.webp）：只有一张白卡片，里面不套卡片、输入框不带边框 -->
-  <main v-else class="page">
+  <main v-else class="page import-page">
     <div class="card" @dragover.prevent="dragging = true" @dragleave.self="dragging = false" @drop.prevent="onDrop">
       <div v-if="pendingDraft && !hasContent" class="draft-line">
         <Clock :size="16" aria-hidden="true" />
@@ -815,9 +815,19 @@ onBeforeUnmount(() => {
 <style scoped>
 /* 投放页：一张白卡片，分组只靠留白和灰色小标题；尺寸只用 src/style.css 的令牌 */
 .page {
-  max-width: 680px;
+  max-width: var(--collect-form-width);
   margin: 0 auto;
   padding: var(--sp-5) var(--sp-5) var(--sp-4);
+}
+.import-page {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100dvh - var(--titlebar-h) - var(--sp-5) * 2 - var(--sp-2) * 4);
+  padding-bottom: calc(var(--sp-5) + var(--sp-2) * 4);
+}
+.import-page .card {
+  flex: 0 0 auto;
+  margin-block: auto;
 }
 .card {
   padding: var(--sp-5);

@@ -64,12 +64,14 @@ describe('草稿（F10）', () => {
     const job = newImageJob([new File(['x'], '1.png', { type: 'image/png' })], '视觉收藏')
     job.images![0].crop = { x: 1, y: 2, w: 3, h: 4 }
     job.images![0].autoCrop = null
+    job.images![0].width = 330
     job.images![0].aiUrl = 'data:很长'
     const { data, files } = toDraft(job)
     expect(files.map((f) => f.name)).toEqual(['image-0'])
     const back = fromDraft(JSON.parse(JSON.stringify(data)), { 'image-0': new Blob(['x'], { type: 'image/png' }) })
     const img = back.job.images![0]
     expect(img.file.name).toBe('1.png')
+    expect(img.width).toBe(330)
     expect(img.crop).toEqual({ x: 1, y: 2, w: 3, h: 4 })
     expect(img.autoCrop).toBeNull()
     expect(img.aiUrl).toBeUndefined() // 压缩版很大，不存，需要时重新生成

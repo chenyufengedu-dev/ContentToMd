@@ -41,14 +41,21 @@ const imageType = (name: string) => {
 // 关窗口时有没保存的修改也要问
 const askClose = ref(false)
 let unguard: (() => void) | undefined
-onBeforeUnmount(() => unguard?.())
+const loading = new AbortController()
+onBeforeUnmount(() => {
+  loading.abort()
+  unguard?.()
+})
 
 onMounted(async () => {
   listVaultTags(root.value)
-    .then((t) => (existingTags.value = t))
+    .then((t) => {
+      if (!loading.signal.aborted) existingTags.value = t
+    })
     .catch(() => {})
   try {
     const f = await readNote(root.value, path.value)
+    if (loading.signal.aborted) return
     const { summary, images, body } = parseNoteBody(f.content)
     let domain = props.config.domains.find((d) => d.name === f.domain)
     if (!domain) {
@@ -66,9 +73,11 @@ onMounted(async () => {
       const rel = resolveAttachment(path.value, img.path)
       try {
         const blob = await readCover(root.value, rel)
+        if (loading.signal.aborted) return
         const name = rel.split('/').pop() ?? 'image'
-        files.push({ file: new File([blob], name, { type: imageType(name) }), noteImageIndex })
+        files.push({ file: new File([blob], name, { type: imageType(name) }), noteImageIndex, width: img.width })
       } catch {
+        if (loading.signal.aborted) return
         missing++
       }
     }
@@ -89,6 +98,7 @@ onMounted(async () => {
       },
     }
     edit.value = {
+      originalText: f.originalText,
       path: path.value,
       stem: f.stem,
       meta: {
@@ -108,6 +118,7 @@ onMounted(async () => {
     }
     state.value = 'ready'
   } catch (e) {
+    if (loading.signal.aborted) return
     errorText.value = String(e)
     state.value = /找不到/.test(errorText.value) ? 'gone' : 'error'
   }
@@ -116,7 +127,10 @@ onMounted(async () => {
     () => isDirty.value,
     () => (askClose.value = true),
   )
-    .then((f) => (unguard = f))
+    .then((f) => {
+      if (loading.signal.aborted) f()
+      else unguard = f
+    })
     .catch(() => {})
 })
 

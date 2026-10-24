@@ -674,8 +674,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="settings">
-    <h1>设置</h1>
+  <main class="settings" aria-label="设置">
     <p v-if="firstRun" class="banner">第一次使用，请先选择收藏库文件夹，并填好三项服务，然后点“保存设置”。</p>
 
     <SettingCard
@@ -985,7 +984,7 @@ onMounted(() => {
         </button>
       </div>
     </Transition>
-  </div>
+  </main>
 </template>
 
 <style scoped>
@@ -997,13 +996,6 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: var(--sp-4);
-}
-h1 {
-  margin: 0;
-  font-size: var(--fs-2xl);
-  font-weight: var(--fw-title);
-  line-height: 1.35;
-  color: var(--fg-strong);
 }
 h3 {
   margin: 0;

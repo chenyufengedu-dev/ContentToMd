@@ -75,6 +75,7 @@ const PAGES: { id: Page; label: string }[] = [
   transform: translateY(var(--brand-baseline-offset));
 }
 .nav {
+  --nav-item-height: calc(var(--h-xs) + var(--sp-1));
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
@@ -89,7 +90,7 @@ const PAGES: { id: Page; label: string }[] = [
   top: 3px;
   left: 3px;
   width: 80px;
-  height: var(--h-xs);
+  height: var(--nav-item-height);
   border-radius: var(--radius-pill);
   background: var(--card);
   box-shadow: var(--shadow-card);
@@ -99,14 +100,14 @@ const PAGES: { id: Page; label: string }[] = [
 
 .nav-item {
   position: relative; /* 文字在白色底块上面 */
-  height: var(--h-xs);
+  height: var(--nav-item-height);
   width: 80px;
-  padding: 0 var(--px-md);
+  padding: 0 var(--px-sm);
   border: 0;
   border-radius: var(--radius-pill);
   background: none;
   color: var(--muted);
-  font-size: var(--fs-md);
+  font-size: var(--fs-action);
 }
 .nav-item:hover:not(:disabled) {
   background: none;

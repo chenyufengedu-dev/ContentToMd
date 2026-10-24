@@ -29,3 +29,12 @@ describe('saveFailure', () => {
     expect(f.toSettings).toBe(false)
   })
 })
+
+it('外部修改冲突提示保留本地修改后重新打开，不建议盲目重试', () => {
+  const result = saveFailure('这条笔记已被其他程序修改，未覆盖文件')
+  expect(result.reason).toContain('未覆盖')
+  expect(result.next).toContain('先复制')
+  expect(result.next).toContain('重新打开')
+  expect(result.next).not.toContain('重新保存')
+  expect(result.toSettings).toBe(false)
+})

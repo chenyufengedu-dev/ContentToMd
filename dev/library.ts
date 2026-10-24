@@ -100,6 +100,7 @@ export function installLibraryShell(mode: string | null) {
           if (mode === 'gone') throw new Error('找不到这条笔记了')
           const n = notes[2]
           return {
+            originalText: '隔离预览的原始文件',
             title: n.title,
             domain: n.domain,
             stem: n.title,
