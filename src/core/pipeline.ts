@@ -41,6 +41,8 @@ export interface JobImage {
   file: File
   /** 编辑已有笔记时，对应原图片列表的位置；缺失图片不在加载列表里。 */
   noteImageIndex?: number
+  /** 正文显示宽度，不参与裁剪或发给模型。 */
+  width?: number
   aiUrl?: string
   autoCrop?: Rect | null
   crop?: Rect | null

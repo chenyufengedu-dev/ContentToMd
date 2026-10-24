@@ -1,5 +1,5 @@
 // 笔记保存失败时给用户看的原因和下一步（方案第 7、8 节）。
-// 外壳 write_note 只返回一句中文（main.rs 的 write_note、io_msg），这里是唯一按它的文字分辨原因的地方
+// 外壳笔记写入返回一句中文（main.rs 的 write_note、save_note、io_msg），这里统一转换原因与下一步
 
 export interface SaveFailure {
   /** 一句话原因，提示框和按钮上方那一行都用它 */
@@ -12,6 +12,12 @@ export interface SaveFailure {
 const KEEP = '正在编辑的内容不会丢。'
 
 export function saveFailure(raw: string): SaveFailure {
+  if (raw.includes('已被其他程序修改'))
+    return {
+      reason: '这条笔记已被其他程序修改，未覆盖文件。',
+      next: `请先复制需要保留的修改，再返回收藏库重新打开这条笔记，对照最新版本编辑。${KEEP}`,
+      toSettings: false,
+    }
   const missing = raw.match(/收藏库文件夹“(.+)”找不到了/)
   if (missing)
     return {

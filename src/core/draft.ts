@@ -2,8 +2,7 @@
 // 软件关掉再打开时可以恢复。一次只处理一条，所以只有一份草稿。
 // 这里只管“任务 ↔ 可以存盘的数据”的转换；读写文件在外壳（shell/tauri.ts）
 
-import type { Job, StepState } from './pipeline'
-import type { Rect } from './image'
+import type { Job, JobImage, StepState } from './pipeline'
 
 export const DRAFT_JSON = 'draft.json'
 
@@ -12,7 +11,7 @@ export interface DraftData {
   savedAt: number
   job: Omit<Job, 'steps' | 'wavChunks' | 'images' | 'preview'> & {
     steps: Pick<StepState, 'id' | 'status'>[]
-    images?: { name: string; type: string; autoCrop?: Rect | null; crop?: Rect | null }[]
+    images?: ({ name: string; type: string } & Pick<JobImage, 'autoCrop' | 'crop' | 'width'>)[]
   }
 }
 
@@ -28,7 +27,13 @@ export function toDraft(job: Job): { data: DraftData; files: { name: string; blo
       job: {
         ...rest,
         steps: steps.map((s) => ({ id: s.id, status: s.status })),
-        images: images?.map((i) => ({ name: i.file.name, type: i.file.type, autoCrop: i.autoCrop, crop: i.crop })),
+        images: images?.map((i) => ({
+          name: i.file.name,
+          type: i.file.type,
+          autoCrop: i.autoCrop,
+          crop: i.crop,
+          width: i.width,
+        })),
       },
     },
     files: (images ?? []).map((i, n) => ({ name: `image-${n}`, blob: i.file })),
@@ -51,6 +56,7 @@ export function fromDraft(
       file: new File([files[`image-${n}`] ?? new Blob()], i.name, { type: i.type }),
       autoCrop: i.autoCrop,
       crop: i.crop,
+      width: i.width,
     })),
   }
   const organized = !!job.draft && job.steps.every((s) => s.status === 'done')

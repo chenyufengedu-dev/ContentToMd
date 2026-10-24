@@ -1,9 +1,13 @@
 // 发布版不弹出控制台窗口
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod window_state;
+
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use tauri::Manager;
+use tauri_plugin_window_state::AppHandleExt;
 
 // 软件名还没定（方案第 17 节），先用 ContentToMd
 const APP_DIR: &str = "ContentToMd";
@@ -561,6 +565,7 @@ struct NoteFile {
     cover: String,
     extra: String,
     content: String,
+    original_text: String,
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -688,12 +693,21 @@ fn read_note_at(root: &std::path::Path, rel: &str) -> Result<NoteFile, String> {
             .map(extra_frontmatter)
             .unwrap_or_default(),
         content,
+        original_text: text,
     })
 }
 
 #[tauri::command]
 fn read_note(root: String, rel_path: String) -> Result<NoteFile, String> {
     read_note_at(&PathBuf::from(root), &rel_path)
+}
+
+fn check_note_unchanged(path: &std::path::Path, expected: &str) -> Result<(), String> {
+    let current = fs::read_to_string(path).map_err(|e| io_msg(path, e))?;
+    if current != expected {
+        return Err("这条笔记已被其他程序修改，未覆盖文件".into());
+    }
+    Ok(())
 }
 
 /// 保存修改：领域和文件名都没变就覆盖原文件；变了就写到新位置再删旧的，新位置已有同名笔记时拒绝，
@@ -704,6 +718,7 @@ fn save_note_at(
     domain: &str,
     stem: &str,
     content: &str,
+    expected: &str,
 ) -> Result<String, String> {
     check_segment(domain)?;
     check_segment(stem)?;
@@ -711,6 +726,7 @@ fn save_note_at(
     if !old.is_file() {
         return Err("找不到这条笔记了，可能已经被移走或删除".into());
     }
+    check_note_unchanged(&old, expected)?;
     let dir = root.join(domain);
     let target = dir.join(format!("{stem}.md"));
     ensure_inside(root, &dir)?;
@@ -726,6 +742,10 @@ fn save_note_at(
     let tmp = dir.join(format!(".{stem}.md.tmp"));
     ensure_inside(root, &tmp)?;
     fs::write(&tmp, content).map_err(|e| io_msg(&tmp, e))?;
+    if let Err(error) = check_note_unchanged(&old, expected) {
+        let _ = fs::remove_file(&tmp);
+        return Err(error);
+    }
     if let Err(e) = fs::rename(&tmp, &target) {
         let _ = fs::remove_file(&tmp);
         return Err(io_msg(&target, e));
@@ -743,8 +763,16 @@ fn save_note(
     domain: String,
     stem: String,
     content: String,
+    expected: String,
 ) -> Result<String, String> {
-    save_note_at(&PathBuf::from(root), &rel_path, &domain, &stem, &content)
+    save_note_at(
+        &PathBuf::from(root),
+        &rel_path,
+        &domain,
+        &stem,
+        &content,
+        &expected,
+    )
 }
 
 /// 笔记里引用的收藏库内图片（相对存放文件夹，如 附件/2026-10/a.png）：认标准图片写法和属性里的 cover，
@@ -1137,11 +1165,47 @@ fn percent_encode(s: &str) -> String {
         .collect()
 }
 
+#[tauri::command]
+fn destroy_window(window: tauri::Window) -> tauri::Result<()> {
+    // 确认关闭会直接销毁窗口，必须在窗口消失前保存最大化等状态。
+    if let Err(error) = window.app_handle().save_window_state(window_state::flags()) {
+        eprintln!("无法保存窗口状态：{error}");
+    }
+    window.destroy()
+}
+
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            if let Some(window) = app.get_webview_window("main") {
+                let result = window
+                    .show()
+                    .and_then(|_| window.unminimize())
+                    .and_then(|_| window.set_focus());
+                if let Err(error) = result {
+                    eprintln!("无法切回已有窗口：{error}");
+                }
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_http::init())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(window_state::flags())
+                .skip_initial_state("main")
+                .build(),
+        )
+        .setup(|app| {
+            if let Some(window) = app.get_webview_window("main") {
+                if let Err(error) = window_state::restore(&window) {
+                    eprintln!("无法恢复窗口状态：{error}");
+                }
+                window.show()?;
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
+            destroy_window,
             load_config,
             save_config,
             dir_exists,
@@ -1246,7 +1310,7 @@ mod tests {
         assert!(inside_root(&root, "domain/a.md").is_err());
         assert!(inside_root(&root, "internal/new.md").is_ok());
         assert!(read_note_at(&root, "domain/a.md").is_err());
-        assert!(save_note_at(&root, "domain/a.md", "safe", "a", "bad").is_err());
+        assert!(save_note_at(&root, "domain/a.md", "safe", "a", "bad", "").is_err());
         assert!(cover_bytes(&root.to_string_lossy(), "附件/a.png").is_err());
         assert!(save_attachment(&root.to_string_lossy(), "2026-10", "x.png", b"bad").is_err());
         assert!(count_notes_at(&root, "domain").is_err());
@@ -1278,7 +1342,7 @@ mod tests {
         ensure_subfolder(v.path(), "safe/nested".into()).unwrap();
         write(&v, "safe", "a", "inside").unwrap();
         assert_eq!(read_note_at(&v.0, "safe/a.md").unwrap().content, "inside");
-        save_note_at(&v.0, "safe/a.md", "new-domain", "b", "updated").unwrap();
+        save_note_at(&v.0, "safe/a.md", "new-domain", "b", "updated", "inside").unwrap();
         let image = save_attachment(&v.path(), "2026-10", "a.png", b"image").unwrap();
         assert_eq!(cover_bytes(&v.path(), &image).unwrap(), b"image");
         assert!(inside_root(&v.0, "../outside.md").is_err());
@@ -1351,14 +1415,95 @@ aliases:
     }
 
     #[test]
+    fn save_note_revision_rejects_external_frontmatter_changes() {
+        let v = TempVault::new("revision-meta");
+        let original = "---\ntitle: 原始\n---\n\n正文\n";
+        let rel = write(&v, "其他", "原始", original).unwrap();
+        let opened = read_note_at(&v.0, &rel).unwrap();
+        assert_eq!(opened.original_text, original);
+        let external = "---\ntitle: 外部\n---\n\n正文\n";
+        fs::write(v.0.join(&rel), external).unwrap();
+        let result = save_note_at(
+            &v.0,
+            &rel,
+            "其他",
+            "原始",
+            "本地修改",
+            &opened.original_text,
+        );
+        assert!(result.unwrap_err().contains("已被其他程序修改"));
+        assert_eq!(fs::read_to_string(v.0.join(rel)).unwrap(), external);
+        assert!(!v.0.join("其他/.原始.md.tmp").exists());
+    }
+
+    #[test]
+    fn save_note_revision_rejects_stale_move_without_creating_destination() {
+        let v = TempVault::new("revision-move");
+        let rel = write(&v, "其他", "原始", "打开时原文").unwrap();
+        let opened = read_note_at(&v.0, &rel).unwrap();
+        fs::write(v.0.join(&rel), "外部新内容").unwrap();
+        assert!(save_note_at(&v.0, &rel, "新领域", "新名", "本地", &opened.original_text).is_err());
+        assert_eq!(fs::read_to_string(v.0.join(rel)).unwrap(), "外部新内容");
+        assert!(!v.0.join("新领域").exists());
+    }
+
+    #[test]
+    fn save_note_revision_deleted_file_is_not_recreated() {
+        let v = TempVault::new("revision-deleted");
+        let rel = write(&v, "其他", "原始", "原始内容").unwrap();
+        let opened = read_note_at(&v.0, &rel).unwrap();
+        fs::remove_file(v.0.join(&rel)).unwrap();
+        assert!(save_note_at(
+            &v.0,
+            &rel,
+            "新领域",
+            "新名",
+            "本地内容",
+            &opened.original_text
+        )
+        .is_err());
+        assert!(!v.0.join(rel).exists());
+        assert!(!v.0.join("新领域").exists());
+    }
+
+    #[test]
+    fn save_note_revision_new_baseline_allows_second_save_and_move() {
+        let v = TempVault::new("revision-repeat");
+        let rel = write(&v, "其他", "原始", "打开时原文").unwrap();
+        let opened = read_note_at(&v.0, &rel).unwrap();
+        save_note_at(
+            &v.0,
+            &rel,
+            "其他",
+            "原始",
+            "第一次保存",
+            &opened.original_text,
+        )
+        .unwrap();
+        let latest = read_note_at(&v.0, &rel).unwrap();
+        assert_eq!(latest.original_text, "第一次保存");
+        let moved = save_note_at(
+            &v.0,
+            &rel,
+            "新领域",
+            "新名",
+            "第二次保存",
+            &latest.original_text,
+        )
+        .unwrap();
+        assert_eq!(fs::read_to_string(v.0.join(moved)).unwrap(), "第二次保存");
+        assert!(!v.0.join(rel).exists());
+    }
+
+    #[test]
     fn 保存笔记_同位置覆盖_换领域和文件名会挪动() {
         let v = TempVault::new("save-note");
         let root = PathBuf::from(v.path());
         write(&v, "其他", "旧名", "旧").unwrap();
-        let r = save_note_at(&root, "其他/旧名.md", "其他", "旧名", "新").unwrap();
+        let r = save_note_at(&root, "其他/旧名.md", "其他", "旧名", "新", "旧").unwrap();
         assert_eq!(r, "其他/旧名.md");
         assert_eq!(fs::read_to_string(root.join("其他/旧名.md")).unwrap(), "新");
-        let r = save_note_at(&root, "其他/旧名.md", "设计UI", "新名", "更新").unwrap();
+        let r = save_note_at(&root, "其他/旧名.md", "设计UI", "新名", "更新", "新").unwrap();
         assert_eq!(r, "设计UI/新名.md");
         assert!(!root.join("其他/旧名.md").exists());
         assert_eq!(
@@ -1373,7 +1518,7 @@ aliases:
         let root = PathBuf::from(v.path());
         write(&v, "其他", "甲", "甲的内容").unwrap();
         write(&v, "设计UI", "甲", "别人的").unwrap();
-        let e = save_note_at(&root, "其他/甲.md", "设计UI", "甲", "覆盖").unwrap_err();
+        let e = save_note_at(&root, "其他/甲.md", "设计UI", "甲", "覆盖", "甲的内容").unwrap_err();
         assert!(e.contains("已经有"), "{e}");
         assert_eq!(
             fs::read_to_string(root.join("其他/甲.md")).unwrap(),
@@ -1383,8 +1528,8 @@ aliases:
             fs::read_to_string(root.join("设计UI/甲.md")).unwrap(),
             "别人的"
         );
-        assert!(save_note_at(&root, "其他/甲.md", "..", "甲", "x").is_err());
-        assert!(save_note_at(&root, "../外面.md", "其他", "甲", "x").is_err());
+        assert!(save_note_at(&root, "其他/甲.md", "..", "甲", "x", "甲的内容").is_err());
+        assert!(save_note_at(&root, "../外面.md", "其他", "甲", "x", "").is_err());
     }
 
     #[test]
@@ -1396,6 +1541,8 @@ cover: \"../附件/2026-10/a.png\"
 ![](../附件/2026-10/a.png)
 
 ![说明](<../附件/2026-10/b c.png>)
+
+![说明|330](<../附件/2026-10/b c.png>)
 
 ![网图](https://x.com/y.png)";
         assert_eq!(
@@ -1430,6 +1577,74 @@ cover: \"../附件/2026-10/a.png\"
             b"img"
         );
         assert!(restore_note_at(&root, "../外面.md", &[]).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "操作真实 Windows 回收站，仅显式验收时运行"]
+    fn native_recycle_domain_round_trip() {
+        let v = TempVault::new("native-recycle-domain");
+        let root = &v.0;
+        fs::create_dir_all(root.join("附件/2026-10")).unwrap();
+        fs::write(root.join("附件/2026-10/独占.png"), b"own-image").unwrap();
+        fs::write(root.join("附件/2026-10/共享.png"), b"shared-image").unwrap();
+        let text =
+            "![独占](../附件/2026-10/独占.png)\n\n![共享](../附件/2026-10/共享.png)\n\n原始正文";
+        let rel = write(&v, "待恢复领域", "恢复测试", text).unwrap();
+        write(&v, "保留领域", "引用共享", "![](../附件/2026-10/共享.png)").unwrap();
+        let original = fs::read(root.join(&rel)).unwrap();
+        let deleted = delete_domain_at(root, "待恢复领域").unwrap();
+        let dir_gone = !root.join("待恢复领域").exists();
+        let own_gone = !root.join("附件/2026-10/独占.png").exists();
+        let shared = fs::read(root.join("附件/2026-10/共享.png")).unwrap();
+        restore_domain(v.path(), "待恢复领域".into(), deleted.images.clone()).unwrap();
+        assert!(deleted.existed);
+        assert_eq!(deleted.notes, 1);
+        assert_eq!(deleted.images, vec!["附件/2026-10/独占.png".to_string()]);
+        assert!(dir_gone && own_gone);
+        assert_eq!(shared, b"shared-image");
+        assert_eq!(fs::read(root.join(rel)).unwrap(), original);
+        assert_eq!(
+            fs::read(root.join("附件/2026-10/独占.png")).unwrap(),
+            b"own-image"
+        );
+        assert!(root.join("保留领域/引用共享.md").is_file());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "操作真实 Windows 回收站，仅显式验收时运行"]
+    fn native_recycle_collision_preserves_new_file_and_allows_retry() {
+        let v = TempVault::new("native-recycle-collision");
+        let rel = write(&v, "其他", "同名测试", "原始内容").unwrap();
+        let path = v.0.join(&rel);
+        let original = fs::read(&path).unwrap();
+        let images = delete_note_at(&v.0, &rel).unwrap();
+        fs::write(&path, b"new-content").unwrap();
+        let conflict = restore_note_at(&v.0, &rel, &images);
+        let new_content = fs::read(&path).unwrap();
+        // 移除的仅是本用例写入的冲突文件，随后还原回收站中的原件。
+        fs::remove_file(&path).unwrap();
+        restore_note_at(&v.0, &rel, &images).unwrap();
+        assert!(conflict.is_err());
+        assert_eq!(new_content, b"new-content");
+        assert_eq!(fs::read(path).unwrap(), original);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "操作真实 Windows 回收站，仅显式验收时运行"]
+    fn native_recycle_missing_item_does_not_partially_restore() {
+        let v = TempVault::new("native-recycle-missing");
+        let rel = write(&v, "其他", "缺项测试", "原始内容").unwrap();
+        let original = fs::read(v.0.join(&rel)).unwrap();
+        let images = delete_note_at(&v.0, &rel).unwrap();
+        let missing = restore_note_at(&v.0, &rel, &["附件/从未存在.png".into()]);
+        let note_still_deleted = !v.0.join(&rel).exists();
+        restore_note_at(&v.0, &rel, &images).unwrap();
+        assert!(missing.is_err());
+        assert!(note_still_deleted);
+        assert_eq!(fs::read(v.0.join(rel)).unwrap(), original);
     }
 
     #[test]

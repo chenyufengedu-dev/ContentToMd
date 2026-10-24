@@ -132,12 +132,14 @@ const list = (xs: string[]) => `[${xs.map(q).join(', ')}]`
 export interface NoteImage {
   path: string
   caption: string
+  /** 正文中的显示宽度；不改变附件或封面。 */
+  width?: number
 }
 
-/** 标准 Markdown 图片写法（方案第 10.3 节）；说明里的方括号去掉，路径有空格或括号时用尖括号包起来 */
+/** 保留 Markdown 图片链接，显示宽度使用 Obsidian 的 |宽度 写法；路径有空格或括号时用尖括号包起来。 */
 const imageLine = (i: NoteImage) => {
   const alt = i.caption.replace(/[[\]]/g, '').replace(/\s+/g, ' ').trim()
-  return `![${alt}](${/[\s()]/.test(i.path) ? `<${i.path}>` : i.path})`
+  return `![${alt}${i.width ? `|${Math.round(i.width)}` : ''}](${/[\s()]/.test(i.path) ? `<${i.path}>` : i.path})`
 }
 
 /** 拼成笔记（方案第 10.3 节）。图片放在正文前面，第一张也是封面（由调用方填 meta.cover） */
@@ -172,6 +174,7 @@ export function buildMarkdown(d: NoteDraft, m: NoteMeta, images: NoteImage[] = [
 const SOURCE_TYPES: SourceType[] = ['文字', '图片', '音频', '视频', '文档']
 
 const NoteFileSchema = z.object({
+  originalText: z.string(),
   title: z.string(),
   domain: z.string(),
   stem: z.string(),
@@ -227,7 +230,13 @@ export function parseNoteBody(content: string): { summary: string; images: NoteI
       continue
     } else if (lines.length === 1 && IMAGE_LINE.test(b)) {
       const m = IMAGE_LINE.exec(b)!
-      images.push({ caption: m[1], path: m[2].replace(/^<|>$/g, '') })
+      const size = /^(.*)\|([1-9]\d*)$/.exec(m[1])
+      const width = size ? Number(size[2]) : undefined
+      images.push({
+        caption: size && Number.isSafeInteger(width) ? size[1] : m[1],
+        path: m[2].replace(/^<|>$/g, ''),
+        ...(Number.isSafeInteger(width) ? { width } : {}),
+      })
     } else break
   }
   return { summary, images, body: blocks.slice(i).join('').trimEnd() }

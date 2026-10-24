@@ -272,6 +272,7 @@ describe('buildMarkdown 保留别的程序加的属性', () => {
 
 describe('parseNoteFile', () => {
   const raw = {
+    originalText: '---\ntitle: 配色\n---\n正文',
     title: '配色',
     domain: '设计UI',
     stem: '配色',
@@ -291,7 +292,12 @@ describe('parseNoteFile', () => {
   it('外壳返回的结果原样认下', () => {
     const f = parseNoteFile(raw)
     expect(f.kind).toBe('图片')
+    expect(f.originalText).toBe(raw.originalText)
     expect(f.mode).toBe('视觉收藏')
+  })
+
+  it('没有完整原文时拒绝进入编辑，防止绕过外部修改校验', () => {
+    expect(() => parseNoteFile({ ...raw, originalText: undefined })).toThrow()
   })
 
   it('类型和整理方式不认识（别的程序写的笔记）时按文字、要点提炼算', () => {
@@ -307,4 +313,13 @@ it('拆出正文时保留代码块内空行和段落原始分隔', () => {
 it.each(['', '> [!summary] 这条讲什么\n> 摘要\n\n'])('保留正文首行的代码缩进：%s', (prefix) => {
   const body = '    const first = 1\n    const second = 2'
   expect(parseNoteBody(prefix + body).body).toBe(body)
+})
+
+it('图片显示宽度能从 Markdown 读回，说明和附件路径保持独立', () => {
+  expect(parseNoteBody('![说明|330](<../附件/a (1).png>)\n\n正文')).toEqual({
+    summary: '',
+    images: [{ caption: '说明', path: '../附件/a (1).png', width: 330 }],
+    body: '正文',
+  })
+  expect(parseNoteBody('![说明|abc](a.png)').images).toEqual([{ caption: '说明|abc', path: 'a.png' }])
 })

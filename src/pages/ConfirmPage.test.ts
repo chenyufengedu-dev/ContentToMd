@@ -6,7 +6,8 @@ import type * as TiptapVue from '@tiptap/vue-3'
 import ConfirmPage, { type EditInfo } from './ConfirmPage.vue'
 import { defaultConfig } from '../core/config'
 import type { Job, JobImage } from '../core/pipeline'
-import type { NoteImage } from '../core/note'
+import { parseNoteBody, type NoteImage } from '../core/note'
+import { fromDraft, toDraft } from '../core/draft'
 import type * as ImageTools from '../core/image'
 import { cropForSave } from '../core/image'
 import { saveNote, writeNote, writeAttachment, removeAttachment } from '../shell/tauri'
@@ -76,6 +77,7 @@ async function mount(body = '原始正文', editMode = true, pictures?: { files:
     },
   }
   const edit: EditInfo = {
+    originalText: '打开时完整文件',
     path: '为人处世/旧标题.md',
     stem: '旧标题',
     meta: {
@@ -94,6 +96,7 @@ async function mount(body = '原始正文', editMode = true, pictures?: { files:
   }
   const dirty = vi.fn()
   const saved = vi.fn()
+  const back = vi.fn()
   const root = document.createElement('div')
   document.body.append(root)
   app = createApp(ConfirmPage, {
@@ -103,6 +106,7 @@ async function mount(body = '原始正文', editMode = true, pictures?: { files:
     edit: editMode ? edit : undefined,
     onDirty: dirty,
     onSaved: saved,
+    onBack: back,
   })
   app.mount(root)
   await nextTick()
@@ -120,7 +124,7 @@ async function mount(body = '原始正文', editMode = true, pictures?: { files:
     await new Promise((resolve) => setTimeout(resolve, 0))
     await nextTick()
   }
-  return { root, dirty, saved, save, setTitle, flush, editor: currentEditor, job }
+  return { root, dirty, saved, back, save, setTitle, flush, editor: currentEditor, job }
 }
 async function cropFirst(root: HTMLElement) {
   const button = root.querySelector<HTMLButtonElement>('.pic-tools button')
@@ -324,4 +328,201 @@ it('保存失败后保留修改并可重新保存', async () => {
   await view.flush()
   expect(saveNote).toHaveBeenCalledTimes(2)
   expect(view.dirty).toHaveBeenLastCalledWith(false)
+})
+
+it('笔记编辑页 Esc 与返回按钮发出同一个返回事件', async () => {
+  const view = await mount()
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }))
+  expect(view.back).toHaveBeenCalledTimes(1)
+  const backButton = view.root.querySelector<HTMLButtonElement>('button.back')
+  if (!backButton) throw new Error('缺少返回按钮')
+  backButton.click()
+  expect(view.back).toHaveBeenCalledTimes(2)
+})
+it('新增确认页 Esc 不触发笔记返回', async () => {
+  const view = await mount('原始正文', false)
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }))
+  expect(view.back).not.toHaveBeenCalled()
+})
+it('编辑页提示框打开时 Esc 只关闭提示，再按才返回', async () => {
+  const view = await mount()
+  await view.setTitle('未保存')
+  vi.mocked(saveNote).mockRejectedValueOnce(new Error('测试失败'))
+  view.save.click()
+  await view.flush()
+  const dialog = document.querySelector<HTMLElement>('[role="alertdialog"]')
+  if (!dialog) throw new Error('缺少保存失败提示')
+  dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+  await nextTick()
+  expect(document.querySelector('[role="alertdialog"]')).toBeNull()
+  expect(view.back).not.toHaveBeenCalled()
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }))
+  expect(view.back).toHaveBeenCalledTimes(1)
+})
+
+it('编辑保存携带打开时的完整文件，成功后下一次使用已提交内容作为基线', async () => {
+  const view = await mount()
+  vi.mocked(saveNote).mockResolvedValue('为人处世/旧标题.md')
+  await view.setTitle('第一次')
+  view.save.click()
+  await view.flush()
+  expect(vi.mocked(saveNote).mock.calls[0][5]).toBe('打开时完整文件')
+  const first = vi.mocked(saveNote).mock.calls[0][4]
+  await view.setTitle('第二次')
+  view.save.click()
+  await view.flush()
+  expect(vi.mocked(saveNote).mock.calls[1][5]).toBe(first)
+})
+it('外部修改冲突不清除本地待保存状态，也不更新文件基线', async () => {
+  const view = await mount()
+  await view.setTitle('本地修改')
+  vi.mocked(saveNote).mockRejectedValue(new Error('这条笔记已被其他程序修改，未覆盖文件'))
+  view.save.click()
+  await view.flush()
+  expect(view.dirty).toHaveBeenLastCalledWith(true)
+  expect(view.root.textContent).toContain('先复制')
+  const retry = [...view.root.querySelectorAll('button')].find((button) => button.textContent?.trim() === '重新保存')
+  if (!retry) throw new Error('缺少保存失败入口')
+  retry.click()
+  await view.flush()
+  expect(vi.mocked(saveNote).mock.calls[1][5]).toBe('打开时完整文件')
+})
+
+it('显示宽度调整、保存和恢复默认不重写附件或改变封面', async () => {
+  const view = await mount('正文', true, picture())
+  const image = view.root.querySelector<HTMLImageElement>('.pic-crop img')!
+  Object.defineProperties(image, { naturalWidth: { value: 400 }, naturalHeight: { value: 300 } })
+  image.dispatchEvent(new Event('load'))
+  await nextTick()
+  const figure = view.root.querySelector<HTMLElement>('.pic')!
+  const host = view.root.querySelector<HTMLElement>('.pics')!
+  vi.spyOn(figure, 'getBoundingClientRect').mockReturnValue({ width: 320 } as DOMRect)
+  Object.defineProperty(host, 'clientWidth', { value: 600 })
+  const handle = view.root.querySelector<HTMLButtonElement>('[aria-label="调整图片大小"]')
+  expect(handle).not.toBeNull()
+  handle!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+  await nextTick()
+  expect(figure.style.width).toBe('min(100%, 330px)')
+  expect(view.save.disabled).toBe(false)
+  vi.mocked(saveNote).mockResolvedValue('为人处世/旧标题.md')
+  view.save.click()
+  await view.flush()
+  const content = vi.mocked(saveNote).mock.calls[0][4]
+  expect(content).toContain('![原始说明|330](../附件/原图.png)')
+  expect(content).toContain('cover: "../附件/原图.png"')
+  expect(writeAttachment).not.toHaveBeenCalled()
+  expect(cropForSave).not.toHaveBeenCalled()
+  expect(view.save.disabled).toBe(true)
+  const reset = [...view.root.querySelectorAll<HTMLButtonElement>('.pic-tools button')].find(
+    (button) => button.textContent?.trim() === '恢复',
+  )!
+  reset.click()
+  await nextTick()
+  view.save.click()
+  await view.flush()
+  expect(vi.mocked(saveNote).mock.calls[1][4]).toContain('![原始说明](../附件/原图.png)')
+  expect(writeAttachment).not.toHaveBeenCalled()
+})
+
+it('新笔记拖动限制在正文宽度内，取消拖动还原，保存带上显示宽度', async () => {
+  const pictures = picture()
+  const view = await mount('正文', false, pictures)
+  const image = view.root.querySelector<HTMLImageElement>('.pic-crop img')!
+  Object.defineProperties(image, { naturalWidth: { value: 400 }, naturalHeight: { value: 300 } })
+  image.dispatchEvent(new Event('load'))
+  await nextTick()
+  const figure = view.root.querySelector<HTMLElement>('.pic')!
+  const host = view.root.querySelector<HTMLElement>('.pics')!
+  Object.defineProperty(host, 'clientWidth', { value: 600 })
+  vi.spyOn(figure, 'getBoundingClientRect').mockReturnValue({ width: 320 } as DOMRect)
+  const handle = view.root.querySelector<HTMLButtonElement>('[aria-label="调整图片大小"]')!
+  handle.setPointerCapture = vi.fn()
+  function pointer(type: string, clientX: number, clientY = 0) {
+    const event = new Event(type, { bubbles: true, cancelable: true })
+    Object.defineProperties(event, {
+      pointerId: { value: 1 },
+      button: { value: 0 },
+      clientX: { value: clientX },
+      clientY: { value: clientY },
+    })
+    handle.dispatchEvent(event)
+  }
+  pointer('pointerdown', 320)
+  pointer('pointermove', 1000)
+  await nextTick()
+  expect(figure.style.width).toBe('min(100%, 600px)')
+  expect(figure.querySelector<HTMLElement>('.pic-crop')!.style.aspectRatio).toBe('400 / 300')
+  pointer('pointermove', -1000)
+  await nextTick()
+  expect(figure.style.width).toBe('min(100%, 96px)')
+  pointer('pointercancel', -1000)
+  await nextTick()
+  expect(view.job.images![0].width).toBeUndefined()
+  pointer('pointerdown', 320)
+  pointer('pointermove', 320, 60)
+  pointer('pointerup', 320, 60)
+  await nextTick()
+  vi.mocked(writeNote).mockResolvedValue('为人处世/旧标题.md')
+  view.save.click()
+  await view.flush()
+  expect(vi.mocked(writeNote).mock.calls[0][4]).toContain('![|400](../附件/2026-10/新裁剪.png)')
+  expect(cropForSave).toHaveBeenCalledWith(pictures.files[0].file, null)
+  expect(writeAttachment).toHaveBeenCalledTimes(1)
+})
+
+it('裁剪与尺寸都修改后只显示一个恢复入口，一次恢复两项', async () => {
+  const pictures = picture()
+  const view = await mount('正文', true, { ...pictures, files: [{ ...pictures.files[0], width: 160 }] })
+  await cropFirst(view.root)
+  const buttons = [...view.root.querySelectorAll<HTMLButtonElement>('.pic-tools button')]
+  expect(buttons.map((button) => button.textContent?.trim())).toEqual(['调整裁剪', '恢复'])
+  expect(buttons[1].title).toBe('恢复原图和默认大小')
+  buttons[1].click()
+  await nextTick()
+  expect(view.job.images![0].crop).toBeNull()
+  expect(view.job.images![0].width).toBeUndefined()
+})
+
+it('导入页调整尺寸后草稿恢复、笔记保存并重新打开均保留宽度和封面引用', async () => {
+  const pictures = picture()
+  const view = await mount('正文保留', false, pictures)
+  const image = view.root.querySelector<HTMLImageElement>('.pic-crop img')!
+  Object.defineProperties(image, { naturalWidth: { value: 400 }, naturalHeight: { value: 300 } })
+  image.dispatchEvent(new Event('load'))
+  await nextTick()
+  const figure = view.root.querySelector<HTMLElement>('.pic')!
+  Object.defineProperty(figure.parentElement, 'clientWidth', { value: 600 })
+  vi.spyOn(figure, 'getBoundingClientRect').mockReturnValue({ width: 320 } as DOMRect)
+  view.root
+    .querySelector<HTMLButtonElement>('[aria-label="调整图片大小"]')!
+    .dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+  await nextTick()
+  const draft = toDraft(view.job)
+  const restored = fromDraft(JSON.parse(JSON.stringify(draft.data)), { 'image-0': pictures.files[0].file })
+  expect(restored.job.images![0].width).toBe(330)
+  vi.mocked(writeNote).mockResolvedValue('为人处世/旧标题.md')
+  view.save.click()
+  await view.flush()
+  const markdown = vi.mocked(writeNote).mock.calls[0][4]
+  expect(markdown).toContain('cover: "../附件/2026-10/新裁剪.png"')
+  const parsed = parseNoteBody(markdown.split('\n---\n')[1])
+  expect(parsed.images).toEqual([{ path: '../附件/2026-10/新裁剪.png', caption: '', width: 330 }])
+  app.unmount()
+  const reopened = await mount(parsed.body, true, {
+    files: [{ file: pictures.files[0].file, noteImageIndex: 0, width: parsed.images[0].width }],
+    saved: parsed.images,
+  })
+  const reopenedImage = reopened.root.querySelector<HTMLImageElement>('.pic-crop img')!
+  Object.defineProperties(reopenedImage, { naturalWidth: { value: 400 }, naturalHeight: { value: 300 } })
+  reopenedImage.dispatchEvent(new Event('load'))
+  await nextTick()
+  expect(reopened.root.querySelector<HTMLElement>('.pic')!.style.width).toBe('min(100%, 330px)')
+  expect(reopened.save.disabled).toBe(true)
+  await reopened.setTitle('只改标题')
+  vi.mocked(saveNote).mockResolvedValue('为人处世/只改标题.md')
+  reopened.save.click()
+  await reopened.flush()
+  expect(vi.mocked(saveNote).mock.calls[0][4]).toContain('![|330](../附件/2026-10/新裁剪.png)')
+  expect(vi.mocked(saveNote).mock.calls[0][4]).toContain('cover: "../附件/2026-10/新裁剪.png"')
+  expect(writeAttachment).toHaveBeenCalledTimes(1)
 })

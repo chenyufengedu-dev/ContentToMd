@@ -38,6 +38,8 @@ import { toast } from '../components/useToast'
 
 /** 打开已有笔记修改（F22）：和确认页是同一个界面，保存时改原来的文件，不是新建 */
 export interface EditInfo {
+  /** 打开时的完整文件，保存前用于检查外部修改 */
+  originalText: string
   /** 笔记相对存放文件夹的路径 */
   path: string
   /** 文件名（不含 .md） */
@@ -99,6 +101,7 @@ const pics = reactive(props.job.images ?? [])
 let savedImages = props.edit?.images.map((img) => ({ ...img })) ?? []
 let savedCrops = pics.map((p) => (p.crop ? { ...p.crop } : null))
 let savedCover = props.edit?.meta.cover ?? ''
+let savedFileContent = props.edit?.originalText ?? ''
 const picUrls = pics.map((p) => URL.createObjectURL(p.file))
 const naturals = ref(pics.map(() => ({ w: 0, h: 0 })))
 function onPicLoad(i: number, e: Event) {
@@ -112,7 +115,9 @@ function cropView(i: number) {
   if (!n.w || !c.w || !c.h) return { box: {}, fig: {}, img: { position: 'static' as const, width: '100%' } }
   return {
     box: { aspectRatio: `${c.w} / ${c.h}` },
-    fig: { width: `min(100%, calc(var(--pic-max-h) * ${c.w / c.h}))` },
+    fig: {
+      width: pics[i].width ? `min(100%, ${pics[i].width}px)` : `min(100%, calc(var(--pic-max-h) * ${c.w / c.h}))`,
+    },
     img: {
       width: `${(n.w / c.w) * 100}%`,
       height: `${(n.h / c.h) * 100}%`,
@@ -120,6 +125,76 @@ function cropView(i: number) {
       top: `${(-c.y / c.h) * 100}%`,
     },
   }
+}
+// 拖动只改变排版宽度；pointer capture 保证移出图片后仍可结束，不注册全局监听。
+const MIN_PIC_WIDTH = 96
+let resize:
+  | { index: number; pointerId: number; x: number; y: number; ratio: number; width: number; original?: number }
+  | undefined
+function setPicWidth(i: number, element: HTMLElement, width: number) {
+  const max = element.parentElement?.clientWidth ?? 0
+  if (!max) return
+  pics[i].width = Math.round(Math.min(max, Math.max(Math.min(MIN_PIC_WIDTH, max), width)))
+  rememberEdits()
+  void nextTick(updateLink)
+}
+function startResize(i: number, event: PointerEvent) {
+  if (event.button !== 0 || !(event.currentTarget instanceof HTMLButtonElement)) return
+  const button = event.currentTarget
+  const figure = button.closest<HTMLElement>('.pic')
+  if (!figure) return
+  button.focus({ preventScroll: true })
+  resize = {
+    index: i,
+    pointerId: event.pointerId,
+    x: event.clientX,
+    y: event.clientY,
+    ratio: (pics[i].crop?.w ?? naturals.value[i].w) / (pics[i].crop?.h ?? naturals.value[i].h) || 1,
+    width: figure.getBoundingClientRect().width,
+    original: pics[i].width,
+  }
+  button.setPointerCapture(event.pointerId)
+}
+function moveResize(event: PointerEvent) {
+  if (!resize || resize.pointerId !== event.pointerId || !(event.currentTarget instanceof HTMLElement)) return
+  const figure = event.currentTarget.closest<HTMLElement>('.pic')
+  const dx = event.clientX - resize.x
+  const dy = (event.clientY - resize.y) * resize.ratio
+  if (figure) setPicWidth(resize.index, figure, resize.width + (Math.abs(dx) >= Math.abs(dy) ? dx : dy))
+}
+function endResize(event: PointerEvent) {
+  if (!resize || resize.pointerId !== event.pointerId) return
+  if (event.type === 'pointercancel') resetPicWidth(resize.index, resize.original)
+  resize = undefined
+}
+function resetPicWidth(i: number, width?: number) {
+  pics[i].width = width
+  rememberEdits()
+  void nextTick(updateLink)
+}
+function resetPicture(i: number) {
+  pics[i].crop = null
+  resetPicWidth(i)
+}
+function resizeKey(i: number, event: KeyboardEvent) {
+  if (event.isComposing || !(event.currentTarget instanceof HTMLElement)) return
+  const figure = event.currentTarget.closest<HTMLElement>('.pic')
+  if (!figure) return
+  if (event.key === 'Escape' && resize) {
+    event.preventDefault()
+    event.stopPropagation()
+    resetPicWidth(resize.index, resize.original)
+    resize = undefined
+    return
+  }
+  const direction = { ArrowLeft: -1, ArrowDown: -1, ArrowRight: 1, ArrowUp: 1 }[event.key]
+  if (!direction) return
+  event.preventDefault()
+  setPicWidth(
+    i,
+    figure,
+    (pics[i].width ?? figure.getBoundingClientRect().width) + direction * (event.shiftKey ? 50 : 10),
+  )
 }
 const sameRect = (a?: Rect | null, b?: Rect | null) =>
   !!a && !!b && a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h
@@ -149,8 +224,14 @@ const editor = useEditor({
 // ---------------- 打开已有笔记：有没有改动 ----------------
 const bodyTick = ref(0)
 const snapshot = () =>
-  JSON.stringify([form.title, form.domainId, form.tags, form.keywords, form.summary, pics.map((p) => p.crop ?? null)]) +
-  editorBody()
+  JSON.stringify([
+    form.title,
+    form.domainId,
+    form.tags,
+    form.keywords,
+    form.summary,
+    pics.map((p) => [p.crop ?? null, p.width ?? null]),
+  ]) + editorBody()
 const baseline = ref<string | null>(null)
 // 只改属性时不让编辑器的格式规范化或不支持节点改写原文。
 let originalBody = start.body
@@ -361,7 +442,7 @@ async function writeImage(title: string, root: string, picture: { file: File; cr
 async function writeImages(
   title: string,
   root: string,
-  pictures: { file: File; crop: Rect | null }[],
+  pictures: { file: File; crop: Rect | null; width?: number }[],
 ): Promise<{ images: NoteImage[]; written: string[]; failed: string[] }> {
   const images: NoteImage[] = []
   const written: string[] = []
@@ -370,7 +451,7 @@ async function writeImages(
     try {
       const rel = await writeImage(title, root, p, i)
       written.push(rel)
-      images.push({ path: `../${rel}`, caption: d.image_captions[i] ?? '' })
+      images.push({ path: `../${rel}`, caption: d.image_captions[i] ?? '', width: p.width })
     } catch {
       failed.push(`第 ${i + 1} 张`)
     }
@@ -402,6 +483,7 @@ async function saveEdit(e: EditInfo) {
   const pictures = pics.map((p, i) => ({
     file: p.file,
     crop: submittedCrops[i],
+    width: p.width,
     index: p.noteImageIndex ?? i,
     changed: JSON.stringify(submittedCrops[i]) !== JSON.stringify(savedCrops[i]),
   }))
@@ -409,6 +491,7 @@ async function saveEdit(e: EditInfo) {
   const written: string[] = []
   try {
     for (const p of pictures) {
+      images[p.index] = { ...images[p.index], width: p.width }
       if (!p.changed) continue
       const previous = images[p.index]
       const rel = await writeImage(title, root, p, p.index)
@@ -420,7 +503,8 @@ async function saveEdit(e: EditInfo) {
     const md = buildMarkdown(submitted, meta, images)
     // 文件名跟着标题走；标题没改过就不动文件名（笔记可能重名时加过日期，或在 Obsidian 里改过名）
     const stem = title === savedTitle ? e.stem : safeFileTitle(title)
-    const rel = await saveNote(root, e.path, domain, stem, md)
+    const rel = await saveNote(root, e.path, domain, stem, md, savedFileContent)
+    savedFileContent = md
     savedImages = images
     savedCrops = submittedCrops
     savedCover = meta.cover
@@ -469,7 +553,7 @@ async function save() {
     body: bodyToSave(),
     image_captions: [...d.image_captions],
   }
-  const pictures = pics.map((p) => ({ file: p.file, crop: p.crop ? { ...p.crop } : null }))
+  const pictures = pics.map((p) => ({ file: p.file, crop: p.crop ? { ...p.crop } : null, width: p.width }))
   const { images, written, failed } = await writeImages(title, root, pictures)
   const md = buildMarkdown(
     submitted,
@@ -506,16 +590,18 @@ async function save() {
 
 const confirmingDiscard = ref(false)
 
-// 快捷键：Ctrl+S 保存；Esc 先收起原文，再关放弃确认（方案第 11 节）
+// Esc 优先收起局部状态，笔记编辑模式再复用返回入口。
 function onKey(e: KeyboardEvent) {
   if (!props.active) return
   if (e.ctrlKey && e.key.toLowerCase() === 's') {
     e.preventDefault()
     save()
   } else if (e.key === 'Escape') {
-    if (failDialog.value) return // 提示框自己处理 Esc
+    if (e.defaultPrevented || e.isComposing || e.repeat || failDialog.value) return
+    e.preventDefault()
     if (comparing.value) setComparing(false)
-    else confirmingDiscard.value = false
+    else if (confirmingDiscard.value) confirmingDiscard.value = false
+    else if (props.edit) emit('back')
   }
 }
 onMounted(() => {
@@ -587,9 +673,29 @@ onBeforeUnmount(() => {
                 @load="onPicLoad(i, $event)"
               />
             </div>
+            <button
+              class="pic-resize"
+              aria-label="调整图片大小"
+              title="拖动调整大小；方向键微调，Shift 加快"
+              @pointerdown.stop.prevent="startResize(i, $event)"
+              @pointermove="moveResize"
+              @pointerup="endResize"
+              @pointercancel="endResize"
+              @lostpointercapture="endResize"
+              @keydown="resizeKey(i, $event)"
+            >
+              <span aria-hidden="true"></span>
+            </button>
             <div class="pic-tools">
-              <button v-press @click="cropping = i">调整裁剪</button>
-              <button v-if="p.crop" v-press @click="p.crop = null">恢复原图</button>
+              <button v-press aria-label="调整裁剪" title="调整裁剪" @click="cropping = i">调整裁剪</button>
+              <button
+                v-if="p.crop || p.width !== undefined"
+                v-press
+                :title="p.crop ? (p.width !== undefined ? '恢复原图和默认大小' : '恢复原图') : '恢复默认大小'"
+                @click="resetPicture(i)"
+              >
+                恢复
+              </button>
             </div>
           </figure>
           <p v-if="cropNote && !edit" class="pic-note">{{ cropNote }}</p>
@@ -991,6 +1097,7 @@ onBeforeUnmount(() => {
 .pic {
   position: relative;
   margin: 0;
+  flex-shrink: 0;
 }
 .pic-crop {
   position: relative;
@@ -1003,14 +1110,19 @@ onBeforeUnmount(() => {
   position: absolute;
   max-width: none;
   display: block;
+  pointer-events: none;
+  user-select: none;
 }
-/* 悬停时右上角浮出两个小按钮 */
+/* 悬停或键盘聚焦时显示图片操作。 */
 .pic-tools {
   position: absolute;
   top: var(--sp-2);
   right: var(--sp-2);
   display: flex;
   gap: var(--sp-1);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  max-width: calc(100% - var(--sp-2) * 2);
   opacity: 0;
   transition: opacity var(--ease);
 }
@@ -1020,12 +1132,60 @@ onBeforeUnmount(() => {
 }
 .pic-tools button {
   height: var(--h-xs);
-  padding: 0 var(--px-sm);
+  max-width: 100%;
+  padding: 0 var(--sp-2);
+  white-space: nowrap;
   border: 0;
   border-radius: var(--radius-pill);
-  background: rgb(255 255 255 / 92%);
+  background: var(--card);
   box-shadow: var(--shadow-card);
   font-size: var(--fs-sm);
+}
+.pic-resize {
+  position: absolute;
+  right: calc(var(--h-xs) / -2);
+  bottom: calc(var(--h-xs) / -2);
+  width: var(--h-xs);
+  height: var(--h-xs);
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: nwse-resize;
+  touch-action: none;
+  opacity: 0;
+}
+.pic-resize,
+.pic-resize:hover:not(:disabled),
+.pic-resize:active {
+  background: transparent;
+}
+/* 键盘焦点由整张图片的外圈标示，避免手柄出现按钮状方框。 */
+.pic-resize:focus-visible {
+  outline: 0;
+}
+.pic-resize span {
+  width: calc(var(--sp-2) + var(--sp-1) / 2);
+  height: calc(var(--sp-2) + var(--sp-1) / 2);
+  border: calc(var(--sp-1) / 4) solid var(--line-strong);
+  background: var(--card);
+  box-shadow: var(--shadow-card);
+  pointer-events: none;
+}
+.pic-resize:hover span,
+.pic-resize:focus-visible span,
+.pic-resize:active span {
+  border-color: var(--accent);
+}
+.pic:hover .pic-resize,
+.pic:focus-within .pic-resize {
+  opacity: 1;
+}
+.pic:hover .pic-crop,
+.pic:focus-within .pic-crop {
+  outline: calc(var(--sp-1) / 2) solid var(--accent);
+  outline-offset: calc(var(--sp-1) / 2);
 }
 .pic-note {
   margin: 0;

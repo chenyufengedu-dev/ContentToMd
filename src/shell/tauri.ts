@@ -53,8 +53,14 @@ export const readCover = async (root: string, relPath: string) =>
 // 笔记查看和编辑（F22）：保存时领域或文件名变了，外壳会把文件挪过去；删除放进回收站，返回一起删掉的图片数
 export const readNote = async (root: string, relPath: string) =>
   parseNoteFile(await invoke<unknown>('read_note', { root, relPath }))
-export const saveNote = (root: string, relPath: string, domain: string, stem: string, content: string) =>
-  invoke<string>('save_note', { root, relPath, domain, stem, content })
+export const saveNote = (
+  root: string,
+  relPath: string,
+  domain: string,
+  stem: string,
+  content: string,
+  expected: string,
+) => invoke<string>('save_note', { root, relPath, domain, stem, content, expected })
 /** 返回一起放进回收站的图片（相对存放文件夹），撤销时要把它们一起交回来 */
 export const deleteNote = (root: string, relPath: string) => invoke<string[]>('delete_note', { root, relPath })
 /** 撤销删除：把刚放进回收站的笔记和图片还原到原位置 */
@@ -129,4 +135,4 @@ export const guardClose = async (shouldAsk: () => boolean, ask: () => void) => {
   return () => void closeGuards.delete(guard)
 }
 /** 确认后真正关闭，不再触发上面的询问 */
-export const destroyWindow = () => getCurrentWindow().destroy()
+export const destroyWindow = () => invoke<void>('destroy_window')
