@@ -50,19 +50,19 @@ const lines = computed(() =>
         <span class="folder-domain">/ {{ parts.at(-2) }}</span>
       </p>
       <p v-if="cost !== undefined" class="cost">
-        <Coins :size="14" aria-hidden="true" />本条花费{{ formatYuan(cost) }}
+        <Coins :size="14" aria-hidden="true" />本次估算费用：{{ formatYuan(cost) }}
       </p>
 
       <div v-if="note.failedImages.length" class="img-fail">
         <p class="img-fail-title">
-          <CircleAlert :size="14" aria-hidden="true" />有 {{ note.failedImages.length }} 张图片没有写入
+          <CircleAlert :size="14" aria-hidden="true" />笔记已保存，{{ note.failedImages.length }} 张图片保存失败。
         </p>
         <p class="img-fail-names">{{ note.failedImages.join('、') }}</p>
       </div>
 
       <div class="buttons">
         <button v-press class="soft" @click="emit('open')">
-          <ExternalLink :size="14" aria-hidden="true" />打开文档
+          <ExternalLink :size="14" aria-hidden="true" />打开笔记
         </button>
         <button v-press="'tactile'" class="primary" @click="emit('next')">
           继续收藏<span class="kbd">Ctrl+Enter</span>

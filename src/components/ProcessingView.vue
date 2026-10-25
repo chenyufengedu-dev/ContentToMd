@@ -122,11 +122,11 @@ function elapsed(s: { startedAt?: number; endedAt?: number }) {
           <span class="step-name">{{ s.status === 'running' ? `正在${STEP_LABELS[s.id]}` : STEP_LABELS[s.id] }}</span>
           <span class="step-time">{{
             s.status === 'running'
-              ? [s.note, s.startedAt ? `已用时 ${elapsed(s)}` : ''].filter(Boolean).join(' · ')
+              ? [s.startedAt ? `已用时 ${elapsed(s)}` : '', s.note].filter(Boolean).join(' · ')
               : s.status === 'failed'
                 ? '失败'
                 : s.status === 'done'
-                  ? elapsed(s)
+                  ? `用时 ${elapsed(s)}`
                   : ''
           }}</span>
         </li>
@@ -146,7 +146,7 @@ function elapsed(s: { startedAt?: number; endedAt?: number }) {
         </div>
       </template>
       <template v-else>
-        <p class="hint wait-hint">通常需要 20～40 秒，完成后会自动进入确认页。</p>
+        <p class="hint wait-hint">正在整理，完成后可编辑并保存。</p>
         <div class="buttons">
           <button v-press class="soft" @click="emit('cancel')">取消</button>
         </div>

@@ -37,7 +37,7 @@ async function request(
   })
   stopped.catch(() => {}) // 没取消、没超时时这个 Promise 一直挂着，不算未处理的错误
   const timer = setTimeout(
-    () => stop(new AppError('timeout', '服务响应超时，请检查网络后重试。', `超过 ${timeoutMs / 1000} 秒`)),
+    () => stop(new AppError('timeout', '服务响应超时，请稍后重试。', `超过 ${timeoutMs / 1000} 秒`)),
     timeoutMs,
   )
   const onCancel = () => stop(new AppError('cancelled', '已取消'))
@@ -50,8 +50,8 @@ async function request(
     if (cancel?.aborted) throw new AppError('cancelled', '已取消')
     const timedOut = ctrl.signal.aborted
     throw timedOut
-      ? new AppError('timeout', '服务响应超时，请检查网络后重试。', String(e))
-      : new AppError('network', '网络连接失败，请检查网络和接口地址后重试。', String(e))
+      ? new AppError('timeout', '服务响应超时，请稍后重试。', String(e))
+      : new AppError('network', '连接失败，请检查网络及接口地址。', String(e))
   } finally {
     clearTimeout(timer)
     cancel?.removeEventListener('abort', onCancel)
@@ -59,14 +59,13 @@ async function request(
   if (res.ok) return res
   const body = await res.text().catch(() => '')
   const detail = `HTTP ${res.status} ${body.slice(0, 500)}`
-  if (res.status === 401 || res.status === 403)
-    throw new AppError('auth', `${name}服务的密钥无效，请到设置中检查。`, detail)
+  if (res.status === 401 || res.status === 403) throw new AppError('auth', `${name}密钥无效，请到设置中检查。`, detail)
   if (res.status === 402 || /balance|余额|insufficient|quota/i.test(body))
-    throw new AppError('balance', `${name}账户余额不足，请充值后重试。`, detail)
+    throw new AppError('balance', `${name}余额不足，请充值后重试。`, detail)
   if (res.status === 404 || (res.status === 400 && /model/i.test(body)))
-    throw new AppError('not_found', `找不到${name}的接口或模型，请检查接口地址和模型名。`, detail)
+    throw new AppError('not_found', `${name}接口或模型不存在，请检查地址和模型名。`, detail)
   if (res.status === 429) throw new AppError('rate_limit', '请求太频繁，请稍后重试。', detail)
-  throw new AppError('unavailable', `${name}暂时不可用，请稍后重试。`, detail)
+  throw new AppError('unavailable', `${name}暂不可用，请稍后重试。`, detail)
 }
 
 /** 1×1 白色 PNG，用来测试看图接口 */
@@ -109,7 +108,7 @@ export async function testService(kind: ServiceKind, s: ServiceConfig, fetch: Fe
   )
   const data = await res.json().catch(() => null)
   if (!data?.choices)
-    throw new AppError('bad_response', '服务返回的结果格式不对，请检查接口地址。', JSON.stringify(data).slice(0, 500))
+    throw new AppError('bad_response', '服务返回内容异常，请检查接口地址和模型名。', JSON.stringify(data).slice(0, 500))
 }
 
 /** 语音转写：返回原始文字 */
@@ -131,7 +130,7 @@ export async function transcribe(s: ServiceConfig, wav: Blob, fetch: Fetch, canc
   )
   const data = await res.json().catch(() => null)
   if (typeof data?.text !== 'string')
-    throw new AppError('bad_response', '转写服务返回的结果格式不对，请点击重试。', JSON.stringify(data).slice(0, 500))
+    throw new AppError('bad_response', '语音转写结果异常，请重试。', JSON.stringify(data).slice(0, 500))
   return data.text
 }
 
@@ -183,11 +182,11 @@ export async function chatJson(
     usage = data?.usage
   }
   if (usage) onUsage?.(usage)
-  if (finish === 'length') throw new AppError('truncated', '内容太长，AI 的输出被截断了。', 'finish_reason=length')
+  if (finish === 'length') throw new AppError('truncated', '整理结果被截断，请减少内容后重试。', 'finish_reason=length')
   try {
     return JSON.parse(String(content))
   } catch {
-    throw new AppError('format', 'AI 返回的结果格式异常，请点击重试。', String(content).slice(0, 500))
+    throw new AppError('format', '整理结果格式异常，请重试。', String(content).slice(0, 500))
   }
 }
 
@@ -231,8 +230,8 @@ async function readStream(
     }
   } catch (e) {
     if (cancel?.aborted) throw new AppError('cancelled', '已取消')
-    if (e instanceof SyntaxError) throw new AppError('bad_response', '服务返回的结果格式不对，请点击重试。', String(e))
-    throw new AppError('network', '网络连接中断，请检查网络后重试。', String(e))
+    if (e instanceof SyntaxError) throw new AppError('bad_response', '服务返回内容异常，请重试。', String(e))
+    throw new AppError('network', '连接已中断，请检查网络后重试。', String(e))
   } finally {
     cancel?.removeEventListener('abort', onCancel)
   }

@@ -138,7 +138,7 @@
   :is(button, a, [data-ai-hover]):hover .ai .mic-cap {
     animation-name: ai-mic;
   }
-  :is(button, a, [data-ai-hover]):hover .ai .x-all {
+  :is(button, a, [data-ai-hover]):hover .ai:not([data-ai-no-spin]) .x-all {
     animation-name: ai-spin90;
   }
   :is(button, a, [data-ai-hover]):hover .ai .txt-line {

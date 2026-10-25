@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { UNSAVED_CHANGES } from '../core/editMessages'
 import { vPress } from '../components/pressFeedback'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import {
@@ -50,7 +51,11 @@ const emit = defineEmits<{ saved: [Config]; pending: [boolean]; domainBusy: [boo
 // 在副本上编辑，点“保存设置”才写入
 const draft = reactive<Config>(JSON.parse(JSON.stringify(props.config)))
 const saved = ref(JSON.stringify(props.config))
-const dirty = computed(() => JSON.stringify(draft) !== saved.value)
+const dirty = computed(() => {
+  const services = { ...draft.services }
+  for (const k of KINDS) services[k] = { ...services[k], apiKey: newKey[k].trim() || services[k].apiKey }
+  return JSON.stringify({ ...draft, services }) !== saved.value
+})
 
 const KINDS = SERVICE_KINDS
 
@@ -104,9 +109,9 @@ const savedPrice = (k: ServiceKind) => (JSON.parse(saved.value) as Config).servi
 /** 填的不是数字的那一项 */
 const priceError = (k: ServiceKind) => {
   const field = priceFields(k).find((f) => Number.isNaN(parsePrice(priceText[k][f.key])))
-  return field ? `${SERVICE_LABELS[k]}的「${field.label}」价格要填有限的非负数，比如 0.02。` : undefined
+  return field ? `${SERVICE_LABELS[k]}的${field.label}须为大于或等于 0 的数字，例如 0.02。` : undefined
 }
-/** 价格改了还没保存：收起后“价格（选填）”旁边有个橙色小点 */
+/** 价格尚未保存：收起后“价格（选填）”旁边有个橙色小点 */
 const priceDirty = (k: ServiceKind) =>
   !!priceError(k) || JSON.stringify(savedPrice(k) ?? null) !== JSON.stringify(draft.services[k].price ?? null)
 /** 保存设置后，价格改过的服务在“价格（选填）”旁边闪几秒“✓ 已保存” */
@@ -134,9 +139,9 @@ function spendText(k: ServiceKind): string {
   const s = summarize(usage.value, id, new Date())
   if (!s.calls) return ''
   // 这把密钥一次都没算过钱（没填价格）：只说用了几次，不显示金额
-  if (s.unknown === s.calls) return `这个密钥：共 ${s.calls} 次`
+  if (s.unknown === s.calls) return `当前密钥已调用 ${s.calls} 次`
   const y = (v: number) => (v === 0 ? ' 0 元' : formatYuan(v))
-  return `这个密钥：本月${y(s.month)} · 累计${y(s.total)} · 共 ${s.calls} 次`
+  return `当前密钥：本月${y(s.month)} · 累计${y(s.total)} · ${s.calls} 次调用`
 }
 
 // ---- 抽出来的那张卡片：每次进入设置页都从“都没抽出”开始（页面每次重新创建） ----
@@ -328,7 +333,7 @@ async function createFolder() {
   try {
     await ensureSubfolder(draft.vaultPath, name)
   } catch (e) {
-    return (createError.value = `没能新建文件夹：${String(e)}`)
+    return (createError.value = `文件夹创建失败：${String(e)}`)
   } finally {
     creatingFolder.value = false
   }
@@ -351,7 +356,7 @@ watch(() => draft.vault.kind, placeKindThumb, { flush: 'post' })
 /** 连上之后仓库列表收起来，点“更换”才展开 */
 const changingVault = ref(false)
 const showVaultList = computed(() => !connected.value || changingVault.value)
-const VAULT_DESC = '笔记和图片保存在哪里。两种方式的笔记格式一样，随时可以切换。'
+const VAULT_DESC = '选择笔记和图片的保存位置。'
 /** 卡片收起时，说明换成当前存放位置，不点开也知道存在哪；还没选好时显示说明 */
 const vaultStatus = computed(() => {
   if (!draft.vaultPath) return undefined
@@ -406,7 +411,7 @@ async function runTest(k: ServiceKind) {
   applyKey(k)
   const s = draft.services[k]
   if (!isServiceConfigured(s)) {
-    test[k] = { status: 'fail', message: checkBaseUrl(s.baseUrl) ?? '请先填写接口地址、模型名和密钥。' }
+    test[k] = { status: 'fail', message: checkBaseUrl(s.baseUrl) ?? '请填写接口地址、模型名和密钥后再测试。' }
     return
   }
   test[k] = { status: 'testing' }
@@ -433,7 +438,7 @@ async function persistDomains(): Promise<boolean> {
     await saveConfig(base)
   } catch (e) {
     draft.domains = (JSON.parse(saved.value) as Config).domains // 没存成就恢复成存好的样子
-    domainError.value = `没能保存领域列表：${String(e)}。`
+    domainError.value = `领域列表保存失败：${String(e)}。`
     return false
   } finally {
     domainBusy.value = wasBusy
@@ -495,7 +500,7 @@ async function removeDomain(id: number) {
     const notes = (JSON.parse(saved.value) as Config).vaultPath ? await countDomainNotes(savedRoot(), d.name) : 0
     askRemove.value = { domain: d, notes }
   } catch (e) {
-    domainError.value = `没能查看“${d.name}”文件夹：${String(e)}。`
+    domainError.value = `无法读取领域文件夹“${d.name}”：${String(e)}。`
   } finally {
     domainBusy.value = false
   }
@@ -523,7 +528,7 @@ async function confirmRemove() {
         deleted = result.existed
       }
     } catch (e) {
-      domainError.value = `没能删除“${d.name}”文件夹：${String(e)}。`
+      domainError.value = `领域文件夹删除失败：${String(e)}。`
       return
     }
     draft.domains.splice(at, 1)
@@ -531,23 +536,23 @@ async function confirmRemove() {
       if (deleted) {
         try {
           await restoreDomain(root, d.name, images)
-          domainError.value += ' 文件夹已恢复，删除未生效。'
+          domainError.value += ' 删除未生效，文件夹已恢复。'
         } catch (e) {
-          domainError.value += ` 文件夹恢复失败：${String(e)}。请从 Windows 回收站恢复“${d.name}”及相关图片。`
+          domainError.value += ` 自动恢复失败。请从 Windows 回收站恢复“${d.name}”及相关图片。详情：${String(e)}`
         }
       }
       return
     }
     toast(
       deleted
-        ? `已删除领域「${d.name}」，${a.notes ? `文件夹和 ${a.notes} 篇笔记` : '文件夹'}已放进回收站。`
-        : `已删除领域「${d.name}」。`,
+        ? `已删除领域“${d.name}”，${a.notes ? `文件夹及 ${a.notes} 篇笔记` : '文件夹'}已移入回收站。`
+        : `已删除领域“${d.name}”。`,
       {
         action: {
           label: '撤销',
           run: async () => {
             if (domainBusy.value || saving.value) {
-              domainError.value = '正在保存设置，暂时无法撤销。'
+              domainError.value = '设置正在保存，暂时无法撤销。'
               return
             }
             domainBusy.value = true
@@ -559,10 +564,10 @@ async function confirmRemove() {
               if (await persistDomains()) toast(`已恢复领域「${d.name}」。`)
               else {
                 draft.domains = restoredDomains
-                domainError.value += ' 文件已恢复，领域列表尚未保存，请点击“保存设置”重试。'
+                domainError.value += ' 文件已恢复。请点击“保存设置”更新领域列表。'
               }
             } catch (e) {
-              toast(`没能撤销：${String(e)}。`, { kind: 'error' })
+              toast(`撤销失败：${String(e)}。`, { kind: 'error' })
             } finally {
               domainBusy.value = false
             }
@@ -583,7 +588,7 @@ const justSaved = ref(false)
 let justSavedTimer: number | undefined
 
 /** 有没保存的改动（含刚粘贴、还没写进配置的新密钥） */
-const pending = computed(() => dirty.value || KINDS.some((k) => newKey[k].trim() || priceError(k)))
+const pending = computed(() => dirty.value || KINDS.some((k) => priceError(k)))
 /** 保存条：有改动、第一次使用、刚保存完（显示“已保存”）时浮在底部，其余时间不出现 */
 const barShown = computed(() => pending.value || props.firstRun || justSaved.value)
 onBeforeUnmount(() => window.clearTimeout(justSavedTimer))
@@ -615,7 +620,7 @@ async function save(): Promise<boolean> {
   saveError.value = null
   if (draft.vault.kind === 'obsidian') {
     if (!connected.value) {
-      saveError.value = '请先选一个 Obsidian 仓库。'
+      saveError.value = '请选择 Obsidian 仓库。'
       return false
     }
     if (subfolderError.value) {
@@ -664,7 +669,7 @@ onMounted(() => {
   guardClose(
     () => domainBusy.value || (pending.value && !props.firstRun),
     () => {
-      if (domainBusy.value) toast('正在处理领域，请完成后再关闭窗口。', { kind: 'error' })
+      if (domainBusy.value) toast('领域操作尚未完成，请稍后关闭。', { kind: 'error' })
       else askClose.value = true
     },
   )
@@ -675,7 +680,7 @@ onMounted(() => {
 
 <template>
   <main class="settings" aria-label="设置">
-    <p v-if="firstRun" class="banner">第一次使用，请先选择收藏库文件夹，并填好三项服务，然后点“保存设置”。</p>
+    <p v-if="firstRun" class="banner">请选择收藏库并配置三项模型服务，然后保存设置。</p>
 
     <SettingCard
       id="vault"
@@ -708,10 +713,8 @@ onMounted(() => {
       </div>
       <div v-else class="obsidian">
         <div v-if="showVaultList" class="field">
-          <span v-if="obsidianVaults.length"
-            >在电脑上找到 {{ obsidianVaults.length }} 个 Obsidian 仓库，点一个连接</span
-          >
-          <span v-else>没有在电脑上找到 Obsidian 仓库，请选择仓库所在的文件夹</span>
+          <span v-if="obsidianVaults.length">找到 {{ obsidianVaults.length }} 个 Obsidian 仓库，请选择一个。</span>
+          <span v-else>未找到 Obsidian 仓库，请手动选择仓库文件夹。</span>
           <ul v-if="obsidianVaults.length" class="vault-list" role="radiogroup" aria-label="Obsidian 仓库">
             <li v-for="v in obsidianVaults" :key="v.path">
               <button
@@ -739,7 +742,7 @@ onMounted(() => {
           </button>
         </div>
         <p v-if="connected" class="ok vault-state">
-          <Check :size="16" aria-hidden="true" />已连接 Obsidian 仓库：{{ vaultName }}
+          <Check :size="16" aria-hidden="true" />已连接：{{ vaultName }}
           <button v-press class="vault-other" @click="changingVault = !changingVault">
             {{ changingVault ? '收起' : '更换' }}
           </button>
@@ -751,7 +754,7 @@ onMounted(() => {
             <input
               ref="newFolderInput"
               v-model="newFolderName"
-              placeholder="新文件夹的名字，比如 收藏"
+              placeholder="文件夹名称，例如“收藏”"
               aria-label="新文件夹的名字"
               spellcheck="false"
               @input="createError = ''"
@@ -775,13 +778,13 @@ onMounted(() => {
           <span v-if="newFolder && (createError || newFolderProblem)" class="err">{{
             createError || newFolderProblem
           }}</span>
-          <span v-else-if="newFolder" class="vault-hint">会在仓库最外层建一个这个名字的文件夹</span>
+          <span v-else-if="newFolder" class="vault-hint">将在仓库根目录创建此文件夹。</span>
           <span v-else-if="subfolderError" class="err">{{ subfolderError }}</span>
           <template v-else>
             <span v-if="createdFolder" class="ok vault-state">
-              <Check :size="16" aria-hidden="true" />文件夹「{{ createdFolder }}」已创建，保存设置后用于存放笔记。
+              <Check :size="16" aria-hidden="true" />文件夹“{{ createdFolder }}”已创建；保存设置后使用。
             </span>
-            <span class="vault-hint">笔记会存成：{{ notePathPreview }}</span>
+            <span class="vault-hint">保存路径：{{ notePathPreview }}</span>
           </template>
         </div>
       </div>
@@ -790,7 +793,7 @@ onMounted(() => {
     <SettingCard
       id="services"
       title="模型服务"
-      desc="整理文字、看图、语音转写分别用哪家服务。"
+      desc="分别配置文字整理、看图理解和语音转写服务。"
       :open="open === 'services'"
       :closing="closing === 'services'"
       @activate="activate('services')"
@@ -816,7 +819,9 @@ onMounted(() => {
               type="password"
               spellcheck="false"
               autocomplete="off"
-              :placeholder="draft.services[k].apiKey ? `${maskKey(draft.services[k].apiKey)}（已保存）` : '粘贴密钥'"
+              :placeholder="
+                draft.services[k].apiKey ? `${maskKey(draft.services[k].apiKey)}（已保存）` : '输入服务商密钥'
+              "
             />
           </label>
         </div>
@@ -828,13 +833,13 @@ onMounted(() => {
             {{ test[k].status === 'testing' ? '测试中…' : '测试连接' }}
           </button>
           <button v-press class="price-toggle" :aria-expanded="priceOpen[k]" @click="priceOpen[k] = !priceOpen[k]">
-            价格（{{ draft.services[k].price ? '已填' : '选填' }}）<ChevronRight
+            价格（{{ draft.services[k].price ? '已填写' : '选填' }}）<ChevronRight
               :size="14"
               class="chev"
               :class="{ down: priceOpen[k] }"
               aria-hidden="true"
             />
-            <span v-if="!priceOpen[k] && priceDirty(k)" class="dot" title="价格改了还没保存" />
+            <span v-if="!priceOpen[k] && priceDirty(k)" class="dot" title="价格修改尚未保存" />
           </button>
           <Transition name="fade">
             <span v-if="priceJustSaved[k]" class="price-saved"><Check :size="14" aria-hidden="true" />已保存</span>
@@ -859,8 +864,8 @@ onMounted(() => {
           <p class="price-note">
             {{
               k === 'asr'
-                ? '按音频时长收费的转写服务才需要填，免费模型不用填。填了会按每条的音频时长估算，以服务商账单为准。'
-                : '填了才会计算花费，按服务返回的用量估算，以服务商账单为准。价格可在服务商官网的价格页查到。'
+                ? '选填，用于估算音频转写费用；免费模型无需填写。以服务商账单为准。'
+                : '选填，用于估算费用。价格请查服务商官网，实际费用以账单为准。'
             }}
           </p>
           <div class="price-actions">
@@ -880,7 +885,7 @@ onMounted(() => {
     <SettingCard
       id="domains"
       title="领域"
-      desc="每个领域对应收藏库里的一个文件夹，用到时才创建。点名字可以改名，“其他”不能删除。"
+      desc="每个领域对应一个文件夹，首次存入笔记时创建。点击名称可改名，“其他”不可删除。"
       :open="open === 'domains'"
       :closing="closing === 'domains'"
       @activate="activate('domains')"
@@ -930,7 +935,7 @@ onMounted(() => {
     <!-- 删除领域：一次确认中说明笔记数、回收站和撤销 -->
     <NoticeDialog
       v-if="askRemove"
-      :title="`删除领域「${askRemove.domain.name}」？`"
+      :title="`删除领域“${askRemove.domain.name}”？`"
       tone="error"
       danger
       cancel-text="取消"
@@ -939,12 +944,12 @@ onMounted(() => {
       @ok="confirmRemove"
     >
       <template v-if="askRemove.notes > 0">
-        <p>这个领域的文件夹和里面的 {{ askRemove.notes }} 篇笔记，还有只有它们在用的图片，会一起放进回收站。</p>
-        <p>删除后几秒内可以撤销，之后也可以从回收站找回。</p>
+        <p>领域文件夹、{{ askRemove.notes }} 篇笔记及仅由它们引用的图片将移入 Windows 回收站。</p>
+        <p>删除后可撤销，也可从回收站恢复。</p>
       </template>
       <template v-else>
-        <p>这个领域的文件夹里没有笔记。删除后，文件夹也会放进回收站。</p>
-        <p>删除后几秒内可以撤销。</p>
+        <p>将删除该领域设置；如有同名文件夹，也会移入 Windows 回收站。</p>
+        <p>删除后可在提示条中撤销。</p>
       </template>
     </NoticeDialog>
 
@@ -956,12 +961,9 @@ onMounted(() => {
       @activate="activate('privacy')"
     >
       <ul class="privacy">
-        <li>
-          会发送给模型服务的内容：提取出的文字、压缩后的图片（长边不超过 1568
-          像素）、音频、“本次要求”、已有标签的名称列表。
-        </li>
-        <li>不会发送的内容：其他笔记的正文、文件路径、文件夹结构、用户名等设备信息。</li>
-        <li>密钥只保存在本机的配置文件里（%APPDATA%\ContentToMd\config.json），不在收藏库内。</li>
+        <li>发送给模型：提取的文字、压缩图片（长边≤1568像素）、音频、本次要求及已有标签名称。</li>
+        <li>不发送：其他笔记正文、文件路径、文件夹结构及用户名等设备信息。</li>
+        <li>密钥仅存于本机配置文件：%APPDATA%\ContentToMd\config.json，不写入收藏库。</li>
       </ul>
     </SettingCard>
 
@@ -970,7 +972,7 @@ onMounted(() => {
       <div v-if="barShown" class="save-bar" role="status">
         <span v-if="saveError" class="err">保存失败：{{ saveError }}</span>
         <span v-else-if="justSaved && !pending" class="saved-ok"><Check :size="16" aria-hidden="true" />已保存</span>
-        <span v-else class="bar-text">{{ firstRun && !pending ? '填好后点“保存设置”' : '有改动还没保存' }}</span>
+        <span v-else class="bar-text">{{ firstRun && !pending ? '请完成配置后保存' : UNSAVED_CHANGES }}</span>
         <button v-if="pending && !firstRun" v-press class="soft" :disabled="saving || domainBusy" @click="revert">
           撤销
         </button>

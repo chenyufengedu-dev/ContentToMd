@@ -59,9 +59,9 @@ const removeTag = (t: string) => (tags.value = tags.value.filter((x) => x !== t)
 const removeKeyword = (k: string) => (keywords.value = keywords.value.filter((x) => x !== k))
 
 const TIPS = {
-  domain: '决定笔记保存到收藏库的哪个文件夹',
-  tags: '用来分类和筛选；带“新”角标的是收藏库里还没有的标签',
-  keywords: '用来以后搜索这条笔记',
+  domain: '决定笔记存入哪个领域文件夹。',
+  tags: '用于分类和筛选，角标表示新标签。',
+  keywords: '用于搜索这篇笔记。',
 }
 </script>
 
@@ -73,7 +73,7 @@ const TIPS = {
         <InfoTip :text="TIPS.domain" />
       </div>
       <SelectBox v-model="domainChoice" class="domain" :options="domainOptions" aria-label="领域" size="md" />
-      <p v-if="domainFallback" class="warn">AI 没有选出合适的领域，已暂时放到“其他”，请选一个</p>
+      <p v-if="domainFallback" class="warn">已归入“其他”，可重新选择领域。</p>
     </div>
 
     <div class="field">
@@ -87,7 +87,7 @@ const TIPS = {
           <button v-press="'icon'" class="chip-x" :aria-label="`删除标签 ${t}`" @click="removeTag(t)">
             <X :size="13" />
           </button>
-          <span v-if="!known.has(t)" class="new-dot" title="新标签：收藏库里还没有，保存后会新建" />
+          <span v-if="!known.has(t)" class="new-dot" title="新标签，保存笔记后生效。" />
         </span>
         <input
           v-if="adding === 'tags'"
@@ -95,7 +95,7 @@ const TIPS = {
           v-model="draft"
           class="chip-input"
           aria-label="新标签"
-          placeholder="输入后回车"
+          placeholder="输入标签后按回车"
           @keyup.enter="commit"
           @blur="commit"
           @keyup.esc="adding = null"
@@ -124,7 +124,7 @@ const TIPS = {
           v-model="draft"
           class="chip-input"
           aria-label="新关键词"
-          placeholder="输入后回车"
+          placeholder="输入关键词后按回车"
           @keyup.enter="commit"
           @blur="commit"
           @keyup.esc="adding = null"

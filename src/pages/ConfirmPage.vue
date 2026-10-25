@@ -26,7 +26,16 @@ import { buildMarkdown, safeFileTitle, today, type NoteDraft, type NoteImage, ty
 import { cropForSave, type Rect } from '../core/image'
 import { saveFailure, type SaveFailure } from '../core/saveFailure'
 import { matchToSource } from '../core/sourceMatch'
-import { removeAttachment, saveConfig, saveNote, writeAttachment, writeNote } from '../shell/tauri'
+import {
+  clearEditRecovery,
+  saveEditRecovery,
+  removeAttachment,
+  saveConfig,
+  saveNote,
+  writeAttachment,
+  writeNote,
+} from '../shell/tauri'
+import type { NoteRecovery } from '../core/noteRecovery'
 import { editorExtensions, fixCallouts } from '../editor/extensions'
 import { linkedBlockKey } from '../editor/linkedBlock'
 import NoteProps from '../components/NoteProps.vue'
@@ -55,8 +64,15 @@ export interface EditInfo {
 }
 
 const props = withDefaults(
-  defineProps<{ config: Config; job: Job; existingTags: string[]; edit?: EditInfo; active?: boolean }>(),
-  { active: true, edit: undefined },
+  defineProps<{
+    config: Config
+    job: Job
+    existingTags: string[]
+    edit?: EditInfo
+    active?: boolean
+    recovery?: NoteRecovery
+  }>(),
+  { active: true, edit: undefined, recovery: undefined },
 )
 /** 保存成功页要用的：笔记相对收藏库的路径、没写进去的图片（比如“第 2 张”），以及左边预览框的文字 */
 export interface SavedNote {
@@ -201,8 +217,8 @@ const sameRect = (a?: Rect | null, b?: Rect | null) =>
 const cropNote = computed(() => {
   const p = pics[0]
   if (!p?.autoCrop) return ''
-  if (sameRect(p.crop, p.autoCrop)) return '已自动裁掉状态栏和空白边'
-  return p.crop ? '已按你的调整裁剪' : '已恢复原图'
+  if (sameRect(p.crop, p.autoCrop)) return '已自动裁去截图状态栏和空白边缘'
+  return p.crop ? '已应用手动裁剪' : '已恢复原图'
 })
 const cropping = ref<number | null>(null)
 function onCropDone(crops: (Rect | null)[]) {
@@ -236,27 +252,64 @@ const baseline = ref<string | null>(null)
 // 只改属性时不让编辑器的格式规范化或不支持节点改写原文。
 let originalBody = start.body
 let originalEditorBody: string | undefined
-const editorBody = () => (editor.value ? fixCallouts(editor.value.getMarkdown()) : '')
+const sourceMode = ref(false)
+const sourceBody = ref(start.body)
+const editorBody = () =>
+  sourceMode.value ? sourceBody.value : editor.value ? fixCallouts(editor.value.getMarkdown()) : ''
 function bodyToSave() {
   const current = editorBody()
   return current === originalEditorBody ? originalBody : current
 }
-const bodyReadOnly = ref(false)
+function onSourceInput() {
+  bodyTick.value++
+  rememberEdits()
+}
+function needsSource(body: string) {
+  let source = false
+  const parser = editor.value?.markdown?.instance
+  parser?.walkTokens(parser.lexer(body), (token) => {
+    if (['image', 'html'].includes(token.type)) source = true
+  })
+  return source
+}
 // 编辑器读进去再导出的 Markdown 可能和文件里写的有细微差别，所以以刚读好时的为准
 watch(
   editor,
   (e) => {
     if (!e || originalEditorBody !== undefined) return
-    originalEditorBody = editorBody()
+    // 先完成插件的末尾段落/表格结构整理，避免首次移动光标才补节点而误报修改。
+    e.view.dispatch(e.state.tr.setMeta('addToHistory', false))
     // 用现有 Markdown 词法器识别未安装对应节点的格式，不自行解析 Markdown。
-    const parser = e.markdown?.instance
-    if (parser)
-      parser.walkTokens(parser.lexer(start.body), (token) => {
-        if (['table', 'image', 'html'].includes(token.type) || (token.type === 'list_item' && token.task))
-          bodyReadOnly.value = true
-      })
-    e.setEditable(!bodyReadOnly.value, false)
+    sourceMode.value = needsSource(start.body)
+    originalEditorBody = editorBody()
+    e.setEditable(!sourceMode.value, false)
+    if (props.recovery) {
+      for (const [index, p] of pics.entries()) {
+        const saved = props.recovery.images.find((image) => image.index === (p.noteImageIndex ?? index))
+        if (saved) p.crop = saved.savedCrop ? { ...saved.savedCrop } : null
+      }
+    }
     if (props.edit) baseline.value = snapshot()
+    if (props.recovery) {
+      const recovery = props.recovery
+      const { title, domainId, tags, keywords, summary } = recovery.draft
+      Object.assign(form, { title, domainId, tags: [...tags], keywords: [...keywords], summary })
+      sourceMode.value = needsSource(recovery.draft.body)
+      sourceBody.value = recovery.draft.body
+      e.setEditable(!sourceMode.value, false)
+      if (!sourceMode.value) e.commands.setContent(recovery.draft.body, { contentType: 'markdown' })
+      for (const [index, p] of pics.entries()) {
+        const saved = recovery.images.find((image) => image.index === (p.noteImageIndex ?? index))
+        if (saved) {
+          savedCrops[index] = saved.savedCrop ? { ...saved.savedCrop } : null
+          p.crop = saved.crop
+          p.width = saved.width
+        }
+      }
+      // 外部修改时仍使用恢复副本原先的基线，保存沿用原有冲突拒绝保护。
+      savedFileContent = recovery.originalText
+      bodyTick.value++
+    }
   },
   { immediate: true },
 )
@@ -265,6 +318,65 @@ const dirty = computed(
   () => !!props.edit && baseline.value !== null && bodyTick.value >= 0 && snapshot() !== baseline.value,
 )
 watch(dirty, (v) => emit('dirty', v))
+
+const recoveryError = ref('')
+let recoveryPath = props.edit?.path ?? ''
+let recoveryTimer: number | undefined
+let recoveryDiscarded = false
+function reportRecoveryError(error: unknown) {
+  recoveryError.value = `本地恢复副本未能更新：${String(error)}。请检查磁盘空间或权限。`
+}
+function persistRecovery(): Promise<void> {
+  if (!props.edit || recoveryDiscarded || baseline.value === null) return Promise.resolve()
+  const root = notesRoot(props.config)
+  const operation = dirty.value
+    ? saveEditRecovery({
+        version: 1,
+        root,
+        path: recoveryPath,
+        savedAt: Date.now(),
+        originalText: savedFileContent,
+        draft: { ...d, ...form, tags: [...form.tags], keywords: [...form.keywords], body: bodyToSave() },
+        images: pics.map((p, index) => ({
+          index: p.noteImageIndex ?? index,
+          source:
+            props.recovery?.images.find((entry) => entry.index === (p.noteImageIndex ?? index))?.source ??
+            props.edit?.images[p.noteImageIndex ?? index]?.path,
+          savedCrop: savedCrops[index] ? { ...savedCrops[index] } : null,
+          crop: p.crop ? { ...p.crop } : null,
+          width: p.width,
+        })),
+      })
+    : clearEditRecovery(root, recoveryPath)
+  return operation.then(() => {
+    recoveryError.value = ''
+  }, reportRecoveryError)
+}
+watch(
+  () => [bodyTick.value, snapshot()],
+  () => {
+    if (!props.edit || recoveryDiscarded || recoveryTimer !== undefined) return
+    // 连续输入也定期写检查点，不因每次按键重置计时而一直推迟。
+    recoveryTimer = window.setTimeout(() => {
+      recoveryTimer = undefined
+      void persistRecovery()
+    }, 800)
+  },
+)
+async function discardRecovery(): Promise<boolean> {
+  window.clearTimeout(recoveryTimer)
+  recoveryTimer = undefined
+  recoveryDiscarded = true
+  try {
+    await clearEditRecovery(notesRoot(props.config), recoveryPath)
+    return true
+  } catch (error) {
+    recoveryDiscarded = false
+    reportRecoveryError(error)
+    return false
+  }
+}
+defineExpose({ discardRecovery })
 
 // 改动停下来 0.8 秒后存进草稿，软件意外关掉也不丢（F10）
 let draftTimer: number | undefined
@@ -414,7 +526,7 @@ async function confirmNewDomain() {
   try {
     await saveConfig(r.config)
   } catch (e) {
-    return (newDomain.error = `没能存进设置：${String(e)}`)
+    return (newDomain.error = `领域保存失败：${String(e)}`)
   }
   emit('configChanged', r.config)
   form.domainId = r.domain.id
@@ -505,6 +617,9 @@ async function saveEdit(e: EditInfo) {
     const stem = title === savedTitle ? e.stem : safeFileTitle(title)
     const rel = await saveNote(root, e.path, domain, stem, md, savedFileContent)
     savedFileContent = md
+    const previousRecoveryPath = recoveryPath
+    recoveryPath = rel
+    void clearEditRecovery(root, previousRecoveryPath).catch(reportRecoveryError)
     savedImages = images
     savedCrops = submittedCrops
     savedCover = meta.cover
@@ -515,9 +630,9 @@ async function saveEdit(e: EditInfo) {
     // 点完保存告诉用户结果：改了领域就说移到了哪里，改了文件名就说新名字
     toast(
       rel.split('/')[0] !== e.path.split('/')[0]
-        ? `已保存，笔记已移到「${domain}」文件夹。`
+        ? `已保存，并移至“${domain}”。`
         : stem !== e.stem
-          ? `已保存，文件名已改为「${stem}」。`
+          ? `已保存，文件名改为“${stem}”。`
           : '已保存。',
     )
     emit('updated', rel)
@@ -542,7 +657,7 @@ async function save() {
   const title = form.title.trim()
   const root = notesRoot(props.config)
   const domain = domainName.value
-  const text = editor.value.getText({ blockSeparator: '\n' })
+  const text = sourceMode.value ? sourceBody.value : editor.value.getText({ blockSeparator: '\n' })
   const submitted: NoteDraft = {
     ...d,
     ...form,
@@ -609,6 +724,8 @@ onMounted(() => {
   window.addEventListener('resize', updateLink)
 })
 onBeforeUnmount(() => {
+  window.clearTimeout(recoveryTimer)
+  void persistRecovery()
   window.removeEventListener('keydown', onKey)
   window.removeEventListener('resize', updateLink)
   clearTimeout(draftTimer)
@@ -637,10 +754,10 @@ onBeforeUnmount(() => {
           />
           <Pencil class="edit-hint" :size="20" duotone aria-hidden="true" />
         </label>
-        <p v-if="titleMissing" class="field-error">标题不能为空。</p>
+        <p v-if="titleMissing" class="field-error">请填写标题。</p>
 
         <label class="editable summary" style="view-transition-name: note-summary">
-          <textarea v-model="form.summary" rows="1" aria-label="这条讲什么" placeholder="一句话说清这条讲什么" />
+          <textarea v-model="form.summary" rows="1" aria-label="这条讲什么" placeholder="用一句话概括内容" />
           <Pencil class="edit-hint" :size="16" duotone aria-hidden="true" />
         </label>
 
@@ -650,7 +767,7 @@ onBeforeUnmount(() => {
           v-press
           class="meta-row"
           style="view-transition-name: meta-row"
-          title="在右边的属性信息里修改"
+          title="在右侧属性栏修改"
           @click="setComparing(false)"
         >
           <span class="meta"><Folder :size="14" aria-hidden="true" />{{ domainName }}</span>
@@ -676,7 +793,7 @@ onBeforeUnmount(() => {
             <button
               class="pic-resize"
               aria-label="调整图片大小"
-              title="拖动调整大小；方向键微调，Shift 加快"
+              title="拖动调整大小；方向键微调，Shift 加速"
               @pointerdown.stop.prevent="startResize(i, $event)"
               @pointermove="moveResize"
               @pointerup="endResize"
@@ -691,7 +808,7 @@ onBeforeUnmount(() => {
               <button
                 v-if="p.crop || p.width !== undefined"
                 v-press
-                :title="p.crop ? (p.width !== undefined ? '恢复原图和默认大小' : '恢复原图') : '恢复默认大小'"
+                :title="p.crop ? (p.width !== undefined ? '恢复原图和默认尺寸' : '恢复原图') : '恢复默认尺寸'"
                 @click="resetPicture(i)"
               >
                 恢复
@@ -706,17 +823,21 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
+        <p v-if="recoveryError" class="body-notice" role="alert">{{ recoveryError }}</p>
         <div class="toolbar-row">
-          <EditorToolbar v-if="editor && !bodyReadOnly" :editor="editor" />
+          <EditorToolbar v-if="editor && !sourceMode" :editor="editor" />
         </div>
 
-        <p v-if="bodyReadOnly" class="body-notice">
-          正文含暂不支持的格式，已保留原文。这里可修改属性，正文请在保存后的文档中编辑。
-        </p>
+        <p v-if="sourceMode" class="body-notice">正文含内嵌图片或 HTML，已使用 Markdown 源码编辑，可直接修改并保存。</p>
         <div class="body-wrap" style="view-transition-name: note-body">
-          <pre v-if="bodyReadOnly" class="body-raw" role="region" aria-label="原始正文（只读）" tabindex="0">{{
-            originalBody
-          }}</pre>
+          <textarea
+            v-if="sourceMode"
+            v-model="sourceBody"
+            class="body-raw"
+            aria-label="Markdown 正文源码"
+            spellcheck="false"
+            @input="onSourceInput"
+          />
           <EditorContent v-else :editor="editor" class="body" @click="onBodyClick" />
         </div>
       </div>
@@ -815,7 +936,7 @@ onBeforeUnmount(() => {
       <footer class="actions">
         <p v-if="saveError && !failDialog" class="save-fail">
           <CircleAlert :size="14" aria-hidden="true" />
-          <span><b>没有保存：</b>{{ saveError.reason }}</span>
+          <span><b>保存失败：</b>{{ saveError.reason }}</span>
           <template v-if="saveError.toSettings">
             ·<button v-press class="link" @click="emit('goSettings')">去设置</button>
           </template>
@@ -840,10 +961,10 @@ onBeforeUnmount(() => {
           </button>
         </div>
         <template v-else-if="confirmingDiscard">
-          <p class="discard-ask">确定不保存并返回吗？本次整理结果将被丢弃。</p>
+          <p class="discard-ask">放弃本次整理结果并返回？未保存的内容将丢失。</p>
           <div class="action-row">
             <button v-press class="btn btn-secondary" @click="confirmingDiscard = false">继续编辑</button>
-            <button v-press="'tactile'" class="btn btn-danger" @click="emit('discard')">不保存并返回</button>
+            <button v-press="'tactile'" class="btn btn-danger" @click="emit('discard')">放弃并返回</button>
           </div>
         </template>
         <div v-else class="action-row">
@@ -857,17 +978,17 @@ onBeforeUnmount(() => {
 
     <NoticeDialog
       v-if="failDialog && saveError"
-      title="没有保存"
+      title="保存失败"
       tone="error"
-      cancel-text="知道了"
+      cancel-text="继续编辑"
       ok-text="重新保存"
       @cancel="failDialog = false"
       @ok="save"
     >
       <p>{{ saveError.reason }}</p>
       <p v-if="saveError.toSettings">
-        到<button v-press class="link" @click="emit('goSettings')">设置</button
-        >{{ saveError.next.replace(/^到设置/, '') }}
+        请到<button v-press class="link" @click="emit('goSettings')">设置</button
+        >{{ saveError.next.replace(/^请到设置/, '') }}
       </p>
       <p v-else>{{ saveError.next }}</p>
     </NoticeDialog>
@@ -876,17 +997,17 @@ onBeforeUnmount(() => {
       v-if="newDomain.open"
       title="新增领域"
       cancel-text="取消"
-      ok-text="新增并选上"
+      ok-text="新增并选择"
       @cancel="newDomain.open = false"
       @ok="confirmNewDomain"
     >
-      <p>会在收藏库里多一个同名文件夹，设置里也能改名。</p>
+      <p>新增后立即生效，笔记仍需单独保存。</p>
       <label class="new-domain">
         <input
           ref="newDomainInput"
           v-model="newDomain.name"
           maxlength="20"
-          placeholder="比如：健身"
+          placeholder="例如：健身"
           aria-label="新领域的名字"
           @input="newDomain.error = ''"
           @keydown.enter.prevent="confirmNewDomain"
@@ -939,7 +1060,54 @@ onBeforeUnmount(() => {
 .body :deep(a) {
   color: var(--accent);
 }
+.body :deep(.tableWrapper) {
+  overflow-x: auto;
+  margin-block: var(--sp-4);
+}
+.body :deep(table) {
+  border-collapse: collapse;
+  width: 100%;
+}
+.body :deep(th),
+.body :deep(td) {
+  border: 1px solid var(--line-strong);
+  padding: var(--sp-2);
+  vertical-align: top;
+}
+.body :deep(th) {
+  background: var(--card-muted);
+  font-weight: var(--fw-title);
+}
+.body :deep(ul[data-type='taskList']) {
+  padding-left: 0;
+}
+.body :deep(ul[data-type='taskList'] > li) {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  padding-left: 0;
+}
+.body :deep(ul[data-type='taskList'] > li)::before {
+  content: none;
+}
+.body :deep(ul[data-type='taskList'] > li > label) {
+  flex: none;
+}
+.body :deep(ul[data-type='taskList'] > li > div) {
+  min-width: 0;
+  flex: 1;
+}
 .body-raw {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: var(--note-preview-height);
+  field-sizing: content;
+  resize: vertical;
+  padding: var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--card);
   margin: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;

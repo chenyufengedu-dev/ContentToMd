@@ -11,6 +11,22 @@ import { DRAFT_JSON, toDraft, type DraftData } from '../core/draft'
 import { parseUsage, type UsageRecord } from '../core/cost'
 import { parseNoteList } from '../core/library'
 import { parseNoteFile } from '../core/note'
+import { NoteRecoverySchema, type NoteRecovery } from '../core/noteRecovery'
+
+// 同一窗口的写入、清除和读取按调用顺序完成，旧写入不会在清除之后重新出现。
+let recoveryWrites: Promise<unknown> = Promise.resolve()
+function updateRecovery(root: string, path: string, json: string | null) {
+  const next = recoveryWrites.then(() => invoke<void>('edit_recovery_write', { root, path, json }))
+  recoveryWrites = next.catch(() => {}) // 错误仍由本次调用者提示，后续保存可以重试。
+  return next
+}
+export async function listEditRecoveries(): Promise<NoteRecovery[]> {
+  await recoveryWrites
+  return (await invoke<string[]>('edit_recovery_list')).map((text) => NoteRecoverySchema.parse(JSON.parse(text)))
+}
+export const saveEditRecovery = (recovery: NoteRecovery) =>
+  updateRecovery(recovery.root, recovery.path, JSON.stringify(recovery))
+export const clearEditRecovery = (root: string, path: string) => updateRecovery(root, path, null)
 
 export const loadConfigJson = () => invoke<string | null>('load_config')
 export const saveConfig = (c: Config) => invoke<void>('save_config', { json: JSON.stringify(c, null, 2) })

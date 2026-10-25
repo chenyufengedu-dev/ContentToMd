@@ -36,7 +36,7 @@ describe('estimateCost：用量 × 用户填的单价（元 / 百万 tokens）',
 describe('formatYuan', () => {
   it.each([
     [0, '0 元'],
-    [0.003, '不到 1 分钱'],
+    [0.003, '少于 0.01 元'],
     [0.0123, '约 0.01 元'],
     [1.236, '约 1.24 元'],
   ])('%s → %s', (y, s) => expect(formatYuan(y)).toBe(s))

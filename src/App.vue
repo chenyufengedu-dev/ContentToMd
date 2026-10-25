@@ -1,9 +1,12 @@
 <script setup lang="ts">
+import { UNSAVED_CHANGES, LEAVE_CHANGES_WARNING } from './core/editMessages'
 import { onMounted, ref } from 'vue'
+import { vPageFade } from './components/pageFade'
 import { type Config, parseConfig, isConfigComplete, notesRoot } from './core/config'
-import { loadConfigJson, dirExists, ensurePrompts, restoreNote } from './shell/tauri'
+import { listEditRecoveries, loadConfigJson, dirExists, ensurePrompts, restoreNote } from './shell/tauri'
 import type { Prompts } from './core/note'
 import { DEFAULT_PROMPTS } from './core/defaultPrompts'
+import { RECOVERY_CLEAR_ERROR } from './core/noteRecovery'
 import SettingsPage from './pages/SettingsPage.vue'
 import CollectPage from './pages/CollectPage.vue'
 import TitleBar, { type Page } from './components/TitleBar.vue'
@@ -25,6 +28,7 @@ const vaultMissing = ref(false)
 const notePath = ref<string | null>(null)
 const noteDirty = ref(false)
 const library = ref<InstanceType<typeof LibraryPage>>()
+const notePage = ref<InstanceType<typeof NotePage>>()
 function closeNote(changed: boolean) {
   notePath.value = null
   noteDirty.value = false
@@ -34,17 +38,17 @@ function closeNote(changed: boolean) {
 function onNoteDeleted(info: { path: string; images: string[] }) {
   closeNote(true)
   const n = info.images.length
-  toast(`已删除，笔记${n ? `和 ${n} 张图片` : ''}已放进回收站。`, {
+  toast(`已移入回收站：笔记${n ? `及 ${n} 张图片` : ''}。`, {
     action: {
       label: '撤销',
       run: async () => {
         try {
           await restoreNote(notesRoot(config.value!), info.path, info.images)
-          toast('已恢复这条笔记。')
+          toast('笔记已恢复。')
           void library.value?.load()
         } catch (e) {
           const msg = String(e)
-          toast(`没能撤销：${msg.endsWith('。') ? msg : `${msg}。`}`, { kind: 'error' })
+          toast(`撤销失败：${msg.endsWith('。') ? msg : `${msg}。`}`, { kind: 'error' })
         }
       },
     },
@@ -82,7 +86,7 @@ function discardSettingsAndGo() {
 }
 function navigate(p: Page) {
   if (page.value === 'settings' && p !== 'settings' && settingsDomainBusy.value) {
-    toast('正在处理领域，请完成后再切换页面。', { kind: 'error' })
+    toast('领域操作尚未完成，请稍后切换。', { kind: 'error' })
     return
   }
   if (page.value === 'settings' && p !== 'settings' && settingsPending.value) {
@@ -96,7 +100,12 @@ function navigate(p: Page) {
   if (notePath.value && p === 'library') closeNote(false)
   page.value = p
 }
-function leaveNote() {
+async function leaveNote() {
+  if (!(await notePage.value?.discardEdits())) {
+    pendingPage.value = null
+    toast(RECOVERY_CLEAR_ERROR, { kind: 'error' })
+    return
+  }
   const p = pendingPage.value
   pendingPage.value = null
   closeNote(false)
@@ -117,6 +126,14 @@ onMounted(async () => {
     page.value = 'settings'
   } else {
     vaultMissing.value = !(await dirExists(notesRoot(config.value)))
+    try {
+      const root = notesRoot(config.value)
+      const records = (await listEditRecoveries()).filter((r) => r.root === root)
+      const latest = records.sort((a, b) => b.savedAt - a.savedAt)[0]
+      if (latest && !vaultMissing.value) openSavedNote(latest.path)
+    } catch {
+      toast('未保存的修改读取失败，请稍后重试。', { kind: 'error' })
+    }
   }
 })
 
@@ -130,11 +147,11 @@ async function onSaved(c: Config) {
 </script>
 
 <template>
-  <p v-if="loadError" class="fatal">启动失败，无法读取配置或整理指令：{{ loadError }}</p>
+  <p v-if="loadError" class="fatal">启动失败：配置或整理指令无法读取。{{ loadError }}</p>
   <template v-else-if="config">
     <TitleBar :page="page" :only-settings="firstRun" @navigate="navigate" />
     <!-- 标题栏下面的内容区自己滚动，整个窗口不出滚动条，标题栏的宽度和位置就不会跟着页面变 -->
-    <div class="app-body">
+    <div v-page-fade="`${page}:${notePath ?? ''}`" class="app-body">
       <template v-if="page === 'library'">
         <LibraryPage
           v-show="!notePath"
@@ -167,7 +184,7 @@ async function onSaved(c: Config) {
         @domain-busy="(v) => (settingsDomainBusy = v)"
       />
       <div v-show="page === 'home'">
-        <p v-if="vaultMissing" class="fatal">收藏库文件夹“{{ notesRoot(config) }}”找不到了，请到设置里重新选择。</p>
+        <p v-if="vaultMissing" class="fatal">找不到收藏库：{{ notesRoot(config) }}。请到设置中重新选择。</p>
         <CollectPage
           v-if="prompts && !firstRun"
           :active="page === 'home'"
@@ -189,13 +206,13 @@ async function onSaved(c: Config) {
     />
     <NoticeDialog
       v-if="pendingPage"
-      title="有修改还没保存"
+      :title="UNSAVED_CHANGES"
       cancel-text="继续编辑"
       ok-text="不保存，离开"
       @cancel="pendingPage = null"
       @ok="leaveNote"
     >
-      <p>现在离开，这些修改会丢掉。</p>
+      <p>{{ LEAVE_CHANGES_WARNING }}</p>
     </NoticeDialog>
   </template>
 </template>

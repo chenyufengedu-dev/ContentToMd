@@ -15,9 +15,11 @@ const props = defineProps<{
   okText: string
   danger?: boolean
   neutralText?: string
+  /** Esc和遮罩仍走保留内容的neutral回调，不要求显示第三个按钮。 */
+  dismissToNeutral?: boolean
 }>()
 const emit = defineEmits<{ cancel: []; ok: []; neutral: [] }>()
-const dismiss = () => (props.neutralText ? emit('neutral') : emit('cancel'))
+const dismiss = () => (props.neutralText || props.dismissToNeutral ? emit('neutral') : emit('cancel'))
 
 const dialog = ref<HTMLElement>()
 const titleId = useId()

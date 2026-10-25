@@ -42,7 +42,9 @@ const PAGES: { id: Page; label: string }[] = [
     <div class="window-controls">
       <button v-press class="win" aria-label="最小化" @click="minimizeWindow"><Minus :size="16" /></button>
       <button v-press class="win" aria-label="最大化" @click="toggleMaximizeWindow"><Square :size="13" /></button>
-      <button v-press class="win close" aria-label="关闭" @click="closeWindow"><X :size="16" /></button>
+      <button v-press class="win close" aria-label="关闭" @click="closeWindow">
+        <X :size="16" data-ai-no-spin />
+      </button>
     </div>
   </header>
 </template>
@@ -119,21 +121,42 @@ const PAGES: { id: Page; label: string }[] = [
 }
 .window-controls {
   margin-left: auto;
+  align-self: flex-start;
   display: flex;
-  height: 100%;
+  gap: var(--sp-1);
+  padding: var(--sp-1);
 }
 .win {
-  width: 46px;
-  height: 100%;
+  --press-state-color: color-mix(in srgb, var(--fg-strong) 16%, transparent);
+  width: var(--window-control-width);
+  height: calc(var(--h-md) - var(--sp-1));
+  padding: 0;
   border: 0;
-  border-radius: 0;
+  border-radius: var(--radius-sm);
+  outline: none;
   background: none;
   color: var(--muted);
   display: grid;
   place-items: center;
+  transition: background var(--press-surface-release);
+}
+.win:hover:not(:disabled) {
+  background: var(--line);
+}
+.win:active:not(:disabled) {
+  background: var(--line-strong);
+  transition: none;
+}
+.win:focus-visible {
+  outline: calc(var(--sp-1) / 2) solid currentColor;
+  outline-offset: calc(-1 * var(--sp-1));
 }
 .win.close:hover:not(:disabled) {
   background: var(--err);
+  color: var(--on-primary);
+}
+.win.close:active:not(:disabled) {
+  background: var(--err-hover);
   color: var(--on-primary);
 }
 </style>

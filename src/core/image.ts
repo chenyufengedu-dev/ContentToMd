@@ -86,10 +86,10 @@ export function checkImages<T extends { name: string; size: number; type: string
   const accepted: T[] = []
   const rejected: { name: string; reason: string }[] = []
   for (const f of files) {
-    if (!f.type.startsWith('image/')) rejected.push({ name: f.name, reason: '这不是图片文件。' })
-    else if (f.size > MAX_IMAGE_BYTES) rejected.push({ name: f.name, reason: '图片超过 20MB 的上限。' })
+    if (!f.type.startsWith('image/')) rejected.push({ name: f.name, reason: '无法识别为图片，请选择其他文件。' })
+    else if (f.size > MAX_IMAGE_BYTES) rejected.push({ name: f.name, reason: '图片超过 20MB，请压缩后重试。' })
     else if (existing + accepted.length >= MAX_IMAGES)
-      rejected.push({ name: f.name, reason: `一次最多放 ${MAX_IMAGES} 张图片。` })
+      rejected.push({ name: f.name, reason: `最多可添加 ${MAX_IMAGES} 张图片。` })
     else accepted.push(f)
   }
   return { accepted, rejected }

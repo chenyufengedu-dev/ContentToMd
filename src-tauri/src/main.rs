@@ -150,6 +150,61 @@ fn draft_clear() -> Result<(), String> {
     }
 }
 
+// 已有笔记的恢复副本独立于导入草稿；串行更新，避免多个笔记的读改写互相覆盖。
+static EDIT_RECOVERY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn read_edit_recoveries_at(
+    dir: &std::path::Path,
+) -> Result<std::collections::BTreeMap<String, String>, String> {
+    let path = dir.join("note-edits.json");
+    match fs::read_to_string(&path) {
+        Ok(text) => {
+            serde_json::from_str(&text).map_err(|_| "笔记恢复副本无法读取，原文件已保留".into())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(std::collections::BTreeMap::new()),
+        Err(e) => Err(io_msg(&path, e)),
+    }
+}
+
+fn edit_recovery_key(root: &str, path: &str) -> Result<String, String> {
+    serde_json::to_string(&(root, path)).map_err(|_| "无法识别笔记恢复位置".into())
+}
+
+fn write_edit_recovery_at(
+    dir: &std::path::Path,
+    root: &str,
+    path: &str,
+    json: Option<String>,
+) -> Result<(), String> {
+    let mut records = read_edit_recoveries_at(dir)?;
+    let key = edit_recovery_key(root, path)?;
+    if let Some(json) = json {
+        records.insert(key, json);
+    } else if records.remove(&key).is_none() {
+        return Ok(());
+    }
+    let bytes = serde_json::to_vec(&records).map_err(|_| "无法保存笔记恢复副本".to_string())?;
+    put_draft_file(dir, "note-edits.json", &bytes)
+}
+
+#[tauri::command]
+fn edit_recovery_list() -> Result<Vec<String>, String> {
+    let _guard = EDIT_RECOVERY_LOCK
+        .lock()
+        .map_err(|_| "笔记恢复副本暂时无法读取")?;
+    Ok(read_edit_recoveries_at(&data_dir()?.join("recovery"))?
+        .into_values()
+        .collect())
+}
+
+#[tauri::command]
+fn edit_recovery_write(root: String, path: String, json: Option<String>) -> Result<(), String> {
+    let _guard = EDIT_RECOVERY_LOCK
+        .lock()
+        .map_err(|_| "笔记恢复副本暂时无法保存")?;
+    write_edit_recovery_at(&data_dir()?.join("recovery"), &root, &path, json)
+}
+
 // ---------------- 费用记录（F14，方案第 10.1 节） ----------------
 // %APPDATA%\ContentToMd\usage.jsonl，每次调用服务追加一行 JSON（不含密钥，只有密钥编号）
 
@@ -1197,10 +1252,12 @@ fn main() {
         )
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
+                // 无边框窗口显示后系统才完成边框计算；先显示再恢复，避免每次启动累加标题栏高度。
+                window.show()?;
                 if let Err(error) = window_state::restore(&window) {
                     eprintln!("无法恢复窗口状态：{error}");
                 }
-                window.show()?;
+                window_state::track(&window);
             }
             Ok(())
         })
@@ -1232,6 +1289,8 @@ fn main() {
             draft_list,
             draft_read,
             draft_clear,
+            edit_recovery_list,
+            edit_recovery_write,
             usage_append,
             usage_read
         ])
@@ -1667,6 +1726,76 @@ cover: \"../附件/2026-10/a.png\"
         let gone = unused_attachments(&root, "其他/甲.md").unwrap();
         assert_eq!(gone, vec!["附件/2026-10/own.png".to_string()]);
         assert!(unused_attachments(&root, "../外面.md").is_err());
+    }
+
+    #[test]
+    fn edit_recovery_isolated_records_survive_reopen_and_clear_only_target() {
+        let v = TempVault::new("edit-recovery");
+        let dir = v.0.join("recovery");
+        assert!(read_edit_recoveries_at(&dir).unwrap().is_empty());
+        write_edit_recovery_at(&dir, "root-a", "note.md", Some("edit-a".into())).unwrap();
+        write_edit_recovery_at(&dir, "root-b", "note.md", Some("edit-b".into())).unwrap();
+        let records = read_edit_recoveries_at(&dir).unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(
+            records[&edit_recovery_key("root-a", "note.md").unwrap()],
+            "edit-a"
+        );
+        write_edit_recovery_at(&dir, "root-a", "note.md", None).unwrap();
+        let records = read_edit_recoveries_at(&dir).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[&edit_recovery_key("root-b", "note.md").unwrap()],
+            "edit-b"
+        );
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn edit_recovery_corrupt_file_is_preserved_and_not_overwritten() {
+        let v = TempVault::new("edit-recovery-corrupt");
+        let dir = v.0.join("recovery");
+        put_draft_file(&dir, "note-edits.json", b"corrupt").unwrap();
+        assert!(write_edit_recovery_at(&dir, "root", "note.md", Some("edit".into())).is_err());
+        assert_eq!(fs::read(dir.join("note-edits.json")).unwrap(), b"corrupt");
+    }
+
+    #[test]
+    fn edit_recovery_survives_process_exit() {
+        if let Ok(dir) = std::env::var("CONTENTTOMD_RECOVERY_TEST_DIR") {
+            let dir = PathBuf::from(dir);
+            if std::env::var("CONTENTTOMD_RECOVERY_TEST_PHASE").unwrap() == "write" {
+                write_edit_recovery_at(
+                    &dir,
+                    "isolated-vault",
+                    "note.md",
+                    Some("unsaved-edit".into()),
+                )
+                .unwrap();
+                // 直接退出，不运行编辑器卸载或额外清理，验证已落盘的检查点。
+                std::process::exit(0);
+            }
+            let records = read_edit_recoveries_at(&dir).unwrap();
+            assert_eq!(
+                records[&edit_recovery_key("isolated-vault", "note.md").unwrap()],
+                "unsaved-edit"
+            );
+            return;
+        }
+        let v = TempVault::new("edit-recovery-process");
+        for phase in ["write", "read"] {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "tests::edit_recovery_survives_process_exit",
+                    "--nocapture",
+                ])
+                .env("CONTENTTOMD_RECOVERY_TEST_DIR", v.0.join("recovery"))
+                .env("CONTENTTOMD_RECOVERY_TEST_PHASE", phase)
+                .status()
+                .unwrap();
+            assert!(status.success());
+        }
     }
 
     #[test]

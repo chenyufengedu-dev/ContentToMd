@@ -66,9 +66,9 @@ describe('isConfigComplete', () => {
 describe('领域', () => {
   const domains = defaultConfig().domains
   it('名称校验', () => {
-    expect(checkDomainName('  ', domains)).toBe('领域名不能为空。')
-    expect(checkDomainName('设计/UI', domains)).toMatch('不能有')
-    expect(checkDomainName('设计UI', domains)).toBe('已经有这个领域了。')
+    expect(checkDomainName('  ', domains)).toBe('请填写领域名。')
+    expect(checkDomainName('设计/UI', domains)).toMatch('不能包含')
+    expect(checkDomainName('设计UI', domains)).toBe('该领域名已存在，请换一个名称。')
     expect(checkDomainName('设计UI', domains, 5)).toBeNull()
     expect(checkDomainName('读书笔记', domains)).toBeNull()
   })
@@ -87,7 +87,7 @@ describe('接口地址只允许 HTTPS', () => {
   it('https 地址通过，http 和乱填的不通过', () => {
     expect(checkBaseUrl('https://api.deepseek.com')).toBeNull()
     expect(checkBaseUrl('HTTPS://api.siliconflow.cn/v1')).toBeNull()
-    expect(checkBaseUrl('http://api.deepseek.com')).toBe('接口地址必须以 https:// 开头（加密连接）')
+    expect(checkBaseUrl('http://api.deepseek.com')).toBe('接口地址须以 https:// 开头。')
     expect(checkBaseUrl('api.deepseek.com')).not.toBeNull()
     expect(checkBaseUrl('https://')).not.toBeNull()
   })
@@ -125,10 +125,10 @@ describe('收藏库连接', () => {
   it('子文件夹不能跳出仓库', () => {
     expect(checkSubfolder('')).toBeNull()
     expect(checkSubfolder('收藏/抖音')).toBeNull()
-    expect(checkSubfolder('../别处')).toBe('子文件夹名里不能有“..”。')
-    expect(checkSubfolder('收藏/./抖音')).toBe('子文件夹名里不能有“..”。')
-    expect(checkSubfolder('C:/Windows')).toBe('子文件夹名里不能有 : * ? " < > | 这些字符。')
-    expect(checkSubfolder('收藏//抖音')).toBe('子文件夹名不能有空的一层。')
+    expect(checkSubfolder('../别处')).toBe('子文件夹路径不能包含“.”或“..”层级。')
+    expect(checkSubfolder('收藏/./抖音')).toBe('子文件夹路径不能包含“.”或“..”层级。')
+    expect(checkSubfolder('C:/Windows')).toBe('子文件夹名不能包含：: * ? " < > |')
+    expect(checkSubfolder('收藏//抖音')).toBe('子文件夹路径不能包含空层级。')
   })
 
   it('存放位置的显示：仓库名加子文件夹，普通文件夹只显示文件夹名', () => {
@@ -161,8 +161,8 @@ describe('收藏库连接', () => {
     expect(checkNewFolderName(' 剪藏 ', existing)).toBeNull()
     expect(checkNewFolderName('抖音', existing)).toBeNull() // 只和仓库最外层的比
     expect(checkNewFolderName('', existing)).toBe('文件夹名不能为空。')
-    expect(checkNewFolderName('收藏', existing)).toBe('仓库里已经有“收藏”文件夹了，可以直接在上面选。')
-    expect(checkNewFolderName('收藏/小红书', existing)).toBe('文件夹名里不能有 \\ / : * ? " < > | 这些字符。')
+    expect(checkNewFolderName('收藏', existing)).toBe('“收藏”已存在，请直接选择。')
+    expect(checkNewFolderName('收藏/小红书', existing)).toBe('文件夹名不能包含：\\ / : * ? " < > |')
     expect(checkNewFolderName('..', existing)).toBe('文件夹名不能是“.”或“..”。')
   })
 })
@@ -179,6 +179,6 @@ describe('新增领域', () => {
   })
 
   it('名字不合规时返回原因', () => {
-    expect(addDomain(defaultConfig(), '为人处世')).toBe('已经有这个领域了。')
+    expect(addDomain(defaultConfig(), '为人处世')).toBe('该领域名已存在，请换一个名称。')
   })
 })

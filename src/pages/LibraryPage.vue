@@ -27,7 +27,7 @@ async function load() {
     notes.value = r.notes
     failed.value = r.failed
   } catch {
-    loadError.value = `收藏库文件夹“${root.value}”找不到了`
+    loadError.value = `找不到收藏库：${root.value}。`
   } finally {
     loading.value = false
   }
@@ -210,20 +210,20 @@ defineExpose({ load })
         <span class="total">共 {{ shown.length }} 条</span>
       </div>
 
-      <p v-if="loading" class="hint">正在读取收藏库…</p>
+      <p v-if="loading" class="hint">正在加载笔记…</p>
       <div v-else-if="loadError" class="empty">
         <CircleAlert :size="40" aria-hidden="true" />
         <p>{{ loadError }}</p>
-        <button v-press="'tactile'" class="primary" @click="emit('goSettings')">去设置里重新选择</button>
+        <button v-press="'tactile'" class="primary" @click="emit('goSettings')">重新选择收藏库</button>
       </div>
       <div v-else-if="!notes.length" class="empty">
         <Inbox :size="40" aria-hidden="true" />
-        <p>还没有收藏</p>
-        <button v-press="'tactile'" class="primary" @click="emit('goHome')">去放入第一条</button>
+        <p>收藏库暂无笔记</p>
+        <button v-press="'tactile'" class="primary" @click="emit('goHome')">导入内容</button>
       </div>
       <div v-else-if="!shown.length" class="empty">
-        <p v-if="query">没有找到包含“{{ query }}”的收藏</p>
-        <p v-else>这里还没有收藏</p>
+        <p v-if="query">没有找到匹配“{{ query }}”的笔记</p>
+        <p v-else>当前筛选下没有笔记</p>
         <button v-if="query" v-press class="link-quiet" @click="query = ''">清除搜索</button>
       </div>
       <template v-else>
@@ -251,7 +251,7 @@ defineExpose({ load })
       </template>
 
       <p v-if="failed.length" class="foot" :title="failed.join('\n')">
-        <CircleAlert :size="14" aria-hidden="true" />有 {{ failed.length }} 个文件无法读取，已跳过
+        <CircleAlert :size="14" aria-hidden="true" />{{ failed.length }} 个文件读取失败，已跳过。
       </p>
     </main>
   </div>

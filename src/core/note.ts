@@ -69,8 +69,17 @@ const AiResultSchema = z.object({
   image_regions: z.array(z.unknown()).catch([]),
 })
 
-/** 确认页编辑的笔记内容：AI 结果里的 domain_id 换成已校验的领域编号 */
-export type NoteDraft = Omit<z.infer<typeof AiResultSchema>, 'domain_id' | 'image_regions'> & { domainId: number }
+/** 用户编辑内容只校验类型，不套用AI输出的裁剪、去重或去空白，恢复时保留输入。 */
+export const NoteDraftSchema = z.object({
+  title: z.string(),
+  domainId: z.number(),
+  tags: z.array(z.string()),
+  keywords: z.array(z.string()),
+  summary: z.string(),
+  body: z.string(),
+  image_captions: z.array(z.string()),
+})
+export type NoteDraft = z.infer<typeof NoteDraftSchema>
 
 /** 校验 AI 返回的 JSON；必填字段缺失时返回 null，由调用方重试。domain_id 不在列表里时改为“其他” */
 export function parseAiResult(

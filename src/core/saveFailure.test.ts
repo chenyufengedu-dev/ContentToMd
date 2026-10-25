@@ -4,22 +4,22 @@ import { saveFailure } from './saveFailure'
 describe('saveFailure', () => {
   it('收藏库文件夹找不到：说清路径，去设置重选', () => {
     const f = saveFailure('收藏库文件夹“D:\\笔记\\收藏库”找不到了，请重新选择')
-    expect(f.reason).toBe('收藏库文件夹不存在：D:\\笔记\\收藏库。')
+    expect(f.reason).toBe('找不到收藏库：D:\\笔记\\收藏库。')
     expect(f.toSettings).toBe(true)
   })
   it('没有权限：去设置换文件夹', () => {
     const f = saveFailure('无法写入“D:\\a\\b.md”：没有权限')
-    expect(f.reason).toBe('没有权限写入收藏库文件夹。')
+    expect(f.reason).toBe('没有权限写入收藏库。')
     expect(f.toSettings).toBe(true)
   })
   it('磁盘满：清理后重新保存，不用去设置', () => {
     const f = saveFailure('无法写入“D:\\a”：磁盘空间不足')
-    expect(f.reason).toBe('磁盘空间不足。')
+    expect(f.reason).toBe('磁盘空间不足，请清理空间后重新保存。')
     expect(f.toSettings).toBe(false)
   })
   it('文件被占用', () => {
     expect(saveFailure('无法写入“D:\\a”：文件正在被其他程序使用，请关闭后重试').reason).toBe(
-      '同名文件正在被其他程序使用。',
+      '文件正被其他程序占用，请关闭占用程序后重新保存。',
     )
   })
   it('认不出的原因：原样给出，点重新保存', () => {

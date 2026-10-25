@@ -154,7 +154,7 @@ function call<T>(fn: () => Promise<T>, ctx: RunContext, step: StepState): Promis
       cancel: ctx.cancel,
       sleep: ctx.sleep,
       onWait: (s) => {
-        step.note = `请求太频繁，${s} 秒后自动重试`
+        step.note = `请求受限，${s} 秒后自动重试。`
         ctx.onUpdate()
       },
     },
@@ -195,7 +195,7 @@ const STEPS: Record<StepId, (job: Job, ctx: RunContext, step: StepState) => Prom
     const texts: string[] = []
     for (let i = 0; i < chunks.length; i++) {
       if (chunks.length > 1) {
-        step.note = `第 ${i + 1}/${chunks.length} 段`
+        step.note = `正在转写第 ${i + 1}/${chunks.length} 段`
         ctx.onUpdate()
       }
       const raw = await call(() => transcribe(ctx.config.services.asr, chunks[i], ctx.fetch, ctx.cancel), ctx, step)
@@ -203,7 +203,7 @@ const STEPS: Record<StepId, (job: Job, ctx: RunContext, step: StepState) => Prom
       texts.push(cleanTranscript(raw))
     }
     const text = texts.join('\n')
-    if (effectiveLength(text) < 20) throw new AppError('no_speech', '没有识别到语音，可以改为提供截图。')
+    if (effectiveLength(text) < 20) throw new AppError('no_speech', '未识别到语音，可改用截图整理。')
     job.transcript = text
     job.wavChunks = undefined // 音频用完就丢掉，不长期保存（方案第 10.5 节）
   },
@@ -294,7 +294,7 @@ async function askOnce(
       ),
       ctx.config.domains,
     )
-    if (!parsed) throw new AppError('format', 'AI 返回的结果缺少标题或正文，请点击重试。')
+    if (!parsed) throw new AppError('format', '整理结果缺少标题或正文，请重试。')
     return parsed
   } finally {
     if (used || answered) await recordUsage(job, ctx, kind, used)

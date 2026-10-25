@@ -45,12 +45,8 @@ defineExpose({ activeRect, viewportRect })
 
 <template>
   <aside class="panel" aria-label="原文对照">
-    <p class="hint">
-      点击左边正文的一段，这里会标出它对应的原文。颜色较淡的 {{ unusedCount }} 句是笔记里没有写到的内容。
-    </p>
-    <p v-if="active === 'none'" class="not-found">
-      这一段在原文里没有找到明显对应的内容，可能是 AI 改写较多或补充的内容。
-    </p>
+    <p class="hint">点击正文段落可查看对应原文；浅色的 {{ unusedCount }} 句未被笔记采用。</p>
+    <p v-if="active === 'none'" class="not-found">未找到对应原文，可能经过较多改写或补充。</p>
     <div ref="textEl" class="text" @scroll="emit('scroll')">
       <span
         v-for="(s, i) in sentences"

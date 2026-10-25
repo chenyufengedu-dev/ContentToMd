@@ -20,17 +20,17 @@ export function lengthProblem(mode: Mode, chars: number): string | null {
   if (chars <= max) return null
   const n = chars.toLocaleString()
   if (mode === '原文精修')
-    return `「原文精修」一次最多处理 ${wan(max)}，这份有 ${n} 字。请改用「要点提炼」（最多 ${wan(MAX_CHARS.要点提炼)}），或拆成几份再放入。`
-  return `这份内容有 ${n} 字，超过 ${wan(max)}的上限。请拆成几份再放入。`
+    return `原文精修最多 ${wan(max)}，当前 ${n} 字。请改用要点提炼（最多 ${wan(MAX_CHARS.要点提炼)}），或拆分内容。`
+  return `内容超过 ${wan(max)}（当前 ${n} 字），请拆分后导入。`
 }
 
 /** 内容比较长时，告诉用户要等多久；不长就不提示。原文精修按每块 3000 字、同时 3 块、每轮约 30 秒估 */
 export function estimateWait(mode: Mode, chars: number): string | null {
   if (mode === '原文精修' && chars > 20000) {
     const rounds = Math.ceil(Math.ceil(chars / REFINE_CHUNK) / CONCURRENCY)
-    return `预计要 ${Math.max(1, Math.round((rounds * 30) / 60))} 分钟左右，请耐心等待。`
+    return `预计约 ${Math.max(1, Math.round((rounds * 30) / 60))} 分钟，实际耗时取决于内容和服务响应。`
   }
-  if (mode === '要点提炼' && chars > 50000) return '预计要 1～2 分钟，请耐心等待。'
+  if (mode === '要点提炼' && chars > 50000) return '预计约 1～2 分钟，实际耗时取决于内容和服务响应。'
   return null
 }
 

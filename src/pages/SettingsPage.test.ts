@@ -58,6 +58,34 @@ async function mount(price?: number, setup?: (config: Config) => void) {
   }
   return { vm, root, pending, saved, busy, fill }
 }
+it.each([0, 1, 2])('服务%s重新输入同一密钥不提示待保存，真正修改及恢复按最终值判断', async (index) => {
+  const keys = ['isolated-text-key', 'isolated-vision-key', 'isolated-asr-key']
+  const view = await mount(undefined, (config) => {
+    config.services.text.apiKey = keys[0]
+    config.services.vision.apiKey = keys[1]
+    config.services.asr.apiKey = keys[2]
+  })
+  const input = view.root.querySelectorAll<HTMLInputElement>('input[type="password"]')[index]
+  if (!input) throw new Error('缺少密钥输入框')
+  const fill = async (value: string) => {
+    input.value = value
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    await nextTick()
+  }
+  await fill(`  ${keys[index]}  `)
+  expect(view.root.querySelector('.save-bar')).toBeNull()
+  expect(view.pending).not.toHaveBeenCalledWith(true)
+  await fill('isolated-new-key')
+  expect(view.pending).toHaveBeenLastCalledWith(true)
+  await fill(keys[index])
+  expect(view.pending).toHaveBeenLastCalledWith(false)
+  await fill('')
+  expect(view.pending).toHaveBeenLastCalledWith(false)
+  await view.fill('1')
+  await fill(keys[index])
+  expect(view.pending).toHaveBeenLastCalledWith(true)
+  expect(saveConfig).not.toHaveBeenCalled()
+})
 async function deleteFirstDomain(root: HTMLElement, existed = true) {
   vi.mocked(countDomainNotes).mockResolvedValue(existed ? 1 : 0)
   vi.mocked(deleteDomain).mockResolvedValue({ notes: existed ? 1 : 0, images: existed ? ['附件/a.png'] : [], existed })
@@ -134,7 +162,7 @@ it.each(['abc', '-1', 'Infinity', '1e999'])('无原价时输入 %s 也算未保�
   expect(await vm.save()).toBe(false)
   expect(saveConfig).not.toHaveBeenCalled()
   await nextTick()
-  expect(root.textContent).toContain('非负数')
+  expect(root.textContent).toContain('大于或等于 0 的数字')
 })
 it('错误价格不能覆盖原价，修正后全局保存才写入', async () => {
   const { vm, fill } = await mount(2)
@@ -178,7 +206,7 @@ it('保存只确认提交快照，保存期间的新输入仍待保存且不能�
   expect(JSON.parse(payload).services.text.baseUrl).toBe('https://example.invalid/a')
   expect(saved.mock.calls[0][0].services.text.baseUrl).toBe('https://example.invalid/a')
   expect(pending).toHaveBeenLastCalledWith(true)
-  expect(root.textContent).toContain('有改动还没保存')
+  expect(root.textContent).toContain('修改尚未保存')
   expect(await vm.save()).toBe(true)
   expect(vi.mocked(saveConfig).mock.calls[1][0].services.text.baseUrl).toBe('https://example.invalid/b')
 })

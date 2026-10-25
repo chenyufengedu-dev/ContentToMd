@@ -34,5 +34,5 @@ export const isAppError = (e: unknown, code?: ErrorCode): e is AppError =>
 /** 把任何错误转成给用户看的一句话 + 详细信息 */
 export function describeError(e: unknown): { code?: ErrorCode; message: string; detail?: string } {
   if (e instanceof AppError) return { code: e.code, message: e.message, detail: e.detail || undefined }
-  return { message: '出了点问题，请重试', detail: e instanceof Error ? e.message : String(e) }
+  return { message: '操作失败，请重试。', detail: e instanceof Error ? e.message : String(e) }
 }
