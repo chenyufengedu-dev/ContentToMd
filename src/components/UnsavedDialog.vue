@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// 设置页有没保存的改动时，切换页面或关闭软件前问一句：保存 / 放弃更改 / 取消（留在设置页，点框外、按 Esc 也是取消）
+// 设置页未保存时切换页面或关闭软件，提供保存、放弃修改和继续设置。
 import NoticeDialog from './NoticeDialog.vue'
 
 defineProps<{ busy?: boolean }>()
@@ -8,15 +8,15 @@ const emit = defineEmits<{ save: []; discard: []; stay: [] }>()
 
 <template>
   <NoticeDialog
-    title="设置还没保存"
-    neutral-text="取消"
-    cancel-text="放弃更改"
-    :ok-text="busy ? '保存中…' : '保存'"
+    title="设置尚未保存"
+    neutral-text="继续设置"
+    cancel-text="放弃修改"
+    :ok-text="busy ? '保存中…' : '保存设置'"
     @neutral="emit('stay')"
     @cancel="emit('discard')"
     @ok="!busy && emit('save')"
   >
-    <p>你改了设置，但还没有保存。现在离开，这些改动会丢掉。</p>
+    <p>保存后再离开，或放弃本次修改。</p>
     <slot />
   </NoticeDialog>
 </template>

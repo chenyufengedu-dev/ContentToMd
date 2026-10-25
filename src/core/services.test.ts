@@ -37,9 +37,7 @@ describe('服务返回的错误按错误码分类（方案第 8 节）', () => {
   }
 
   it('密钥无效的提示写出是哪项服务', async () => {
-    await expect(chatJson('text', text, 's', 'u', respond(401, ''))).rejects.toThrow(
-      '文字整理服务的密钥无效，请到设置中检查',
-    )
+    await expect(chatJson('text', text, 's', 'u', respond(401, ''))).rejects.toThrow('文字整理密钥无效，请到设置中检查')
   })
 
   it('http 地址不发请求 → insecure_url', async () => {

@@ -104,7 +104,7 @@ export function parseConfig(json: string | null): Config {
 
 /** 接口地址只允许 HTTPS：密钥和内容不能明文传输（《代码规范》第 7 节第 8 条）。没问题时返回 null */
 export function checkBaseUrl(url: string): string | null {
-  return /^https:\/\/[^\s/]+/i.test(url.trim()) ? null : '接口地址必须以 https:// 开头（加密连接）'
+  return /^https:\/\/[^\s/]+/i.test(url.trim()) ? null : '接口地址须以 https:// 开头。'
 }
 
 export function isServiceConfigured(s: ServiceConfig): boolean {
@@ -129,10 +129,10 @@ const ILLEGAL = /[\\/:*?"<>|]/
 /** 检查领域名；没问题时返回 null */
 export function checkDomainName(name: string, domains: Domain[], selfId?: number): string | null {
   const n = name.trim()
-  if (!n) return '领域名不能为空。'
-  if (ILLEGAL.test(n)) return '领域名里不能有 \\ / : * ? " < > | 这些字符。'
-  if (n.length > 20) return '领域名不要超过 20 个字。'
-  if (domains.some((d) => d.name === n && d.id !== selfId)) return '已经有这个领域了。'
+  if (!n) return '请填写领域名。'
+  if (ILLEGAL.test(n)) return '领域名不能包含：\\ / : * ? " < > |'
+  if (n.length > 20) return '领域名最多 20 个字。'
+  if (domains.some((d) => d.name === n && d.id !== selfId)) return '该领域名已存在，请换一个名称。'
   return null
 }
 
@@ -160,9 +160,9 @@ export function checkSubfolder(sub: string): string | null {
   const t = sub.trim()
   if (!t) return null
   const parts = t.split(/[\\/]/)
-  if (parts.some((p) => p.trim() === '.' || p.trim() === '..')) return '子文件夹名里不能有“..”。'
-  if (/[:*?"<>|]/.test(t)) return '子文件夹名里不能有 : * ? " < > | 这些字符。'
-  if (parts.some((p) => !p.trim())) return '子文件夹名不能有空的一层。'
+  if (parts.some((p) => p.trim() === '.' || p.trim() === '..')) return '子文件夹路径不能包含“.”或“..”层级。'
+  if (/[:*?"<>|]/.test(t)) return '子文件夹名不能包含：: * ? " < > |'
+  if (parts.some((p) => !p.trim())) return '子文件夹路径不能包含空层级。'
   return null
 }
 
@@ -170,9 +170,9 @@ export function checkSubfolder(sub: string): string | null {
 export function checkNewFolderName(name: string, existing: string[]): string | null {
   const n = name.trim()
   if (!n) return '文件夹名不能为空。'
-  if (ILLEGAL.test(n)) return '文件夹名里不能有 \\ / : * ? " < > | 这些字符。'
+  if (ILLEGAL.test(n)) return '文件夹名不能包含：\\ / : * ? " < > |'
   if (n === '.' || n === '..') return '文件夹名不能是“.”或“..”。'
-  if (existing.includes(n)) return `仓库里已经有“${n}”文件夹了，可以直接在上面选。`
+  if (existing.includes(n)) return `“${n}”已存在，请直接选择。`
   return null
 }
 

@@ -1,5 +1,34 @@
-use tauri::{Manager, PhysicalPosition, PhysicalRect, PhysicalSize, WebviewWindow};
-use tauri_plugin_window_state::{StateFlags, WindowExt};
+use std::{sync::mpsc, time::Duration};
+use tauri::{Manager, PhysicalPosition, PhysicalRect, PhysicalSize, WebviewWindow, WindowEvent};
+use tauri_plugin_window_state::{AppHandleExt, StateFlags, WindowExt};
+
+pub fn track(window: &WebviewWindow) {
+    let (sender, receiver) = mpsc::sync_channel(1);
+    let window_copy = window.clone();
+    std::thread::spawn(move || {
+        persist_changes(receiver, || {
+            if window_copy.is_minimized().unwrap_or(true) {
+                return;
+            }
+            if let Err(error) = window_copy.app_handle().save_window_state(flags()) {
+                eprintln!("无法保存窗口状态：{error}");
+            }
+        });
+    });
+    window.on_window_event(move |event| {
+        if matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_)) {
+            // 连续拖动只需要保留一次待写通知，实际写入时读取最新窗口状态。
+            let _ = sender.try_send(());
+        }
+    });
+}
+
+fn persist_changes(receiver: mpsc::Receiver<()>, mut save: impl FnMut()) {
+    while receiver.recv().is_ok() {
+        while receiver.recv_timeout(Duration::from_millis(300)).is_ok() {}
+        save();
+    }
+}
 
 pub fn flags() -> StateFlags {
     StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED
@@ -71,6 +100,23 @@ fn fit_bounds(
 mod tests {
     use super::*;
     use tauri::{PhysicalPosition, PhysicalSize};
+
+    #[test]
+    fn window_changes_are_saved_before_exit_and_bursts_are_coalesced() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let (saved, writes) = mpsc::channel();
+        let worker =
+            std::thread::spawn(move || persist_changes(receiver, || saved.send(()).unwrap()));
+        sender.send(()).unwrap();
+        sender.send(()).unwrap();
+        assert!(writes.recv_timeout(Duration::from_millis(50)).is_err());
+        writes.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(writes.try_recv().is_err());
+        sender.send(()).unwrap();
+        writes.recv_timeout(Duration::from_secs(2)).unwrap();
+        drop(sender);
+        worker.join().unwrap();
+    }
 
     fn rect(x: i32, y: i32, width: u32, height: u32) -> PhysicalRect<i32, u32> {
         PhysicalRect {

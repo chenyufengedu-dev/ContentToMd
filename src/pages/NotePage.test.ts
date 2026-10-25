@@ -1,14 +1,17 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { createApp, h, nextTick, type App, type FunctionalComponent } from 'vue'
-import NotePage from './NotePage.vue'
-import { defaultConfig, type Config } from '../core/config'
-import { parseNoteFile } from '../core/note'
-import { readNote, readCover, guardClose } from '../shell/tauri'
+import { createApp, h, nextTick, type App, type SetupContext } from 'vue'
 import type { Job } from '../core/pipeline'
 import type { EditInfo } from './ConfirmPage.vue'
+import type { NoteRecovery } from '../core/noteRecovery'
+import NotePage from './NotePage.vue'
+import { defaultConfig, notesRoot, type Config } from '../core/config'
+import { parseNoteFile } from '../core/note'
+import { clearEditRecovery, listEditRecoveries, readNote, readCover, guardClose } from '../shell/tauri'
 
 vi.mock('../shell/tauri', () => ({
+  listEditRecoveries: vi.fn().mockResolvedValue([]),
+  clearEditRecovery: vi.fn().mockResolvedValue(undefined),
   readNote: vi.fn(),
   listVaultTags: vi.fn().mockResolvedValue([]),
   guardClose: vi.fn().mockResolvedValue((): void => {}),
@@ -18,27 +21,38 @@ vi.mock('../shell/tauri', () => ({
   readCover: vi.fn(),
 }))
 vi.mock('./ConfirmPage.vue', () => {
-  const editor: FunctionalComponent<{ config: Config; job: Job; edit: EditInfo }> = (props, { emit }) =>
-    h('div', [
-      h(
-        'button',
-        {
-          'data-image-index': props.job.images?.[0]?.noteImageIndex,
-          'data-image-width': props.job.images?.[0]?.width,
-          'data-original-text': props.edit.originalText,
-          onClick: () =>
-            emit('configChanged', {
-              ...props.config,
-              domains: [...props.config.domains, { id: 100, name: '新领域' }],
-            }),
-        },
-        props.config.domains.map((d) => d.name).join(','),
-      ),
-      h('button', { class: 'test-back', onClick: () => emit('back') }, '返回'),
-      h('button', { class: 'test-edit', onClick: () => emit('dirty', true) }, '修改'),
-    ])
-  editor.props = ['config', 'job', 'edit']
-  editor.emits = ['configChanged', 'back', 'dirty']
+  const editor = {
+    props: ['config', 'job', 'edit', 'recovery'],
+    emits: ['configChanged', 'back', 'dirty'],
+    setup(
+      props: { config: Config; job: Job; edit: EditInfo; recovery?: NoteRecovery },
+      { emit, expose }: SetupContext<{ configChanged: [Config]; back: []; dirty: [boolean] }>,
+    ) {
+      expose({ discardRecovery: () => Promise.resolve(true) })
+      return () =>
+        h('div', [
+          h(
+            'button',
+            {
+              'data-image-index': props.job.images?.[0]?.noteImageIndex,
+              'data-image-width': props.job.images?.[0]?.width,
+              'data-original-text': props.edit.originalText,
+              'data-recovered-body': props.recovery?.draft.body,
+              'data-recovered-crop': JSON.stringify(props.recovery?.images[0]?.crop),
+              'data-image-name': props.job.images?.[0]?.file.name,
+              onClick: () =>
+                emit('configChanged', {
+                  ...props.config,
+                  domains: [...props.config.domains, { id: 100, name: '新领域' }],
+                }),
+            },
+            props.config.domains.map((d: Config['domains'][number]) => d.name).join(','),
+          ),
+          h('button', { class: 'test-back', onClick: () => emit('back') }, '返回'),
+          h('button', { class: 'test-edit', onClick: () => emit('dirty', true) }, '修改'),
+        ])
+    },
+  }
   return { default: editor }
 })
 it('跳过缺失图片时，保留后续加载图片在笔记中的原始索引', async () => {
@@ -60,7 +74,10 @@ it('跳过缺失图片时，保留后续加载图片在笔记中的原始索引'
   expect(root.querySelector('button')?.getAttribute('data-original-text')).toBe('打开时完整文件')
 })
 let app: App | undefined
-beforeEach(() => vi.clearAllMocks())
+beforeEach(() => {
+  vi.clearAllMocks()
+  vi.mocked(listEditRecoveries).mockResolvedValue([])
+})
 afterEach(() => {
   app?.unmount()
   document.body.replaceChildren()
@@ -147,7 +164,7 @@ it('编辑器返回请求复用未保存确认，取消留在页面，确认后�
   requestBack.click()
   await nextTick()
   expect(back).not.toHaveBeenCalled()
-  expect(root.textContent).toContain('有修改还没保存')
+  expect(root.textContent).toContain('修改尚未保存')
   const cancel = root.querySelector<HTMLButtonElement>('[role="alertdialog"] button.soft')
   if (!cancel) throw new Error('缺少继续编辑按钮')
   cancel.click()
@@ -158,6 +175,97 @@ it('编辑器返回请求复用未保存确认，取消留在页面，确认后�
   await nextTick()
   const leave = root.querySelector<HTMLButtonElement>('[role="alertdialog"] button.primary')
   if (!leave) throw new Error('缺少不保存离开按钮')
+  expect(leave.textContent).toBe('不保存，离开')
   leave.click()
+  await new Promise((resolve) => setTimeout(resolve, 0))
   expect(back).toHaveBeenCalledExactlyOnceWith(false)
+})
+function recoveryRecord(): NoteRecovery {
+  return {
+    version: 1,
+    root: notesRoot(defaultConfig()),
+    path: '其他/测试.md',
+    savedAt: 1,
+    originalText: '上次打开时完整文件',
+    images: [],
+    draft: {
+      title: '恢复标题',
+      domainId: 99,
+      tags: [],
+      keywords: [],
+      summary: '',
+      body: '恢复正文',
+      image_captions: [],
+    },
+  }
+}
+it('重开有恢复副本的笔记先询问，恢复只打开编辑器不保存文件', async () => {
+  vi.mocked(listEditRecoveries).mockResolvedValueOnce([recoveryRecord()])
+  vi.mocked(readNote).mockResolvedValueOnce(
+    parseNoteFile({ originalText: '现在的文件', title: '测试', stem: '测试', domain: '其他', content: '原正文' }),
+  )
+  const root = await mountNote('其他/测试.md')
+  expect(root.textContent).toContain('上次编辑未正常结束')
+  expect(root.textContent).toContain('笔记已在其他程序修改')
+  const restore = [...root.querySelectorAll('button')].find((b) => b.textContent === '恢复修改')
+  if (!restore) throw new Error('缺少恢复入口')
+  restore.click()
+  await nextTick()
+  expect(root.querySelector('[data-recovered-body]')?.getAttribute('data-recovered-body')).toBe('恢复正文')
+  expect(clearEditRecovery).not.toHaveBeenCalled()
+})
+it.each(['Escape', 'mask'])('恢复只有两个按钮，%s关闭不清除副本，明确放弃才清除', async (dismissBy) => {
+  vi.mocked(listEditRecoveries).mockResolvedValueOnce([recoveryRecord()])
+  vi.mocked(readNote).mockResolvedValueOnce(
+    parseNoteFile({
+      originalText: '上次打开时完整文件',
+      title: '测试',
+      stem: '测试',
+      domain: '其他',
+      content: '原正文',
+    }),
+  )
+  const back = vi.fn()
+  const root = await mountNote('其他/测试.md', vi.fn(), back)
+  const dialog = root.querySelector<HTMLElement>('[role="alertdialog"]')
+  const mask = root.querySelector<HTMLElement>('.mask')
+  if (!dialog || !mask) throw new Error('缺少恢复弹窗')
+  expect([...dialog.querySelectorAll('button')].map((button) => button.textContent)).toEqual(['放弃修改', '恢复修改'])
+  if (dismissBy === 'Escape')
+    dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+  else mask.click()
+  expect(back).toHaveBeenCalledExactlyOnceWith(false)
+  expect(clearEditRecovery).not.toHaveBeenCalled()
+  const discard = [...root.querySelectorAll('button')].find((b) => b.textContent === '放弃修改')
+  if (!discard) throw new Error('缺少放弃恢复入口')
+  discard.click()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(clearEditRecovery).toHaveBeenCalledExactlyOnceWith(notesRoot(defaultConfig()), '其他/测试.md')
+  expect(root.querySelector('[data-recovered-body]')?.getAttribute('data-recovered-body')).toBeUndefined()
+})
+it.each([true, false])('恢复裁剪匹配正确源图，裁剪已保存=%s', async (alreadySaved) => {
+  const rect = { x: 10, y: 10, w: 80, h: 60 }
+  const record = recoveryRecord()
+  record.images = [{ index: 0, source: '../附件/原图.png', savedCrop: rect, crop: alreadySaved ? rect : null }]
+  vi.mocked(listEditRecoveries).mockResolvedValueOnce([record])
+  vi.mocked(readCover).mockResolvedValue(new Blob(['isolated-image']))
+  vi.mocked(readNote).mockResolvedValueOnce(
+    parseNoteFile({
+      originalText: '现在的文件',
+      title: '测试',
+      stem: '测试',
+      domain: '其他',
+      content: '![图](../附件/已裁剪.png)\n\n正文',
+    }),
+  )
+  const root = await mountNote('其他/测试.md')
+  const restore = [...root.querySelectorAll('button')].find((b) => b.textContent === '恢复修改')
+  if (!restore) throw new Error('缺少恢复入口')
+  restore.click()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(root.querySelector('[data-image-name]')?.getAttribute('data-image-name')).toBe(
+    alreadySaved ? '已裁剪.png' : '原图.png',
+  )
+  expect(root.querySelector('[data-recovered-crop]')?.getAttribute('data-recovered-crop')).toBe('null')
+  expect(readCover).toHaveBeenCalledTimes(alreadySaved ? 1 : 2)
 })

@@ -151,9 +151,9 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="mask" @click.self="emit('cancel')">
-    <section ref="dialog" class="dialog" role="dialog" aria-modal="true" aria-label="调整裁剪" tabindex="-1">
+    <section ref="dialog" class="dialog" role="dialog" aria-modal="true" aria-label="裁剪图片" tabindex="-1">
       <header class="head">
-        <h2>调整裁剪</h2>
+        <h2>裁剪图片</h2>
         <button v-press="'icon'" class="close" aria-label="关闭" @click="emit('cancel')"><X :size="18" /></button>
       </header>
 
@@ -173,7 +173,7 @@ onBeforeUnmount(() => {
               type="button"
               class="move"
               :aria-label="HANDLE_LABELS.move"
-              title="方向键微调，Shift 加速"
+              title="方向键微调，按住 Shift 加速"
               @pointerdown="onDown($event, 'move')"
               @keydown="onAdjustKey($event, 'move')"
             />
@@ -185,7 +185,7 @@ onBeforeUnmount(() => {
               class="handle"
               :class="h"
               :aria-label="HANDLE_LABELS[h]"
-              title="方向键微调，Shift 加速"
+              title="方向键微调，按住 Shift 加速"
               @pointerdown.stop="onDown($event, h)"
               @keydown="onAdjustKey($event, h)"
             />
@@ -210,7 +210,7 @@ onBeforeUnmount(() => {
         <div class="buttons">
           <button v-press class="link" :disabled="!cropped" @click="restore">恢复原图</button>
           <button v-press class="secondary" @click="emit('cancel')">取消</button>
-          <button v-press="'tactile'" class="primary" @click="emit('done', crops)">完成</button>
+          <button v-press="'tactile'" class="primary" @click="emit('done', crops)">应用裁剪</button>
         </div>
       </footer>
     </section>

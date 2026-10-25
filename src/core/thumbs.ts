@@ -29,7 +29,7 @@ export function makeThumbs(blob: Blob): Promise<Thumbs> {
   const job = queue.then(() => ask(blob))
   queue = job.catch(() => {})
   return job.then((r) => {
-    if (r.error || !r.thumb || !r.blurred) throw new Error(r.error ?? '没有生成缩略图')
+    if (r.error || !r.thumb || !r.blurred) throw new Error(r.error ?? '未能取得视频缩略图。')
     return { thumb: r.thumb, blurred: r.blurred }
   })
 }

@@ -72,6 +72,7 @@ async function fakeCover(path: string): Promise<ArrayBuffer> {
 }
 
 export function installLibraryShell(mode: string | null) {
+  const recoveries = new Map<string, string>()
   const count = mode === 'many' ? 120 : mode === 'empty' ? 0 : SAMPLES.length
   const notes = Array.from({ length: count }, (_, i) => {
     const s = SAMPLES[i % SAMPLES.length]
@@ -86,7 +87,14 @@ export function installLibraryShell(mode: string | null) {
   })
   Object.assign(window, {
     __TAURI_INTERNALS__: {
-      invoke: async (cmd: string, args?: { relPath?: string }) => {
+      invoke: async (cmd: string, args?: { relPath?: string; root?: string; path?: string; json?: string | null }) => {
+        if (cmd === 'edit_recovery_list') return [...recoveries.values()]
+        if (cmd === 'edit_recovery_write') {
+          const key = JSON.stringify([args!.root, args!.path])
+          if (args!.json == null) recoveries.delete(key)
+          else recoveries.set(key, args!.json)
+          return
+        }
         if (cmd === 'list_notes') {
           if (mode === 'missing') throw new Error('找不到文件夹')
           return { notes, failed: mode === 'fail' ? ['设计UI/坏的.md', '其他/乱码.md'] : [] }

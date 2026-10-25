@@ -10,7 +10,15 @@ import { parseNoteBody, type NoteImage } from '../core/note'
 import { fromDraft, toDraft } from '../core/draft'
 import type * as ImageTools from '../core/image'
 import { cropForSave } from '../core/image'
-import { saveNote, writeNote, writeAttachment, removeAttachment } from '../shell/tauri'
+import {
+  saveEditRecovery,
+  clearEditRecovery,
+  saveNote,
+  writeNote,
+  writeAttachment,
+  removeAttachment,
+} from '../shell/tauri'
+import type { NoteRecovery } from '../core/noteRecovery'
 
 vi.mock('../core/image', async (original) => ({
   ...(await original<typeof ImageTools>()),
@@ -31,6 +39,8 @@ vi.mock('@tiptap/vue-3', async (importOriginal) => {
   }
 })
 vi.mock('../shell/tauri', () => ({
+  saveEditRecovery: vi.fn().mockResolvedValue(undefined),
+  clearEditRecovery: vi.fn().mockResolvedValue(undefined),
   saveNote: vi.fn(),
   writeNote: vi.fn(),
   writeAttachment: vi.fn(),
@@ -40,6 +50,8 @@ vi.mock('../shell/tauri', () => ({
 let app: App
 beforeEach(() => {
   vi.resetAllMocks()
+  vi.mocked(saveEditRecovery).mockResolvedValue(undefined)
+  vi.mocked(clearEditRecovery).mockResolvedValue(undefined)
   vi.stubGlobal('matchMedia', () => ({ matches: true }))
   vi.stubGlobal(
     'URL',
@@ -58,7 +70,12 @@ afterEach(() => {
   editor = undefined
   vi.unstubAllGlobals()
 })
-async function mount(body = '原始正文', editMode = true, pictures?: { files: JobImage[]; saved: NoteImage[] }) {
+async function mount(
+  body = '原始正文',
+  editMode = true,
+  pictures?: { files: JobImage[]; saved: NoteImage[] },
+  recovery?: NoteRecovery,
+) {
   const config = defaultConfig()
   const job: Job = {
     fileName: '旧标题.md',
@@ -97,6 +114,7 @@ async function mount(body = '原始正文', editMode = true, pictures?: { files:
   const dirty = vi.fn()
   const saved = vi.fn()
   const back = vi.fn()
+  const edited = vi.fn()
   const root = document.createElement('div')
   document.body.append(root)
   app = createApp(ConfirmPage, {
@@ -104,17 +122,22 @@ async function mount(body = '原始正文', editMode = true, pictures?: { files:
     job,
     existingTags: [],
     edit: editMode ? edit : undefined,
+    recovery,
     onDirty: dirty,
     onSaved: saved,
     onBack: back,
+    onEdited: edited,
   })
-  app.mount(root)
+  // Vue 的实例通过 defineExpose 暴露恢复副本的明确放弃入口。
+  const controller = app.mount(root) as InstanceType<typeof ConfirmPage>
   await nextTick()
   const titleField = root.querySelector<HTMLTextAreaElement>('textarea.title')
   const save = root.querySelector<HTMLButtonElement>('.action-row .btn-primary')
   if (!titleField || !save || !editor) throw new Error('确认页未就绪')
   const title = titleField
   const currentEditor = editor
+  // jsdom没有选区布局，焦点/滚动的可视结果用浏览器验证。
+  currentEditor.setOptions({ editorProps: { handleScrollToSelection: () => true } })
   async function setTitle(value: string) {
     title.value = value
     title.dispatchEvent(new Event('input', { bubbles: true }))
@@ -124,8 +147,129 @@ async function mount(body = '原始正文', editMode = true, pictures?: { files:
     await new Promise((resolve) => setTimeout(resolve, 0))
     await nextTick()
   }
-  return { root, dirty, saved, back, save, setTitle, flush, editor: currentEditor, job }
+  return {
+    root,
+    dirty,
+    saved,
+    back,
+    edited,
+    save,
+    setTitle,
+    flush,
+    editor: currentEditor,
+    job,
+    discardRecovery: controller.discardRecovery,
+  }
 }
+it('已有笔记停顿后仅保存恢复副本，重开恢复后仍须主动保存', async () => {
+  const first = await mount()
+  await first.setTitle('恢复标题')
+  first.editor.commands.insertContent('未保存正文')
+  await new Promise((resolve) => setTimeout(resolve, 850))
+  const record = vi.mocked(saveEditRecovery).mock.calls.at(-1)?.[0]
+  if (!record) throw new Error('未保存恢复副本')
+  expect(record.originalText).toBe('打开时完整文件')
+  expect(record.draft.title).toBe('恢复标题')
+  expect(record.draft.body).toContain('未保存正文')
+  expect(saveNote).not.toHaveBeenCalled()
+  app.unmount()
+  const restored = await mount('原始正文', true, undefined, record)
+  await restored.flush()
+  expect(restored.editor.getText()).toContain('未保存正文')
+  expect(restored.save.disabled).toBe(false)
+  expect(saveNote).not.toHaveBeenCalled()
+  vi.mocked(saveNote).mockResolvedValue('为人处世/恢复标题.md')
+  restored.save.click()
+  await restored.flush()
+  expect(vi.mocked(saveNote).mock.calls[0][4]).toContain('未保存正文')
+  expect(clearEditRecovery).toHaveBeenCalledWith(expect.any(String), record.path)
+})
+it('恢复正文仍使用旧读取基线，外部改动冲突不清除恢复内容', async () => {
+  const record: NoteRecovery = {
+    version: 1,
+    root: '',
+    path: '为人处世/旧标题.md',
+    savedAt: 1,
+    originalText: '更早的文件',
+    draft: {
+      title: '旧标题',
+      domainId: 1,
+      tags: ['恢复标签'],
+      keywords: [],
+      summary: '',
+      body: '恢复的修改',
+      image_captions: [],
+    },
+    images: [],
+  }
+  const view = await mount('别处修改的新正文', true, undefined, record)
+  await view.flush()
+  vi.mocked(saveNote).mockRejectedValueOnce(new Error('笔记已在别处修改，请重新打开'))
+  view.save.click()
+  await view.flush()
+  expect(vi.mocked(saveNote).mock.calls[0][5]).toBe('更早的文件')
+  expect(view.dirty).toHaveBeenLastCalledWith(true)
+  expect(view.editor.getText()).toBe('恢复的修改')
+})
+it('恢复副本写入失败会提示，正式笔记不被自动修改', async () => {
+  vi.mocked(saveEditRecovery).mockRejectedValueOnce(new Error('隔离磁盘满'))
+  const view = await mount()
+  await view.setTitle('等待恢复')
+  await new Promise((resolve) => setTimeout(resolve, 850))
+  await nextTick()
+  expect(view.root.textContent).toContain('本地恢复副本未能更新')
+  expect(view.save.disabled).toBe(false)
+  expect(saveNote).not.toHaveBeenCalled()
+})
+it('明确放弃会取消尚未落盘的定时写入，之后不复活恢复副本', async () => {
+  const view = await mount()
+  await view.setTitle('即将放弃')
+  expect(await view.discardRecovery()).toBe(true)
+  await new Promise((resolve) => setTimeout(resolve, 850))
+  expect(clearEditRecovery).toHaveBeenCalled()
+  expect(saveEditRecovery).not.toHaveBeenCalled()
+  expect(saveNote).not.toHaveBeenCalled()
+})
+it('持续输入也定期保留检查点，不会一直等待停止输入', async () => {
+  vi.useFakeTimers()
+  try {
+    const view = await mount()
+    for (let i = 0; i < 6; i++) {
+      await view.setTitle(`连续修改${i}`)
+      await vi.advanceTimersByTimeAsync(150)
+    }
+    expect(saveEditRecovery).toHaveBeenCalledWith(
+      expect.objectContaining({ draft: expect.objectContaining({ title: '连续修改5' }) }),
+    )
+    expect(saveNote).not.toHaveBeenCalled()
+  } finally {
+    vi.useRealTimers()
+  }
+})
+it('恢复上次已保存裁剪后的“恢复原图”操作仍是待保存，并从源图保存', async () => {
+  const images = picture()
+  const record: NoteRecovery = {
+    version: 1,
+    root: '',
+    path: '为人处世/旧标题.md',
+    savedAt: 1,
+    originalText: '打开时完整文件',
+    draft: { title: '旧标题', domainId: 1, tags: [], keywords: [], summary: '', body: '正文', image_captions: [] },
+    images: [{ index: 0, source: images.saved[0].path, savedCrop: { x: 10, y: 10, w: 80, h: 60 }, crop: null }],
+  }
+  const view = await mount(
+    '正文',
+    true,
+    { files: images.files, saved: [{ ...images.saved[0], path: '../附件/已保存裁剪.png' }] },
+    record,
+  )
+  expect(view.save.disabled).toBe(false)
+  vi.mocked(saveNote).mockResolvedValue('为人处世/旧标题.md')
+  view.save.click()
+  await view.flush()
+  expect(cropForSave).toHaveBeenCalledWith(images.files[0].file, null)
+  expect(vi.mocked(saveNote).mock.calls[0][4]).toContain('新裁剪.png')
+})
 async function cropFirst(root: HTMLElement) {
   const button = root.querySelector<HTMLButtonElement>('.pic-tools button')
   if (!button) throw new Error('编辑页没有裁剪入口')
@@ -266,6 +410,74 @@ it.each([
   await view.flush()
   expect(vi.mocked(saveNote).mock.calls[0][4]).toContain(body)
 })
+it.each(['> 引用结尾', '第一段\n\n---', '- 列表结尾', '| 名称 |\n| --- |\n| 数据 |'])(
+  '仅移动光标或聚焦不产生待保存，随后只改属性仍保留原正文：%s',
+  async (body) => {
+    const view = await mount(body)
+    // jsdom 不提供选区布局；滚动交由真实浏览器验收。
+    view.editor.setOptions({ editorProps: { handleScrollToSelection: () => true } })
+    expect(view.save.disabled).toBe(true)
+    view.editor.commands.setTextSelection(2)
+    view.editor.commands.focus(undefined, { scrollIntoView: false })
+    await view.flush()
+    expect(view.save.disabled).toBe(true)
+    expect(view.dirty).not.toHaveBeenCalledWith(true)
+    expect(view.editor.can().undo()).toBe(false)
+    view.editor.commands.insertContent('真实修改')
+    await nextTick()
+    expect(view.save.disabled).toBe(false)
+    view.editor.commands.undo()
+    await nextTick()
+    expect(view.save.disabled).toBe(true)
+    await view.setTitle('仅改标题')
+    vi.mocked(saveNote).mockResolvedValue('为人处世/仅改标题.md')
+    view.save.click()
+    await view.flush()
+    expect(vi.mocked(saveNote).mock.calls[0][4]).toContain(body)
+  },
+)
+it('粘贴多段、表格和代码后可撤销重做，保存内容保留数字与例外', async () => {
+  const view = await mount('原始正文')
+  const original = view.editor.getMarkdown()
+  view.editor.commands.selectAll()
+  const paste = new Event('paste', { bubbles: true, cancelable: true })
+  Object.defineProperty(paste, 'clipboardData', {
+    value: {
+      types: ['text/html', 'text/plain'],
+      files: [],
+      getData: (type: string) =>
+        type === 'text/html'
+          ? '<p>中文第一段，报销上限 1200 元。</p><p>例外：实习生不适用。</p><table><tr><th>项目</th><th>金额</th></tr><tr><td>交通</td><td>80.50</td></tr></table><blockquote><p>先审批，再出发。</p></blockquote><pre><code class="language-js">const limit = 1200</code></pre>'
+          : type === 'text/plain'
+            ? '中文第一段，报销上限 1200 元。\n例外：实习生不适用。'
+            : '',
+    },
+  })
+  view.editor.view.dom.dispatchEvent(paste)
+  await nextTick()
+  expect(paste.defaultPrevented).toBe(true)
+  const pasted = view.editor.getMarkdown()
+  for (const value of ['1200', '80.50', '实习生不适用', '先审批，再出发', 'const limit = 1200'])
+    expect(pasted).toContain(value)
+  expect(view.editor.getHTML()).toContain('<table')
+  expect(view.dirty).toHaveBeenLastCalledWith(true)
+  view.editor.commands.undo()
+  await nextTick()
+  expect(view.editor.getMarkdown()).toBe(original)
+  expect(view.dirty).toHaveBeenLastCalledWith(false)
+  view.editor.commands.redo()
+  await nextTick()
+  expect(view.editor.getMarkdown()).toBe(pasted)
+  expect(view.dirty).toHaveBeenLastCalledWith(true)
+  vi.mocked(saveNote).mockResolvedValueOnce('为人处世/旧标题.md')
+  view.save.click()
+  await view.flush()
+  const submitted = vi.mocked(saveNote).mock.calls[0]
+  expect(submitted[4]).toContain('80.50')
+  expect(submitted[4]).toContain('实习生不适用')
+  expect(view.dirty).toHaveBeenLastCalledWith(false)
+})
+
 it('正文实际编辑后保存编辑结果', async () => {
   const body = '正文  \n第二行'
   const view = await mount(body)
@@ -289,18 +501,93 @@ it('首次保存时暂时暂停表单且只发布提交快照', async () => {
   await view.flush()
   expect(view.saved).toHaveBeenCalledWith(expect.objectContaining({ title: '旧标题', text: '原始正文' }))
 })
-it.each([
-  '| 名称 | 数值 |\n| --- | --- |\n| 测试 | 42 |',
-  '正文里的 ![图片](../附件/a.png)',
-  '- [x] 已完成',
-  '<table><tr><td>内容</td></tr></table>',
-])('特殊格式保留原文并限制不安全的正文编辑，属性仍可修改：%s', async (body) => {
-  const view = await mount(body)
-  expect(view.editor.isEditable).toBe(false)
-  expect(view.root.querySelector('.body-raw')?.textContent).toBe(body)
-  expect(view.root.textContent).toContain('正文含暂不支持的格式')
-  await view.setTitle('安全修改属性')
-  expect(view.save.disabled).toBe(false)
+it.each(['正文里的 ![图片](../附件/a.png)', '<table><tr><td>内容</td></tr></table>'])(
+  '暂不支持格式进入可编辑源码，保存保留完整格式：%s',
+  async (body) => {
+    const view = await mount(body)
+    expect(view.editor.isEditable).toBe(false)
+    const source = view.root.querySelector<HTMLTextAreaElement>('textarea.body-raw')
+    if (!source) throw new Error('缺少源码编辑框')
+    expect(source.value).toBe(body)
+    source.value = `${body}\n\n新增正文`
+    source.dispatchEvent(new Event('input', { bubbles: true }))
+    await nextTick()
+    expect(view.dirty).toHaveBeenLastCalledWith(true)
+    expect(view.save.disabled).toBe(false)
+    vi.mocked(saveNote).mockResolvedValue('为人处世/旧标题.md')
+    view.save.click()
+    await view.flush()
+    expect(vi.mocked(saveNote).mock.calls[0][4]).toContain(`${body}\n\n新增正文`)
+    expect(view.dirty).toHaveBeenLastCalledWith(false)
+  },
+)
+it.each([true, false])('表格与任务可直接编辑并保存，已有笔记=%s', async (edit) => {
+  const body = '| 名称 | 数值 |\n| --- | --- |\n| 测试 | 42 |\n\n- [x] 已完成'
+  const view = await mount(body, edit)
+  expect(view.editor.isEditable).toBe(true)
+  expect(view.root.querySelector('.body-raw')).toBeNull()
+  expect(view.root.querySelector('.body table')).not.toBeNull()
+  view.editor.commands.insertContent('新增正文')
+  vi.mocked(saveNote).mockResolvedValue('为人处世/旧标题.md')
+  vi.mocked(writeNote).mockResolvedValue('为人处世/旧标题.md')
+  await nextTick()
+  view.save.click()
+  await view.flush()
+  const md = edit ? vi.mocked(saveNote).mock.calls[0][4] : vi.mocked(writeNote).mock.calls[0][4]
+  expect(md).toContain('新增正文')
+  expect(md).toContain('42')
+  expect(md).toContain('- [x] 已完成')
+})
+it('导入结果的源码修改进入草稿并用于首次保存及成功页内容', async () => {
+  const body = '正文 ![图](附件/a.png)\n\n<div>保留 HTML</div>'
+  const view = await mount(body, false)
+  const source = view.root.querySelector<HTMLTextAreaElement>('textarea.body-raw')
+  if (!source) throw new Error('缺少源码编辑框')
+  const changed = `${body}\n\n源码修改`
+  source.value = changed
+  source.dispatchEvent(new Event('input', { bubbles: true }))
+  await new Promise((resolve) => setTimeout(resolve, 850))
+  expect(view.edited).toHaveBeenCalledWith(expect.objectContaining({ body: changed }))
+  vi.mocked(writeNote).mockResolvedValue('为人处世/旧标题.md')
+  view.save.click()
+  await view.flush()
+  expect(vi.mocked(writeNote).mock.calls[0][4]).toContain(changed)
+  expect(view.saved).toHaveBeenCalledWith(expect.objectContaining({ text: changed }))
+})
+it('表格工具只在单元格中出现，可增删行列且修改单元格后保存内容完整', async () => {
+  const view = await mount('| 名称 | 数值 |\n| --- | --- |\n| 测试 | 42 |')
+  let cell = -1
+  view.editor.state.doc.descendants((node, pos) => {
+    if (node.isText && node.text === '测试') cell = pos
+  })
+  expect(cell).toBeGreaterThan(0)
+  view.editor.commands.setTextSelection({ from: cell, to: cell + 2 })
+  view.editor.commands.insertContent('改过')
+  await nextTick()
+  const group = view.root.querySelector('[aria-label="表格操作"]')
+  if (!group) throw new Error('缺少表格操作')
+  for (const label of ['插入行', '删除行', '插入列', '删除列']) {
+    if (label === '删除行' || label === '删除列') {
+      let empty = -1
+      const type = label === '删除行' ? 'tableRow' : 'tableHeader'
+      view.editor.state.doc.descendants((node, pos) => {
+        if (node.type.name === type && node.textContent === '') empty = pos
+      })
+      expect(empty).toBeGreaterThan(0)
+      view.editor.commands.setTextSelection(empty + (label === '删除行' ? 3 : 2))
+    }
+    const button = [...group.querySelectorAll('button')].find((b) => b.textContent === label)
+    if (!button) throw new Error(`缺少${label}`)
+    button.click()
+    await nextTick()
+  }
+  expect(view.editor.getMarkdown()).toContain('42')
+  expect(view.editor.getMarkdown()).toContain('改过')
+  vi.mocked(saveNote).mockResolvedValue('为人处世/旧标题.md')
+  await nextTick()
+  view.save.click()
+  await view.flush()
+  expect(vi.mocked(saveNote).mock.calls[0][4]).toContain('改过')
 })
 it('撤销正文到初始状态后，属性保存仍使用原文', async () => {
   const body = '第一段\n\n\n第二段'
@@ -320,7 +607,7 @@ it('保存失败后保留修改并可重新保存', async () => {
   view.save.click()
   await view.flush()
   expect(view.dirty).toHaveBeenLastCalledWith(true)
-  expect(view.root.textContent).toContain('没有保存')
+  expect(view.root.textContent).toContain('保存失败')
   const retry = [...view.root.querySelectorAll('button')].find((button) => button.textContent?.trim() === '重新保存')
   if (!retry) throw new Error('缺少重新保存入口')
   vi.mocked(saveNote).mockResolvedValue('为人处世/未保存标题.md')
@@ -328,6 +615,27 @@ it('保存失败后保留修改并可重新保存', async () => {
   await view.flush()
   expect(saveNote).toHaveBeenCalledTimes(2)
   expect(view.dirty).toHaveBeenLastCalledWith(false)
+})
+
+it('收藏库丢失时保存失败提示只显示一次设置入口，继续编辑不丢失修改', async () => {
+  const view = await mount()
+  await view.setTitle('未保存标题')
+  vi.mocked(saveNote).mockRejectedValueOnce(new Error('收藏库文件夹“D:\\临时测试库”找不到了，请重新选择'))
+  view.save.click()
+  await view.flush()
+  const dialog = document.querySelector<HTMLElement>('[role="alertdialog"]')
+  if (!dialog) throw new Error('缺少保存失败提示')
+  expect([...dialog.querySelectorAll('p')].map((p) => p.textContent?.trim())).toContain(
+    '请到设置重新选择，再尝试保存。当前修改仍保留。',
+  )
+  expect(dialog.querySelectorAll('button.link')).toHaveLength(1)
+  const keep = [...dialog.querySelectorAll('button')].find((b) => b.textContent === '继续编辑')
+  if (!keep) throw new Error('缺少继续编辑入口')
+  keep.click()
+  await nextTick()
+  expect(document.querySelector('[role="alertdialog"]')).toBeNull()
+  expect(view.dirty).toHaveBeenLastCalledWith(true)
+  expect(saveNote).toHaveBeenCalledTimes(1)
 })
 
 it('笔记编辑页 Esc 与返回按钮发出同一个返回事件', async () => {
@@ -476,7 +784,7 @@ it('裁剪与尺寸都修改后只显示一个恢复入口，一次恢复两项'
   await cropFirst(view.root)
   const buttons = [...view.root.querySelectorAll<HTMLButtonElement>('.pic-tools button')]
   expect(buttons.map((button) => button.textContent?.trim())).toEqual(['调整裁剪', '恢复'])
-  expect(buttons[1].title).toBe('恢复原图和默认大小')
+  expect(buttons[1].title).toBe('恢复原图和默认尺寸')
   buttons[1].click()
   await nextTick()
   expect(view.job.images![0].crop).toBeNull()

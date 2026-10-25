@@ -244,7 +244,7 @@ describe('runJob：图片', () => {
     const c = { ...ctx(fetch), sleep: async () => {}, onUpdate: () => notes.push(job.steps[0].note) }
     await runJob(job, c)
     expect(calls.chat).toBe(2)
-    expect(notes).toContain('请求太频繁，5 秒后自动重试')
+    expect(notes).toContain('请求受限，5 秒后自动重试。')
     expect(job.steps[0].note).toBeUndefined()
     expect(job.draft?.title).toBe('商务礼仪三重点')
   })

@@ -27,6 +27,19 @@ function roundTrip(md: string): string {
 }
 
 describe('正文编辑器的 Markdown 往返', () => {
+  it('表格内容、对齐和任务勾选状态可往返', () => {
+    const md = '| 名称 | 数值 |\n| :--- | ---: |\n| **测试** | 42 |\n\n- [ ] 待办\n- [x] 已完成'
+    const out = roundTrip(md)
+    expect(out).toContain('**测试**')
+    expect(out).toContain('42')
+    expect(out).toMatch(/\|\s*:?-+:?\s*\|\s*-+:\s*\|/)
+    expect(out).toContain('- [ ] 待办')
+    expect(out).toContain('- [x] 已完成')
+    const editor = new Editor({ extensions: editorExtensions(), content: md, contentType: 'markdown' })
+    expect(editor.getHTML()).toContain('<table')
+    expect(editor.getHTML()).toContain('data-type="taskList"')
+    editor.destroy()
+  })
   it('小标题、列表、加粗、引用原样进出', () => {
     expect(roundTrip(BODY).trim()).toBe(BODY)
   })

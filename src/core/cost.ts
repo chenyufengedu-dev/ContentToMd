@@ -62,7 +62,7 @@ export function estimateAsrCost(price: Price | undefined, seconds: number | unde
 /** 给人看的金额：不到 1 分钱时不显示一串小数 */
 export function formatYuan(y: number): string {
   if (y === 0) return '0 元'
-  if (y < 0.01) return '不到 1 分钱'
+  if (y < 0.01) return '少于 0.01 元'
   return `约 ${y.toFixed(2)} 元`
 }
 

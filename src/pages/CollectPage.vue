@@ -1,6 +1,8 @@
 <script setup lang="ts">
 // 投放页：放入内容 → 处理中 / 失败 → 确认页 → 保存成功（方案第 6、11 节）。
 // 一次只放一种内容：一个音视频文件、一个 MD / TXT 文件，或者 1～9 张图片（设计稿 设计稿/投放页/*.webp）
+import { vPageFade } from '../components/pageFade'
+import { vImportSize } from '../components/importSize'
 import { vPress } from '../components/pressFeedback'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef } from 'vue'
 import {
@@ -123,14 +125,14 @@ function accept(files: File[]) {
   const pics = files.filter((f) => f.type.startsWith('image/'))
   if (media.length) {
     if (pics.length || images.value.length || media.length > 1) {
-      errors.value.push('一次只能放一个文件，或者几张图片，不能混在一起。')
+      errors.value.push('每次可导入一个文件或一组图片，不能混合导入。')
       return
     }
     acceptFile(media[0], importController.signal)
     return
   }
   if (file.value || textFile.value) {
-    errors.value.push('已经放了一个文件。要放图片，请先移除它。')
+    errors.value.push('已有文件，请先移除再添加图片。')
     return
   }
   const { accepted, rejected } = checkImages(images.value.length, pics)
@@ -158,7 +160,7 @@ function acceptFile(f: File, signal: AbortSignal) {
     return
   }
   if (f.size > MAX_BYTES) {
-    errors.value.push(importFailed(f.name, '文件太大，超过了 1GB 的上限。请压缩或截取后再放入。'))
+    errors.value.push(importFailed(f.name, '文件超过 1GB，请压缩或截取后导入。'))
     return
   }
   clearFile()
@@ -178,12 +180,7 @@ function probeMedia(f: File, type: SourceType, signal: AbortSignal) {
     if (signal.aborted || file.value !== f) return // 用户已经移除或换了别的文件
     clearContent(true)
     errors.value.push(
-      importFailed(
-        f.name,
-        type === '视频'
-          ? '这个视频的格式无法读取。请转换成 mp4 后再放入。'
-          : '这个音频的格式无法读取。请转换成 mp3 后再放入。',
-      ),
+      importFailed(f.name, type === '视频' ? '视频无法读取，请转为 MP4 后导入。' : '音频无法读取，请转为 MP3 后导入。'),
     )
   }
   el.src = fileUrl.value
@@ -192,24 +189,24 @@ function probeMedia(f: File, type: SourceType, signal: AbortSignal) {
 /** MD / TXT：认不出编码或是空文件时不加入（方案第 8 节） */
 async function acceptText(f: File, signal: AbortSignal) {
   if (f.size > MAX_TEXT_BYTES) {
-    errors.value.push(importFailed(f.name, '文件太大，超过了 10MB 的上限。请截取后再放入。'))
+    errors.value.push(importFailed(f.name, '文字文件超过 10MB，请拆分后导入。'))
     return
   }
   let buf: ArrayBuffer
   try {
     buf = await f.arrayBuffer()
   } catch {
-    if (!signal.aborted) errors.value.push(importFailed(f.name, '文件无法读取，可能已损坏。'))
+    if (!signal.aborted) errors.value.push(importFailed(f.name, '文件读取失败，可能已损坏。'))
     return
   }
   if (signal.aborted) return
   const decoded = decodeText(buf)
   if (!decoded) {
-    errors.value.push(importFailed(f.name, '无法识别文件编码。请另存为 UTF-8 后重试。'))
+    errors.value.push(importFailed(f.name, '文件编码无法识别，请另存为 UTF-8 后导入。'))
     return
   }
   if (!decoded.text.trim()) {
-    errors.value.push(importFailed(f.name, '文件无法读取，可能已损坏或内容为空。'))
+    errors.value.push(importFailed(f.name, '文件无有效内容或已损坏，请检查后重新导入。'))
     return
   }
   if (tooLongToAccept(f.name, decoded.text)) return
@@ -232,7 +229,7 @@ const defaultMode = (type: SourceType, chars: number): Mode =>
 /** PDF / Word：只取文字（F15、F16）；扫描版、有密码、读不出的不加入（方案 US7） */
 async function acceptDoc(f: File, ext: string, signal: AbortSignal) {
   if (f.size > MAX_DOC_BYTES) {
-    errors.value.push(importFailed(f.name, '文件太大，超过了 50MB 的上限。请截取后再放入。'))
+    errors.value.push(importFailed(f.name, '文档超过 50MB，请拆分后导入。'))
     return
   }
   try {
@@ -242,11 +239,11 @@ async function acceptDoc(f: File, ext: string, signal: AbortSignal) {
     const doc = await (ext === 'pdf' ? readPdf(buf) : readDocx(buf))
     if (signal.aborted) return
     if (ext === 'pdf' && isScanned(doc)) {
-      errors.value.push(importFailed(f.name, '这是扫描版 PDF，里面没有可读的文字。可以截图后放入。'))
+      errors.value.push(importFailed(f.name, 'PDF中没有可读取的文字，可能是扫描件。可改用截图导入。'))
       return
     }
     if (!doc.text.trim()) {
-      errors.value.push(importFailed(f.name, '文件无法读取，可能已损坏或内容为空。'))
+      errors.value.push(importFailed(f.name, '文件无有效内容或已损坏，请检查后重新导入。'))
       return
     }
     if (tooLongToAccept(f.name, doc.text)) return
@@ -258,8 +255,8 @@ async function acceptDoc(f: File, ext: string, signal: AbortSignal) {
     const locked = e instanceof Error && e.name === 'PasswordException'
     errors.value.push(
       locked
-        ? importFailed(f.name, '文件有密码。请先取消密码再放入。')
-        : importFailed(f.name, '文件无法读取，可能已损坏。'),
+        ? importFailed(f.name, '文件已加密，请解除密码后导入。')
+        : importFailed(f.name, '文件读取失败，可能已损坏。'),
     )
   }
 }
@@ -497,7 +494,7 @@ const confirmingDrop = ref(false)
 const draftLabel = computed(() => {
   if (!pendingDraft.value) return ''
   const r = fromDraft(pendingDraft.value.data, pendingDraft.value.files)
-  const state = r.atConfirm ? '已整理完，还没保存' : r.needsFile ? '还没转写完' : '处理到一半'
+  const state = r.atConfirm ? '整理完成，尚未保存' : r.needsFile ? '转写尚未完成' : '处理尚未完成'
   return `${r.job.fileName} · ${state}`
 })
 
@@ -516,7 +513,7 @@ async function resumeDraft() {
       : null
   request.value = j.request ?? ''
   if (needsFile) {
-    errors.value.push(`上次的「${j.fileName}」还没转写完，请重新放入这个文件。`)
+    errors.value.push(`「${j.fileName}」转写未完成，请重新导入原文件。`)
     dropDraft()
     return
   }
@@ -590,225 +587,229 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <ConfirmPage
-    v-if="phase === 'confirm' && job?.draft"
-    :active="active"
-    :config="config"
-    :job="job"
-    :existing-tags="existingTags"
-    @saved="onSaved"
-    @edited="onEdited"
-    @go-settings="emit('goSettings')"
-    @config-changed="(c) => emit('configChanged', c)"
-    @discard="next"
-  />
-
-  <main v-else-if="phase === 'saved' && saved" class="page proc-page">
-    <SavedView
-      :cost="job?.costUnknown ? undefined : job?.cost"
-      :note="saved"
-      :location="storeLabel(config)"
-      @open="open"
-      @next="next"
-    />
-  </main>
-
-  <!-- 处理中 / 失败 -->
-  <main v-else-if="phase !== 'drop' && job && summary" class="page proc-page">
-    <ProcessingView
+  <div v-page-fade="phase">
+    <ConfirmPage
+      v-if="phase === 'confirm' && job?.draft"
+      :active="active"
+      :config="config"
       :job="job"
-      :failed="phase === 'failed'"
-      :summary="summary"
-      :error="error"
-      :now="now"
-      @cancel="cancel"
-      @retry="run"
-      @back="backToEdit"
+      :existing-tags="existingTags"
+      @saved="onSaved"
+      @edited="onEdited"
       @go-settings="emit('goSettings')"
+      @config-changed="(c) => emit('configChanged', c)"
+      @discard="next"
     />
-  </main>
 
-  <!-- 投放（设计稿 设计稿/投放页/基准-已放视频.webp 和 状态-*.webp）：只有一张白卡片，里面不套卡片、输入框不带边框 -->
-  <main v-else class="page import-page">
-    <div class="card" @dragover.prevent="dragging = true" @dragleave.self="dragging = false" @drop.prevent="onDrop">
-      <div v-if="pendingDraft && !hasContent" class="draft-line">
-        <Clock :size="16" aria-hidden="true" />
-        <span class="draft-text">有 1 条未保存的草稿：{{ draftLabel }}</span>
-        <button
-          v-press="confirmingDrop ? 'tactile' : 'surface'"
-          class="soft small"
-          :class="{ danger: confirmingDrop }"
-          @click="discardDraft"
-        >
-          {{ confirmingDrop ? '确认放弃' : '放弃' }}
-        </button>
-        <button v-press="'tactile'" class="primary small" @click="resumeDraft">继续</button>
-      </div>
-      <template v-if="images.length">
-        <div class="thumbs">
-          <figure v-for="(img, i) in images" :key="img.url" class="thumb">
-            <img :src="img.url" :alt="img.file.name" />
-            <button v-press="'icon'" class="thumb-x" :aria-label="`移除 ${img.file.name}`" @click="removeImage(i)">
-              <X :size="12" />
-            </button>
-          </figure>
-          <button
-            v-if="images.length < MAX_IMAGES"
-            v-press="'ripple'"
-            class="thumb thumb-add"
-            :class="{ dragging }"
-            aria-label="继续添加图片"
-            @click="fileInput?.click()"
-          >
-            <Plus :size="20" />
-          </button>
-        </div>
-        <p class="hint">可以继续粘贴或拖入，最多 {{ MAX_IMAGES }} 张，单张不超过 20MB</p>
-      </template>
-
-      <div v-else-if="file || textFile" class="item">
-        <video
-          v-if="fileType === '视频'"
-          class="thumb"
-          :src="`${fileUrl}#t=0.1`"
-          muted
-          preload="auto"
-          @loadedmetadata="duration = ($event.target as HTMLVideoElement).duration"
-        />
-        <span v-else class="thumb thumb-icon">
-          <FileTypeIcon :kind="textFile ? kindOfName(textFile.name) : 'audio'" :size="32" />
-        </span>
-        <span class="item-text">
-          <span class="item-name">{{ textFile?.name ?? file!.name }}</span>
-          <span class="item-info">{{ itemInfo }}</span>
-        </span>
-        <button
-          v-press="'icon'"
-          class="icon-x item-remove"
-          aria-label="移除文件"
-          title="移除文件"
-          @click="clearContent()"
-        >
-          <X :size="18" />
-        </button>
-      </div>
-
-      <button v-else v-press="'ripple'" class="drop" :class="{ dragging }" @click="fileInput?.click()">
-        <FilePlus2 class="drop-icon" :size="48" aria-hidden="true" />
-        <span class="big">{{ dragging ? '松开即可放入' : '拖入或粘贴内容' }}</span>
-        <span class="kinds" aria-label="支持音视频、截图、md / txt、pdf / docx">
-          <span v-for="k in SUPPORTED" :key="k.label" class="kind">
-            <FileTypeIcon :kind="k.kind" :size="18" />{{ k.label }}
-          </span>
-        </span>
-      </button>
-      <input
-        ref="fileInput"
-        type="file"
-        multiple
-        accept=".mp4,.mov,.mp3,.m4a,.wav,.md,.txt,.pdf,.docx,image/*"
-        hidden
-        @change="onPick"
+    <main v-else-if="phase === 'saved' && saved" class="page proc-page">
+      <SavedView
+        :cost="job?.costUnknown ? undefined : job?.cost"
+        :note="saved"
+        :location="storeLabel(config)"
+        @open="open"
+        @next="next"
       />
-      <p v-for="e in errors" :key="e" class="notice">
-        <CircleAlert :size="15" aria-hidden="true" /><span>{{ e }}</span>
-        <button v-press="'icon'" class="icon-x" aria-label="关闭提示" @click="errors = errors.filter((x) => x !== e)">
-          <X :size="14" />
-        </button>
-      </p>
+    </main>
 
-      <label class="field">
-        <span class="field-label">来源链接<span class="optional"> · 选填</span></span>
-        <span class="input link-input">
-          <Link2 v-if="!source" :size="16" aria-hidden="true" />
-          <input
-            v-model="source"
-            placeholder="粘贴链接或分享文字"
-            spellcheck="false"
-            @paste="onSourcePaste"
-            @input="onSourceInput"
-          />
-        </span>
-      </label>
-      <p v-if="share" class="share">
-        <span>{{ [share.platform, share.author && `@${share.author}`].filter(Boolean).join(' · ') }}</span>
-        <span class="share-from">已从分享文字识别</span>
-        <button v-press class="link" @click="restoreShareText">改回原文</button>
-      </p>
+    <!-- 处理中 / 失败 -->
+    <main v-else-if="phase !== 'drop' && job && summary" class="page proc-page">
+      <ProcessingView
+        :job="job"
+        :failed="phase === 'failed'"
+        :summary="summary"
+        :error="error"
+        :now="now"
+        @cancel="cancel"
+        @retry="run"
+        @back="backToEdit"
+        @go-settings="emit('goSettings')"
+      />
+    </main>
 
-      <div class="field">
-        <span class="field-label">整理方式</span>
-        <div class="modes">
+    <!-- 投放（设计稿 设计稿/投放页/基准-已放视频.webp 和 状态-*.webp）：只有一张白卡片，里面不套卡片、输入框不带边框 -->
+    <main v-else class="page import-page">
+      <div class="card" @dragover.prevent="dragging = true" @dragleave.self="dragging = false" @drop.prevent="onDrop">
+        <div v-if="pendingDraft && !hasContent" class="draft-line">
+          <Clock :size="16" aria-hidden="true" />
+          <span class="draft-text">有未保存的草稿：{{ draftLabel }}</span>
           <button
-            v-for="m in MODES"
-            :key="m"
-            v-press
-            class="mode"
-            :class="{ on: mode === m }"
-            :aria-pressed="mode === m"
-            @click="mode = m"
+            v-press="confirmingDrop ? 'tactile' : 'surface'"
+            class="soft small"
+            :class="{ danger: confirmingDrop }"
+            @click="discardDraft"
           >
-            <component :is="MODE_ICONS[m]" :size="16" aria-hidden="true" />{{ m }}
+            {{ confirmingDrop ? '确认放弃' : '放弃草稿' }}
           </button>
-          <span v-if="autoPicked" class="hint">已根据文件类型自动选择</span>
+          <button v-press="'tactile'" class="primary small" @click="resumeDraft">继续</button>
+        </div>
+        <div v-import-size="`${kind}:${images.length}`">
+          <template v-if="images.length">
+            <div class="thumbs">
+              <figure v-for="(img, i) in images" :key="img.url" class="thumb">
+                <img :src="img.url" :alt="img.file.name" />
+                <button v-press="'icon'" class="thumb-x" :aria-label="`移除 ${img.file.name}`" @click="removeImage(i)">
+                  <X :size="12" />
+                </button>
+              </figure>
+              <button
+                v-if="images.length < MAX_IMAGES"
+                v-press="'ripple'"
+                class="thumb thumb-add"
+                :class="{ dragging }"
+                aria-label="继续添加图片"
+                @click="fileInput?.click()"
+              >
+                <Plus :size="20" />
+              </button>
+            </div>
+            <p class="hint">最多 {{ MAX_IMAGES }} 张，每张不超过 20MB。可继续拖入或粘贴。</p>
+          </template>
+
+          <div v-else-if="file || textFile" class="item">
+            <video
+              v-if="fileType === '视频'"
+              class="thumb"
+              :src="`${fileUrl}#t=0.1`"
+              muted
+              preload="auto"
+              @loadedmetadata="duration = ($event.target as HTMLVideoElement).duration"
+            />
+            <span v-else class="thumb thumb-icon">
+              <FileTypeIcon :kind="textFile ? kindOfName(textFile.name) : 'audio'" :size="32" />
+            </span>
+            <span class="item-text">
+              <span class="item-name">{{ textFile?.name ?? file!.name }}</span>
+              <span class="item-info">{{ itemInfo }}</span>
+            </span>
+            <button
+              v-press="'icon'"
+              class="icon-x item-remove"
+              aria-label="移除文件"
+              title="移除文件"
+              @click="clearContent()"
+            >
+              <X :size="18" />
+            </button>
+          </div>
+
+          <button v-else v-press="'ripple'" class="drop" :class="{ dragging }" @click="fileInput?.click()">
+            <FilePlus2 class="drop-icon" :size="48" aria-hidden="true" />
+            <span class="big">{{ dragging ? '松开以导入' : '拖入、粘贴或点击导入' }}</span>
+            <span class="kinds" aria-label="支持音视频、截图、md / txt、pdf / docx">
+              <span v-for="k in SUPPORTED" :key="k.label" class="kind">
+                <FileTypeIcon :kind="k.kind" :size="18" />{{ k.label }}
+              </span>
+            </span>
+          </button>
+        </div>
+        <input
+          ref="fileInput"
+          type="file"
+          multiple
+          accept=".mp4,.mov,.mp3,.m4a,.wav,.md,.txt,.pdf,.docx,image/*"
+          hidden
+          @change="onPick"
+        />
+        <p v-for="e in errors" :key="e" class="notice">
+          <CircleAlert :size="15" aria-hidden="true" /><span>{{ e }}</span>
+          <button v-press="'icon'" class="icon-x" aria-label="关闭提示" @click="errors = errors.filter((x) => x !== e)">
+            <X :size="14" />
+          </button>
+        </p>
+
+        <label class="field">
+          <span class="field-label">来源链接<span class="optional"> · 选填</span></span>
+          <span class="input link-input">
+            <Link2 v-if="!source" :size="16" aria-hidden="true" />
+            <input
+              v-model="source"
+              placeholder="粘贴来源链接或分享文字（选填）"
+              spellcheck="false"
+              @paste="onSourcePaste"
+              @input="onSourceInput"
+            />
+          </span>
+        </label>
+        <p v-if="share" class="share">
+          <span>{{ [share.platform, share.author && `@${share.author}`].filter(Boolean).join(' · ') }}</span>
+          <span class="share-from">已从分享文字识别</span>
+          <button v-press class="link" @click="restoreShareText">还原分享文字</button>
+        </p>
+
+        <div class="field">
+          <span class="field-label">整理方式</span>
+          <div class="modes">
+            <button
+              v-for="m in MODES"
+              :key="m"
+              v-press
+              class="mode"
+              :class="{ on: mode === m }"
+              :aria-pressed="mode === m"
+              @click="mode = m"
+            >
+              <component :is="MODE_ICONS[m]" :size="16" aria-hidden="true" />{{ m }}
+            </button>
+            <span v-if="autoPicked" class="hint">已按文件类型选择</span>
+          </div>
+        </div>
+
+        <label class="field">
+          <span class="field-label">本次要求<span class="optional"> · 选填</span></span>
+          <span class="input textarea">
+            <textarea
+              v-model="request"
+              rows="2"
+              :maxlength="REQUEST_MAX"
+              placeholder="例如：重点整理可借鉴的方法，或用三句话总结"
+            />
+            <span class="count">{{ request.length }}/{{ REQUEST_MAX }}</span>
+          </span>
+        </label>
+
+        <p v-if="lengthNotice" class="notice">
+          <CircleAlert :size="15" aria-hidden="true" /><span>{{ lengthNotice }}</span>
+        </p>
+        <p v-else-if="waitNotice" class="notice info">
+          <Clock :size="15" aria-hidden="true" /><span>{{ waitNotice }}</span>
+        </p>
+        <p v-if="missingService && hasContent" class="notice">
+          <CircleAlert :size="15" aria-hidden="true" /><span>{{ missingService }}尚未配置。</span>
+          <button v-press class="link" @click="emit('goSettings')">去设置</button>
+        </p>
+
+        <div class="actions">
+          <button
+            v-press="'tactile'"
+            class="primary start"
+            :disabled="!hasContent || !!missingService || !!lengthNotice"
+            @click="start"
+          >
+            开始处理 <span class="muted-on-primary">Ctrl+Enter</span>
+          </button>
         </div>
       </div>
-
-      <label class="field">
-        <span class="field-label">本次要求<span class="optional"> · 选填</span></span>
-        <span class="input textarea">
-          <textarea
-            v-model="request"
-            rows="2"
-            :maxlength="REQUEST_MAX"
-            placeholder="比如：重点写可借鉴的做法 / 只要三句话总结"
-          />
-          <span class="count">{{ request.length }}/{{ REQUEST_MAX }}</span>
-        </span>
-      </label>
-
-      <p v-if="lengthNotice" class="notice">
-        <CircleAlert :size="15" aria-hidden="true" /><span>{{ lengthNotice }}</span>
-      </p>
-      <p v-else-if="waitNotice" class="notice info">
-        <Clock :size="15" aria-hidden="true" /><span>{{ waitNotice }}</span>
-      </p>
-      <p v-if="missingService && hasContent" class="notice">
-        <CircleAlert :size="15" aria-hidden="true" /><span>还没有配置{{ missingService }}，请先到设置中填写。</span>
-        <button v-press class="link" @click="emit('goSettings')">去设置</button>
-      </p>
-
-      <div class="actions">
-        <button
-          v-press="'tactile'"
-          class="primary start"
-          :disabled="!hasContent || !!missingService || !!lengthNotice"
-          @click="start"
-        >
-          开始处理 <span class="muted-on-primary">Ctrl+Enter</span>
-        </button>
-      </div>
-    </div>
-  </main>
+    </main>
+  </div>
   <NoticeDialog
     v-if="askLong"
-    title="内容较长"
+    title="继续整理长文？"
     cancel-text="取消"
     ok-text="继续整理"
     @cancel="askLong = false"
     @ok="((askLong = false), (longOk = true), start())"
   >
-    <p>这份内容有 {{ textFile?.text.length.toLocaleString() }} 字，整理可能需要更久、花费更多。{{ waitNotice }}</p>
+    <p>共 {{ textFile?.text.length.toLocaleString() }} 字，整理耗时和费用可能增加。{{ waitNotice }}</p>
   </NoticeDialog>
   <NoticeDialog
     v-if="askClose"
-    title="还有 1 条没有保存"
-    cancel-text="取消"
+    title="关闭软件？"
+    cancel-text="暂不关闭"
     ok-text="关闭软件"
     @cancel="askClose = false"
     @ok="destroyWindow"
   >
-    <p>草稿会保留，下次打开时可以继续。</p>
+    <p>草稿会保留，下次打开可继续。</p>
   </NoticeDialog>
 </template>
 
@@ -818,16 +819,6 @@ onBeforeUnmount(() => {
   max-width: var(--collect-form-width);
   margin: 0 auto;
   padding: var(--sp-5) var(--sp-5) var(--sp-4);
-}
-.import-page {
-  display: flex;
-  flex-direction: column;
-  min-height: calc(100dvh - var(--titlebar-h) - var(--sp-5) * 2 - var(--sp-2) * 4);
-  padding-bottom: calc(var(--sp-5) + var(--sp-2) * 4);
-}
-.import-page .card {
-  flex: 0 0 auto;
-  margin-block: auto;
 }
 .card {
   padding: var(--sp-5);

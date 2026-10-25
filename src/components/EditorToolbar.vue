@@ -68,8 +68,8 @@ const setHeading = () => props.editor.chain().focus().setHeading({ level: 3 }).r
       v-press="'icon'"
       class="tool"
       :class="{ on: active('bulletList') }"
-      aria-label="列表"
-      title="列表"
+      aria-label="无序列表"
+      title="无序列表"
       @click="editor.chain().focus().toggleBulletList().run()"
     >
       <ListBullet :size="16" />
@@ -94,14 +94,25 @@ const setHeading = () => props.editor.chain().focus().setHeading({ level: 3 }).r
     >
       <Quote :size="16" />
     </button>
+    <div v-if="active('table')" class="table-tools" role="group" aria-label="表格操作">
+      <button v-press class="seg" @click="editor.chain().focus().addRowAfter().run()">插入行</button>
+      <button v-press class="seg" @click="editor.chain().focus().deleteRow().run()">删除行</button>
+      <button v-press class="seg" @click="editor.chain().focus().addColumnAfter().run()">插入列</button>
+      <button v-press class="seg" @click="editor.chain().focus().deleteColumn().run()">删除列</button>
+    </div>
   </div>
 </template>
 
 <style scoped>
 .toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 2px;
+}
+.table-tools {
+  display: flex;
+  flex-wrap: wrap;
 }
 .tool {
   width: var(--h-xs);

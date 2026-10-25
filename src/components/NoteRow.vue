@@ -17,7 +17,7 @@ const emit = defineEmits<{ open: [] }>()
 
 const MAX_TAGS = 3
 const GROW = 0.15 // 抽出时缩略图放大的比例
-const TEXT_GROW = 0.025 // 抽出时序号、标题、摘录一起放大的比例（再大会碰到右边的 ↗）
+const TEXT_GROW = 0.025 // 文字区按最大放大比例预留宽度，避免侵入箭头区域
 const SLIDE = 8 // 抽出时“领域 · 日期”那一行往下滑开的距离
 const num = computed(() => String(props.index + 1).padStart(2, '0'))
 const tags = computed(() => props.note.tags.slice(0, MAX_TAGS))
@@ -41,7 +41,7 @@ const { thumbUrl, blurredUrl } = useCover(
 function apply(p: number) {
   const r = clamp01(p)
   if (bg.value) bg.value.style.opacity = String(r)
-  if (content.value) content.value.style.transform = `scale(${1 + TEXT_GROW * p})`
+  if (content.value) content.value.style.transform = `scale(${1 + TEXT_GROW * r})`
   if (metaEl.value) {
     metaEl.value.style.opacity = String(1 - clamp01(p * 2.5))
     metaEl.value.style.transform = `translateY(${SLIDE * p}px)`
@@ -92,7 +92,8 @@ watch(thumbUrl, () => apply(now()), { flush: 'post' })
     ref="row"
     v-press="'ripple'"
     class="note-row"
-    :aria-label="`${num} ${note.title}，打开文档`"
+    :style="{ '--row-text-scale': 1 + TEXT_GROW }"
+    :aria-label="`打开笔记：${note.title}（第 ${num} 条）`"
     @pointerenter="pull(true)"
     @pointerleave="pull(false)"
     @focus="onFocus"
@@ -100,16 +101,18 @@ watch(thumbUrl, () => apply(now()), { flush: 'post' })
     @click="emit('open')"
   >
     <span ref="bg" class="bg" />
-    <span ref="content" class="content">
-      <span class="num">{{ num }}</span>
-      <span class="main">
-        <span class="title">{{ note.title }}</span>
-        <span class="body">
-          <span ref="excerptEl" class="excerpt">{{ excerpt }}</span>
-          <span ref="metaEl" class="meta">
-            <span class="domain">{{ note.domain }}</span>
-            <span>{{ cardDate(note.created) }}</span>
-            <span v-for="t in tags" :key="t">#{{ t }}</span>
+    <span class="content-slot">
+      <span ref="content" class="content">
+        <span class="num">{{ num }}</span>
+        <span class="main">
+          <span class="title">{{ note.title }}</span>
+          <span class="body">
+            <span ref="excerptEl" class="excerpt">{{ excerpt }}</span>
+            <span ref="metaEl" class="meta">
+              <span class="domain">{{ note.domain }}</span>
+              <span>{{ cardDate(note.created) }}</span>
+              <span v-for="t in tags" :key="t">#{{ t }}</span>
+            </span>
           </span>
         </span>
       </span>
@@ -157,10 +160,13 @@ watch(thumbUrl, () => apply(now()), { flush: 'post' })
   pointer-events: none;
 }
 /* 序号、标题、摘录一组，抽出时一起放大（从左边放大，不往左边伸） */
-.content {
-  position: relative;
+.content-slot {
   flex: 1;
   min-width: 0;
+}
+.content {
+  position: relative;
+  width: calc(100% / var(--row-text-scale));
   display: flex;
   align-items: center;
   gap: var(--sp-4);
