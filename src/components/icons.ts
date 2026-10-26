@@ -13,11 +13,16 @@ const DUO_MIN_SIZE = 20
 function icon(name: string, inner: string): Component {
   return defineComponent({
     name,
-    props: { size: { type: [Number, String], default: 16 }, duotone: Boolean },
+    // outline：只要线条、不要浅色填充（一排图标里有的有面、有的没有时，统一成纯线条）
+    props: { size: { type: [Number, String], default: 16 }, duotone: Boolean, outline: Boolean },
     setup(props) {
       return () =>
         h('svg', {
-          class: props.duotone || Number(props.size) >= DUO_MIN_SIZE ? 'ai' : 'ai ai-mono',
+          class: [
+            'ai',
+            props.duotone || Number(props.size) >= DUO_MIN_SIZE ? '' : 'ai-mono',
+            props.outline ? 'ai-outline' : '',
+          ],
           xmlns: 'http://www.w3.org/2000/svg',
           viewBox: '0 0 18 18',
           width: props.size,
@@ -150,6 +155,16 @@ export const Inbox = icon(
 export const ListBullet = icon(
   'ListBullet',
   '<path d="M3.5 5h.01M3.5 9h.01M3.5 13h.01"/><path class="l2" d="M7.5 5h7.5M7.5 9h7.5M7.5 13h7.5"/>',
+)
+
+// 关于卡片的链接图标：按 lucide 的形状画成和其他图标一样的线宽（缩放到 18 格后有效线宽 1.5）
+export const Github = icon(
+  'Github',
+  '<g transform="scale(.75)" style="stroke-width:2"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/><path d="M9 18c-4.51 2-5-2-7-2"/></g>',
+)
+export const MessageCircleMore = icon(
+  'MessageCircleMore',
+  '<g transform="scale(.75)" style="stroke-width:2"><path class="soft" d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719"/><path d="M8 12h.01M12 12h.01M16 12h.01" style="stroke-width:2.6"/></g>',
 )
 
 export { ImageIcon as Image }

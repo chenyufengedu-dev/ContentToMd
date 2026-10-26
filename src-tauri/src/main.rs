@@ -1209,6 +1209,33 @@ fn open_note(vault: String, rel_path: String, in_obsidian: bool) -> Result<(), S
     Ok(())
 }
 
+/// 关于卡片里的外部链接（博客、GitHub）：只认 https 网页地址，不带空白、引号和控制字符
+fn check_link(url: &str) -> Result<(), String> {
+    let ok = url.starts_with("https://")
+        && url.len() > "https://".len()
+        && url.len() <= 2048
+        && !url
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || c == '"');
+    if ok {
+        Ok(())
+    } else {
+        Err("只能打开 https 开头的网页链接。".to_string())
+    }
+}
+
+/// 用系统默认浏览器打开网页
+#[tauri::command]
+fn open_link(url: String) -> Result<(), String> {
+    check_link(&url)?;
+    std::process::Command::new("rundll32")
+        .arg("url.dll,FileProtocolHandler")
+        .arg(&url)
+        .spawn()
+        .map_err(|e| format!("无法打开链接：{e}"))?;
+    Ok(())
+}
+
 fn percent_encode(s: &str) -> String {
     s.bytes()
         .map(|b| match b {
@@ -1273,6 +1300,7 @@ fn main() {
             remove_attachment,
             list_vault_tags,
             open_note,
+            open_link,
             list_obsidian_vaults,
             ensure_subfolder,
             list_subfolders,
@@ -1330,6 +1358,24 @@ mod tests {
             "2026-10-20".into(),
             content.into(),
         )
+    }
+
+    #[test]
+    fn link_only_https_web_addresses() {
+        assert!(check_link("https://chenyu-blog.vercel.app/").is_ok());
+        assert!(check_link("https://github.com/someone/repo").is_ok());
+        for bad in [
+            "http://example.com",
+            "https://",
+            "javascript:alert(1)",
+            "file:///C:/Windows/System32/calc.exe",
+            "C:\\Windows\\notepad.exe",
+            "https://a.com/x y",
+            "https://a.com/\"&calc",
+            "https://a.com/\nx",
+        ] {
+            assert!(check_link(bad).is_err(), "{bad} 不该被放行");
+        }
     }
 
     #[cfg(windows)]

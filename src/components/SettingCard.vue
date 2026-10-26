@@ -17,6 +17,8 @@ defineProps<{
   status?: { label: string; value: string }
   open: boolean
   closing?: boolean
+  /** 内容少的卡片（关于）：标题和内容上下居中对齐 */
+  center?: boolean
 }>()
 const emit = defineEmits<{ activate: [] }>()
 
@@ -44,7 +46,7 @@ const tab = computed(() =>
 <template>
   <section
     class="card"
-    :class="{ open, closing, 'no-desc': !desc }"
+    :class="{ open, closing, center, 'no-desc': !desc }"
     :data-card="id"
     :style="{ '--tab-h': `${TAB_H}px` }"
     @click="emit('activate')"
@@ -79,7 +81,7 @@ const tab = computed(() =>
   grid-template-columns: 240px minmax(0, 1fr);
   gap: var(--sp-5);
   /* 上边距让标题的位置和标签里一致，展开时标题几乎不用动 */
-  padding: var(--sp-4) var(--sp-5) var(--sp-5);
+  padding: var(--pad-card) var(--sp-5); /* 上下等距，卡片下面不空一截 */
   background: var(--card);
   border-radius: var(--panel-radius);
   box-shadow: var(--shadow-card);
@@ -121,6 +123,14 @@ h2 {
   font-weight: var(--fw-label);
   color: var(--accent);
   overflow-wrap: anywhere;
+}
+
+.card.center {
+  align-items: center;
+}
+/* 没有说明文字的居中卡片，展开后上下内边距也相等 */
+.card.open.center {
+  padding-top: var(--pad-card);
 }
 
 /* ---- 标签 ---- */

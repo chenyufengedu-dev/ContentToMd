@@ -51,6 +51,11 @@ describe('图标', () => {
     }
   })
 
+  it('outline 只要线条：加上 ai-outline，不加就没有', async () => {
+    expect(await render(icons.User, { outline: true })).toContain('ai-outline')
+    expect(await render(icons.User)).not.toContain('ai-outline')
+  })
+
   it('作者、话筒、音频、视频是四个不同的图标', async () => {
     const htmls = await Promise.all([icons.User, icons.Mic, icons.AudioLines, icons.Video].map((i) => render(i)))
     expect(new Set(htmls).size).toBe(4)

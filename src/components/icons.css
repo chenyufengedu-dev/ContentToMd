@@ -16,6 +16,9 @@
 .ai .l2 {
   stroke-opacity: 0.45;
 }
+.ai-outline .soft {
+  fill: none;
+}
 .ai-mono .l2 {
   stroke-opacity: 1;
 }

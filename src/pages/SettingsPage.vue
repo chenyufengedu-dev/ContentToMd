@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { UNSAVED_CHANGES } from '../core/editMessages'
 import { vPress } from '../components/pressFeedback'
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import {
   type Config,
   type Domain,
@@ -39,6 +39,8 @@ import {
 } from '../shell/tauri'
 import { formatYuan, keyId, summarize, type Price, type UsageRecord } from '../core/cost'
 import SettingCard from '../components/SettingCard.vue'
+// 关于卡片带书写动画的数据（约 110KB），用到才加载，不拖慢启动
+const AboutCard = defineAsyncComponent(() => import('../components/AboutCard.vue'))
 import SelectBox from '../components/SelectBox.vue'
 import NoticeDialog from '../components/NoticeDialog.vue'
 import UnsavedDialog from '../components/UnsavedDialog.vue'
@@ -965,6 +967,17 @@ onMounted(() => {
         <li>不发送：其他笔记正文、文件路径、文件夹结构及用户名等设备信息。</li>
         <li>密钥仅存于本机配置文件：%APPDATA%\ContentToMd\config.json，不写入收藏库。</li>
       </ul>
+    </SettingCard>
+
+    <SettingCard
+      id="about"
+      title="关于"
+      center
+      :open="open === 'about'"
+      :closing="closing === 'about'"
+      @activate="activate('about')"
+    >
+      <AboutCard :open="open === 'about'" />
     </SettingCard>
 
     <!-- 保存条（Discord、Shopify 后台的做法）：有改动时从底部浮起，保存后显示“已保存”再落下；平时不出现 -->
