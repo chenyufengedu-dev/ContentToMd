@@ -7,3 +7,4 @@ docs/
 *.md
 package-lock.json
 .claude/
+src/assets/about-art.json

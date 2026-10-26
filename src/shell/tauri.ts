@@ -1,5 +1,6 @@
 // 外壳接口：配置读写、选文件夹、网络请求。界面和核心只通过这里接触 Tauri
 
+import { getVersion } from '@tauri-apps/api/app'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { open } from '@tauri-apps/plugin-dialog'
@@ -61,6 +62,10 @@ export const ensurePrompts = (defaults: Record<string, string>) =>
 export const listVaultTags = (vault: string) => invoke<string[]>('list_vault_tags', { vault })
 export const openNote = (vault: string, relPath: string, inObsidian: boolean) =>
   invoke<void>('open_note', { vault, relPath, inObsidian })
+/** 用系统浏览器打开网页（外壳只放行 https 地址） */
+export const openLink = (url: string) => invoke<void>('open_link', { url })
+/** 软件版本号，以 tauri.conf.json 为准 */
+export const appVersion = () => getVersion()
 export const listObsidianVaults = () => invoke<{ name: string; path: string }[]>('list_obsidian_vaults')
 // 收藏库页（F21）
 export const listNotes = async (root: string) => parseNoteList(await invoke<unknown>('list_notes', { root }))
