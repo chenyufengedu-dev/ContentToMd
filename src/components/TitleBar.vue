@@ -9,7 +9,7 @@ import { Minus, Square, X } from './icons'
 import { minimizeWindow, toggleMaximizeWindow, closeWindow } from '../shell/tauri'
 
 /** onlySettings：第一次使用、还没配置完时只能停在设置页 */
-const props = defineProps<{ page: Page; onlySettings: boolean }>()
+const props = defineProps<{ page: Page; onlySettings: boolean; hideNavigation?: boolean }>()
 const emit = defineEmits<{ navigate: [Page] }>()
 const PAGES: { id: Page; label: string }[] = [
   { id: 'home', label: '新增' },
@@ -24,7 +24,7 @@ const PAGES: { id: Page; label: string }[] = [
       <img class="logo" src="../assets/app-mark.svg" alt="" />
       <span class="brand-name" data-tauri-drag-region>ContentToMd</span>
     </div>
-    <nav class="nav" aria-label="页面">
+    <nav v-if="!hideNavigation" class="nav" aria-label="页面">
       <!-- 当前页下面的白色底块，切换时滑过去 -->
       <span class="nav-thumb" :style="{ '--i': PAGES.findIndex((x) => x.id === props.page) }" aria-hidden="true" />
       <button

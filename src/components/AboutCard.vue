@@ -53,26 +53,47 @@ const LINKS = [
 
 const version = ref('')
 const showCredits = ref(false)
+const creditsMounted = ref(false)
 const creditsEl = ref<HTMLElement>()
 let creditsAnim: Animation | null = null
-/** 开源致谢展开、收起：高度从 0 平滑长出来并淡入，卡片和左边的标识跟着平滑移动 */
+let creditsRun = 0
+/** 目标状态立即切换；离场节点等动画结束再移除，允许中途反向。 */
 async function toggleCredits() {
+  const id = ++creditsRun
+  const current = creditsEl.value
+  const height = current?.getBoundingClientRect().height ?? 0
+  const opacity = current ? getComputedStyle(current).opacity || '1' : '0'
   creditsAnim?.cancel()
+  creditsAnim = null
   const opening = !showCredits.value
-  if (opening) showCredits.value = true
+  showCredits.value = opening
+  if (opening) creditsMounted.value = true
   await nextTick()
+  if (id !== creditsRun) return
   const el = creditsEl.value
   if (!el || reduceMotion()) {
-    showCredits.value = opening
+    creditsMounted.value = opening
     return
   }
-  const full = [
-    { height: '0px', opacity: 0 },
-    { height: `${el.scrollHeight}px`, opacity: 1 },
-  ]
-  creditsAnim = el.animate(opening ? full : full.reverse(), { duration: 260, easing: 'cubic-bezier(0.2, 0, 0, 1)' })
-  if (opening) return
-  creditsAnim.onfinish = () => (showCredits.value = false)
+  creditsAnim = el.animate(
+    [
+      { height: `${height}px`, opacity },
+      { height: opening ? `${el.scrollHeight}px` : '0px', opacity: opening ? 1 : 0 },
+    ],
+    { duration: 260, easing: 'cubic-bezier(0.2, 0, 0, 1)' },
+  )
+  creditsAnim.onfinish = () => {
+    if (id !== creditsRun) return
+    creditsAnim = null
+    creditsMounted.value = opening
+  }
+}
+function resetCredits() {
+  creditsRun++
+  creditsAnim?.cancel()
+  creditsAnim = null
+  showCredits.value = false
+  creditsMounted.value = false
 }
 appVersion()
   .then((v) => (version.value = v))
@@ -108,7 +129,6 @@ interface LiveStroke {
 }
 interface Parts {
   pen: SVGGElement
-  mGroup: SVGGElement
   inkPoly: SVGPolygonElement
   inkCap: SVGCircleElement
   letters: { g: SVGGElement; strokes: LiveStroke[] }[]
@@ -127,7 +147,6 @@ function must<T extends Element>(el: HTMLElement, sel: string): T {
 function collect(el: HTMLElement): Parts {
   return {
     pen: must<SVGGElement>(el, '[data-about="pen"]'),
-    mGroup: must<SVGGElement>(el, '[data-about="m"]'),
     inkPoly: must<SVGPolygonElement>(el, '[data-about="ink-poly"]'),
     inkCap: must<SVGCircleElement>(el, '[data-about="ink-cap"]'),
     letters: art.letters.map((_, i) => ({
@@ -148,8 +167,8 @@ function collect(el: HTMLElement): Parts {
 /** 画出第 t 毫秒的样子；withInfo 为 false 时右栏保持完成的样子（只重播左边） */
 function render(t: number, withInfo = true) {
   if (!parts) return
-  const { pen, mGroup, inkPoly, inkCap, letters, fades } = parts
-  const { land, mStart, mDur, mEnd } = TIMELINE
+  const { pen, inkPoly, inkCap, letters, fades } = parts
+  const { land, mStart, mDur } = TIMELINE
   // 羽毛笔：从上方减速落下 → 跟着笔尖写 M → 停在原图标的位置
   const lift = t < land ? 90 * (1 - easeOut(t / land)) : 0
   const nib = nibAt(clamp(t - mStart, 0, mDur))
@@ -160,17 +179,13 @@ function render(t: number, withInfo = true) {
   )
   pen.style.opacity = String(t < land ? clamp(t / land / 0.35, 0, 1) : 1)
 
-  // M 的墨迹：只露出笔尖走过的部分，前端圆头；写完就去掉遮罩，留下原图标的轮廓
-  if (t >= mEnd) mGroup.removeAttribute('mask')
-  else {
-    mGroup.setAttribute('mask', 'url(#about-ink)')
-    const f = t < mStart ? 0 : progressAt(M, (t - mStart) / mDur)
-    const head = pairAt(M, f)
-    inkPoly.setAttribute('points', f > 0 ? inkPolygon(M, f) : '')
-    inkCap.setAttribute('cx', String(nib[0]))
-    inkCap.setAttribute('cy', String(nib[1]))
-    inkCap.setAttribute('r', String(f > 0 ? Math.hypot(head[0][0] - head[1][0], head[0][1] - head[1][1]) / 2 + 5 : 0))
-  }
+  // 从书写到完成都保留同一遮罩，避免收笔时恢复边缘而突然加深。
+  const f = progressAt(M, clamp((t - mStart) / mDur, 0, 1))
+  const head = pairAt(M, f)
+  inkPoly.setAttribute('points', f > 0 ? inkPolygon(M, f) : '')
+  inkCap.setAttribute('cx', String(nib[0]))
+  inkCap.setAttribute('cy', String(nib[1]))
+  inkCap.setAttribute('r', String(f > 0 ? Math.hypot(head[0][0] - head[1][0], head[0][1] - head[1][1]) / 2 + 5 : 0))
 
   // 软件名：只改正在写的那一笔，没开始和已写完的不每帧重设
   for (const L of letters) {
@@ -232,23 +247,34 @@ let run = 0
 watch(
   () => props.open,
   async (open) => {
+    const focused = document.activeElement
+    const focusKey =
+      focused instanceof HTMLAnchorElement && focused.closest('.brief') ? focused.dataset.aboutLink : undefined
     const id = ++run
     cancelAnimationFrame(raf)
     parts = null
-    showCredits.value = false
+    resetCredits()
     if (!open) return
     await nextTick()
     if (id !== run || !stage.value) return
     parts = collect(stage.value)
-    render(reduceMotion() ? TIMELINE.total : 0)
+    render(reduceMotion() ? TIMELINE.total : 0, !focusKey)
+    if (focusKey) {
+      // 两态节点会替换，把键盘焦点交还同名入口，右栏保持可见。
+      const link = [...stage.value.querySelectorAll<HTMLAnchorElement>('[data-about-link]')].find(
+        (el) => el.dataset.aboutLink === focusKey,
+      )
+      link?.focus({ preventScroll: true })
+    }
     const card = stage.value.closest('[data-card]')
     if (card) await Promise.allSettled(card.getAnimations({ subtree: true }).map((a) => a.finished))
-    if (id === run) play()
+    if (id === run) play(!focusKey)
   },
   { immediate: true },
 )
 onBeforeUnmount(() => {
   run++
+  resetCredits()
   cancelAnimationFrame(raf)
 })
 </script>
@@ -270,7 +296,7 @@ onBeforeUnmount(() => {
       <template v-for="l in LINKS" :key="l.key">
         <li v-if="!l.onlyOpen" class="link">
           <component :is="l.icon" :size="16" outline aria-hidden="true" />
-          <a v-if="l.url" :href="l.url" @click.stop.prevent="visit(l.url)">{{ l.text }}</a>
+          <a v-if="l.url" :data-about-link="l.key" :href="l.url" @click.stop.prevent="visit(l.url)">{{ l.text }}</a>
           <span v-else>{{ l.text }}</span>
         </li>
       </template>
@@ -284,7 +310,7 @@ onBeforeUnmount(() => {
         <svg class="mark" viewBox="150 100 815 1050" aria-hidden="true">
           <defs>
             <mask id="about-ink" maskUnits="userSpaceOnUse" x="300" y="830" width="700" height="350">
-              <polygon data-about="ink-poly" class="ink" points="" />
+              <polygon data-about="ink-poly" class="ink ink-m" points="" />
               <circle data-about="ink-cap" class="ink" r="0" />
             </mask>
           </defs>
@@ -324,7 +350,7 @@ onBeforeUnmount(() => {
       <ul class="links" data-fade aria-label="作者与链接">
         <li v-for="l in LINKS" :key="l.key" class="link">
           <component :is="l.icon" :size="16" outline aria-hidden="true" />
-          <a v-if="l.url" :href="l.url" @click.stop.prevent="visit(l.url)">{{ l.text }}</a>
+          <a v-if="l.url" :data-about-link="l.key" :href="l.url" @click.stop.prevent="visit(l.url)">{{ l.text }}</a>
           <span v-else>{{ l.text }}</span>
         </li>
       </ul>
@@ -334,7 +360,13 @@ onBeforeUnmount(() => {
           开源致谢<ChevronRight class="chev" :class="{ on: showCredits }" :size="14" aria-hidden="true" />
         </button>
       </p>
-      <p v-if="showCredits" ref="creditsEl" class="credits">
+      <p
+        v-if="creditsMounted"
+        ref="creditsEl"
+        class="credits"
+        :inert="showCredits ? undefined : true"
+        :aria-hidden="!showCredits"
+      >
         <a v-for="c in CREDITS" :key="c.name" :href="c.url" @click.stop.prevent="visit(c.url)"
           >{{ c.name }}（{{ c.license }}）</a
         >
@@ -464,6 +496,10 @@ onBeforeUnmount(() => {
   stroke: #fff;
   stroke-width: 10;
   stroke-linejoin: round;
+}
+.ink-m {
+  /* 覆盖原M描边及抗锯齿边缘；仍由原轮廓限定实际墨迹。 */
+  stroke-width: 40;
 }
 .ink-text {
   stroke-width: 60;
