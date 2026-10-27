@@ -1,6 +1,7 @@
 // 发布版不弹出控制台窗口
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod onboarding;
 mod window_state;
 
 use std::collections::HashMap;
@@ -11,6 +12,8 @@ use tauri_plugin_window_state::AppHandleExt;
 
 // 软件名还没定（方案第 17 节），先用 ContentToMd
 const APP_DIR: &str = "ContentToMd";
+// 运行窗口与桌面共用白底主题色图标，避免透明白色标记受任务栏背景影响。
+const WINDOW_ICON: tauri::image::Image<'_> = tauri::include_image!("icons/128x128.png");
 
 /// %APPDATA%\ContentToMd（方案第 10.1 节）
 fn data_dir() -> Result<PathBuf, String> {
@@ -1279,6 +1282,7 @@ fn main() {
         )
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
+                window.set_icon(WINDOW_ICON)?;
                 // 无边框窗口显示后系统才完成边框计算；先显示再恢复，避免每次启动累加标题栏高度。
                 window.show()?;
                 if let Err(error) = window_state::restore(&window) {
@@ -1291,6 +1295,9 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             destroy_window,
             load_config,
+            onboarding::load_onboarding,
+            onboarding::save_onboarding,
+            onboarding::default_collection_folder,
             save_config,
             dir_exists,
             folder_has_notes,
@@ -1329,6 +1336,19 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn window_uses_desktop_icon() {
+        let desktop = tauri::include_image!("icons/128x128.png");
+        let window = WINDOW_ICON;
+        assert_eq!((window.width(), window.height()), (128, 128));
+        let top_middle = (128 * 2 + 64) * 4;
+        assert_eq!(
+            &desktop.rgba()[top_middle..top_middle + 4],
+            &[255, 255, 255, 255]
+        );
+        assert_eq!(window.rgba(), desktop.rgba());
+    }
 
     /// 每个用例一个独立的临时收藏库，测完删掉
     struct TempVault(PathBuf);

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { defaultConfig } from './config'
 import { AppError, type ErrorCode } from './errors'
-import { chatJson, TIMEOUT_MS, transcribe, type Fetch } from './services'
+import { chatJson, testService, TIMEOUT_MS, transcribe, type Fetch } from './services'
 
 const text = { ...defaultConfig().services.text, apiKey: 'sk-test' }
 const asr = { ...defaultConfig().services.asr, apiKey: 'sk-test' }
@@ -256,4 +256,12 @@ describe('chatJson 边生成边返回（方案第 11 节：整理结果一边生
     )
     expect(r).toEqual({ a: 1 })
   })
+})
+
+it('取消引导连接测试时，不等待不响应 AbortSignal 的通道', async () => {
+  const controller = new AbortController()
+  const fetch: Fetch = () => new Promise<Response>(() => {})
+  const result = codeOf(testService('text', text, fetch, controller.signal))
+  controller.abort()
+  expect(await result).toBe('cancelled')
 })

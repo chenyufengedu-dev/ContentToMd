@@ -29,6 +29,14 @@ export const saveEditRecovery = (recovery: NoteRecovery) =>
   updateRecovery(recovery.root, recovery.path, JSON.stringify(recovery))
 export const clearEditRecovery = (root: string, path: string) => updateRecovery(root, path, null)
 
+export interface OnboardingState {
+  finished: boolean
+  celebrated: boolean
+}
+export const loadOnboarding = () => invoke<OnboardingState>('load_onboarding')
+export const saveOnboarding = (state: OnboardingState) => invoke<void>('save_onboarding', { state })
+export const defaultCollectionFolder = (create = false) => invoke<string>('default_collection_folder', { create })
+
 export const loadConfigJson = () => invoke<string | null>('load_config')
 export const saveConfig = (c: Config) => invoke<void>('save_config', { json: JSON.stringify(c, null, 2) })
 export const dirExists = (path: string) => invoke<boolean>('dir_exists', { path })

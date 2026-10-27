@@ -2,11 +2,21 @@
 import { UNSAVED_CHANGES, LEAVE_CHANGES_WARNING } from './core/editMessages'
 import { onMounted, ref } from 'vue'
 import { vPageFade } from './components/pageFade'
-import { type Config, parseConfig, isConfigComplete, notesRoot } from './core/config'
-import { listEditRecoveries, loadConfigJson, dirExists, ensurePrompts, restoreNote } from './shell/tauri'
+import { type Config, parseConfig, notesRoot } from './core/config'
+import {
+  listEditRecoveries,
+  loadConfigJson,
+  dirExists,
+  ensurePrompts,
+  restoreNote,
+  loadOnboarding,
+  saveOnboarding,
+} from './shell/tauri'
 import type { Prompts } from './core/note'
 import { DEFAULT_PROMPTS } from './core/defaultPrompts'
 import { RECOVERY_CLEAR_ERROR } from './core/noteRecovery'
+import OnboardingPage from './pages/OnboardingPage.vue'
+import WelcomeCelebration from './components/WelcomeCelebration.vue'
 import SettingsPage from './pages/SettingsPage.vue'
 import CollectPage from './pages/CollectPage.vue'
 import TitleBar, { type Page } from './components/TitleBar.vue'
@@ -20,7 +30,9 @@ import { toast } from './components/useToast'
 const config = ref<Config | null>(null)
 const prompts = ref<Prompts | null>(null)
 const page = ref<Page>('home')
-const firstRun = ref(false)
+const showOnboarding = ref(false)
+const onboardingState = ref({ finished: false, celebrated: false })
+const celebrationPending = ref(false)
 const loadError = ref<string | null>(null)
 const vaultMissing = ref(false)
 
@@ -114,34 +126,46 @@ async function leaveNote() {
 
 onMounted(async () => {
   try {
-    config.value = parseConfig(await loadConfigJson())
+    const json = await loadConfigJson()
+    const loadedConfig = parseConfig(json)
+    onboardingState.value = await loadOnboarding()
+    showOnboarding.value = json === null && !onboardingState.value.finished
     prompts.value = (await ensurePrompts(DEFAULT_PROMPTS)) as Prompts
+    config.value = loadedConfig
   } catch (e) {
     loadError.value = String(e) // 配置或指令文件读取失败
     return
   }
-  // 还没配置完时直接进入设置页（方案第 6.3 节）
-  if (!isConfigComplete(config.value)) {
-    firstRun.value = true
-    page.value = 'settings'
-  } else {
-    vaultMissing.value = !(await dirExists(notesRoot(config.value)))
-    try {
-      const root = notesRoot(config.value)
-      const records = (await listEditRecoveries()).filter((r) => r.root === root)
-      const latest = records.sort((a, b) => b.savedAt - a.savedAt)[0]
-      if (latest && !vaultMissing.value) openSavedNote(latest.path)
-    } catch {
-      toast('未保存的修改读取失败，请稍后重试。', { kind: 'error' })
-    }
+  if (showOnboarding.value) return
+  vaultMissing.value = !!config.value.vaultPath && !(await dirExists(notesRoot(config.value)))
+  try {
+    const root = notesRoot(config.value)
+    const records = (await listEditRecoveries()).filter((r) => r.root === root)
+    const latest = records.sort((a, b) => b.savedAt - a.savedAt)[0]
+    if (latest && !vaultMissing.value) openSavedNote(latest.path)
+  } catch {
+    toast('未保存的修改读取失败，请稍后重试。', { kind: 'error' })
   }
 })
 
 async function onSaved(c: Config) {
   config.value = c
-  if (isConfigComplete(c)) {
-    firstRun.value = false
-    vaultMissing.value = !(await dirExists(notesRoot(c)))
+  vaultMissing.value = !!c.vaultPath && !(await dirExists(notesRoot(c)))
+}
+function finishOnboarding(c: Config, skipped: boolean) {
+  config.value = c
+  onboardingState.value.finished = true
+  page.value = 'home'
+  showOnboarding.value = false
+  celebrationPending.value = !onboardingState.value.celebrated
+  toast(skipped ? '欢迎使用，需要时可到设置完成配置。' : '准备好了，放入第一条内容试试。')
+}
+async function markCelebrated() {
+  onboardingState.value.celebrated = true
+  try {
+    await saveOnboarding({ ...onboardingState.value })
+  } catch {
+    toast('礼花播放记录保存失败，下次启动可能再次播放。', { kind: 'error' })
   }
 }
 </script>
@@ -149,9 +173,10 @@ async function onSaved(c: Config) {
 <template>
   <p v-if="loadError" class="fatal">启动失败：配置或整理指令无法读取。{{ loadError }}</p>
   <template v-else-if="config">
-    <TitleBar :page="page" :only-settings="firstRun" @navigate="navigate" />
+    <TitleBar :page="page" :only-settings="false" :hide-navigation="showOnboarding" @navigate="navigate" />
     <!-- 标题栏下面的内容区自己滚动，整个窗口不出滚动条，标题栏的宽度和位置就不会跟着页面变 -->
-    <div v-page-fade="`${page}:${notePath ?? ''}`" class="app-body">
+    <OnboardingPage v-if="showOnboarding" :config="config" @done="finishOnboarding" />
+    <div v-else v-page-fade="`${page}:${notePath ?? ''}`" class="app-body">
       <template v-if="page === 'library'">
         <LibraryPage
           v-show="!notePath"
@@ -178,7 +203,7 @@ async function onSaved(c: Config) {
         v-if="page === 'settings'"
         ref="settings"
         :config="config"
-        :first-run="firstRun"
+        :first-run="false"
         @saved="onSaved"
         @pending="(v) => (settingsPending = v)"
         @domain-busy="(v) => (settingsDomainBusy = v)"
@@ -186,7 +211,7 @@ async function onSaved(c: Config) {
       <div v-show="page === 'home'">
         <p v-if="vaultMissing" class="fatal">找不到收藏库：{{ notesRoot(config) }}。请到设置中重新选择。</p>
         <CollectPage
-          v-if="prompts && !firstRun"
+          v-if="prompts"
           :active="page === 'home'"
           :config="config"
           :prompts="prompts"
@@ -196,6 +221,12 @@ async function onSaved(c: Config) {
         />
       </div>
     </div>
+    <WelcomeCelebration
+      v-if="celebrationPending && !showOnboarding && page === 'home'"
+      :played="onboardingState.celebrated"
+      @played="markCelebrated"
+      @finished="celebrationPending = false"
+    />
     <ToastHost />
     <UnsavedDialog
       v-if="askSettings"

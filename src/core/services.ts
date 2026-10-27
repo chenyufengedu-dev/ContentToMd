@@ -73,7 +73,12 @@ const TINY_PNG =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC'
 
 /** 测试连接：用最小的请求确认地址、模型和密钥都能用。测试只等 30 秒 */
-export async function testService(kind: ServiceKind, s: ServiceConfig, fetch: Fetch): Promise<void> {
+export async function testService(
+  kind: ServiceKind,
+  s: ServiceConfig,
+  fetch: Fetch,
+  cancel?: AbortSignal,
+): Promise<void> {
   const auth = { Authorization: `Bearer ${s.apiKey.trim()}` }
   if (kind === 'asr') {
     const form = new FormData()
@@ -85,6 +90,7 @@ export async function testService(kind: ServiceKind, s: ServiceConfig, fetch: Fe
       join(s.baseUrl, '/audio/transcriptions'),
       { method: 'POST', headers: auth, body: form },
       30_000,
+      cancel,
     )
     return
   }
@@ -105,6 +111,7 @@ export async function testService(kind: ServiceKind, s: ServiceConfig, fetch: Fe
       body: JSON.stringify({ model: s.model.trim(), max_tokens: 5, messages: [{ role: 'user', content }] }),
     },
     30_000,
+    cancel,
   )
   const data = await res.json().catch(() => null)
   if (!data?.choices)
