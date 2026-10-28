@@ -5,7 +5,7 @@ import vue from 'eslint-plugin-vue'
 import prettier from 'eslint-config-prettier'
 
 export default tseslint.config(
-  { ignores: ['dist/', 'src-tauri/', 's0/', 'node_modules/'] },
+  { ignores: ['dist/', 'src-tauri/', 'node_modules/'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   ...vue.configs['flat/recommended'],
