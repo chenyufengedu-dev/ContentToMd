@@ -74,6 +74,56 @@ fn ensure_prompts(defaults: HashMap<String, String>) -> Result<HashMap<String, S
     Ok(out)
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CollectionInfo {
+    domains: Vec<String>,
+    has_notes: bool,
+}
+
+/// 连接收藏库时只检查目录和文件名，不读取或改写笔记正文。
+#[tauri::command]
+fn inspect_collection(root: String) -> Result<CollectionInfo, String> {
+    let root = PathBuf::from(root);
+    let entries = fs::read_dir(&root).map_err(|e| io_msg(&root, e))?;
+    let mut info = CollectionInfo {
+        domains: Vec::new(),
+        has_notes: false,
+    };
+    for entry in entries {
+        let entry = entry.map_err(|e| io_msg(&root, e))?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') || name == "附件" {
+            continue;
+        }
+        let path = entry.path();
+        ensure_inside(&root, &path)?;
+        if path.is_dir() {
+            info.domains.push(name);
+            let files = fs::read_dir(&path).map_err(|e| io_msg(&path, e))?;
+            for file in files {
+                let file = file.map_err(|e| io_msg(&path, e))?;
+                let file_path = file.path();
+                if file_path
+                    .extension()
+                    .is_some_and(|x| x.eq_ignore_ascii_case("md"))
+                {
+                    ensure_inside(&root, &file_path)?;
+                    info.has_notes |= file_path.is_file();
+                }
+            }
+        } else if path
+            .extension()
+            .is_some_and(|x| x.eq_ignore_ascii_case("md"))
+            && path.is_file()
+        {
+            info.has_notes = true;
+        }
+    }
+    info.domains.sort();
+    Ok(info)
+}
+
 // ---------------- 草稿（F10，方案第 10.1 节） ----------------
 // 一次只处理一条，只有一份草稿：%APPDATA%\ContentToMd\drafts\current\ 里的 draft.json 和图片原文件
 
@@ -1293,6 +1343,7 @@ fn main() {
             save_config,
             dir_exists,
             folder_has_notes,
+            inspect_collection,
             ensure_prompts,
             write_note,
             write_attachment,
@@ -1952,6 +2003,30 @@ cover: \"../附件/2026-10/a.png\"
         assert!(!folder_has_notes(dir.to_string_lossy().into_owned()));
         fs::write(dir.join("笔记.MD"), "x").unwrap();
         assert!(folder_has_notes(dir.to_string_lossy().into_owned()));
+    }
+
+    #[test]
+    fn collection_inspection_reads_names_without_changing_notes() {
+        let v = TempVault::new("inspect-collection");
+        let empty = inspect_collection(v.path()).unwrap();
+        assert!(!empty.has_notes);
+        assert!(empty.domains.is_empty());
+        for name in ["设计UI", "其他", "附件", ".obsidian"] {
+            fs::create_dir_all(v.0.join(name)).unwrap();
+        }
+        fs::write(v.0.join("附件/忽略.md"), "附件不是笔记").unwrap();
+        fs::write(v.0.join(".obsidian/忽略.md"), "内部文件").unwrap();
+        let dirs = inspect_collection(v.path()).unwrap();
+        assert_eq!(dirs.domains, vec!["其他", "设计UI"]);
+        assert!(!dirs.has_notes);
+        let note = v.0.join("设计UI/已有.MD");
+        fs::write(&note, [0xff, 0xfe]).unwrap();
+        assert!(inspect_collection(v.path()).unwrap().has_notes);
+        assert_eq!(fs::read(&note).unwrap(), vec![0xff, 0xfe]);
+        fs::remove_file(note).unwrap();
+        fs::write(v.0.join("根目录.md"), "已有根目录笔记").unwrap();
+        assert!(inspect_collection(v.path()).unwrap().has_notes);
+        assert!(inspect_collection(v.0.join("不存在").to_string_lossy().into_owned()).is_err());
     }
 
     #[test]

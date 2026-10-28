@@ -8,6 +8,7 @@ import {
   defaultConfig,
   isConfigComplete,
   maskKey,
+  mergeCollectionDomains,
   nextDomainId,
   notesRoot,
   parseConfig,
@@ -167,6 +168,22 @@ describe('收藏库连接', () => {
 })
 
 describe('新增领域', () => {
+  it('补入收藏库领域，保留旧领域编号和其他配置，重名及无效名字不新增', () => {
+    const config = defaultConfig()
+    config.domains.unshift({ id: 7, name: '设计UI' })
+    const merged = mergeCollectionDomains(config, ['设计UI', 'AI与Agent', 'AI与Agent', '其他', '坏/领域'])
+    expect(merged.domains).toEqual([
+      { id: 7, name: '设计UI' },
+      { id: 8, name: 'AI与Agent' },
+      { id: 99, name: '其他' },
+    ])
+    expect(merged.services).toBe(config.services)
+    expect(config.domains).toEqual([
+      { id: 7, name: '设计UI' },
+      { id: 99, name: '其他' },
+    ])
+    expect(mergeCollectionDomains(merged, ['设计UI', 'AI与Agent'])).toBe(merged)
+  })
   it('加在“其他”前面，编号接着往后排', () => {
     const c = defaultConfig()
     const r = addDomain(c, ' 健身 ')

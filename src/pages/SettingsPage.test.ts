@@ -3,7 +3,15 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { createApp, nextTick, type App } from 'vue'
 import SettingsPage from './SettingsPage.vue'
 import { defaultConfig, type Config } from '../core/config'
-import { saveConfig, countDomainNotes, deleteDomain, restoreDomain, guardClose } from '../shell/tauri'
+import {
+  saveConfig,
+  countDomainNotes,
+  deleteDomain,
+  restoreDomain,
+  guardClose,
+  inspectCollection,
+  pickFolder,
+} from '../shell/tauri'
 import { toast } from '../components/useToast'
 import { testService } from '../core/services'
 import { AppError } from '../core/errors'
@@ -24,6 +32,7 @@ vi.mock('../shell/tauri', () => ({
   httpFetch: vi.fn(),
   ensureSubfolder: vi.fn(),
   destroyWindow: vi.fn(),
+  inspectCollection: vi.fn(async (config: Config) => ({ config, hasNotes: false })),
 }))
 let app: App
 beforeEach(() => {
@@ -150,6 +159,23 @@ it('隐私说明使用三句简明说明', async () => {
     '软件没有自己的服务器，不收集任何使用数据。',
     '密钥只保存在本机的 Windows 凭据管理器里。',
   ])
+})
+
+it('切换到已有收藏库时，补充领域后保存并更新设置列表', async () => {
+  const { root, vm, saved } = await mount()
+  vi.mocked(pickFolder).mockResolvedValueOnce('C:\\test\\已有库')
+  vi.mocked(inspectCollection).mockImplementationOnce(async (config) => ({
+    config: { ...config, domains: [config.domains[0], { id: 2, name: '设计UI' }, config.domains[1]] },
+    hasNotes: true,
+  }))
+  const choose = [...root.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === '选择文件夹')
+  if (!choose) throw new Error('缺少选择文件夹按钮')
+  choose.click()
+  for (let i = 0; i < 3; i++) await nextTick()
+  expect(await vm.save()).toBe(true)
+  expect(inspectCollection).toHaveBeenCalledWith(expect.objectContaining({ vaultPath: 'C:\\test\\已有库' }))
+  expect(saved.mock.lastCall?.[0].domains.map((d: { name: string }) => d.name)).toEqual(['为人处世', '设计UI', '其他'])
+  expect(root.querySelector('[aria-label="删除领域 设计UI"]')).not.toBeNull()
 })
 it('删除领域后配置保存失败，按已保存的位置恢复文件夹，列表保留', async () => {
   const { root } = await mount(undefined, (config) => (config.vaultPath = '隔离收藏库'))

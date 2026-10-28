@@ -5,7 +5,7 @@ import { createApp, h, nextTick, type App as VueApp } from 'vue'
 import App from './App.vue'
 import { defaultConfig } from './core/config'
 import { current, dismiss } from './components/useToast'
-import { loadConfigJson, loadOnboarding, saveOnboarding } from './shell/tauri'
+import { loadConfigJson, loadOnboarding, saveOnboarding, inspectCollection, saveConfig } from './shell/tauri'
 
 vi.mock('./shell/tauri', () => ({
   loadConfigJson: vi.fn().mockResolvedValue(null),
@@ -15,6 +15,8 @@ vi.mock('./shell/tauri', () => ({
   dirExists: vi.fn().mockResolvedValue(true),
   listEditRecoveries: vi.fn().mockResolvedValue([]),
   restoreNote: vi.fn(),
+  inspectCollection: vi.fn(async (config: ReturnType<typeof defaultConfig>) => ({ config, hasNotes: false })),
+  saveConfig: vi.fn().mockResolvedValue(undefined),
 }))
 vi.mock('./pages/OnboardingPage.vue', () => ({
   default: {
@@ -24,7 +26,12 @@ vi.mock('./pages/OnboardingPage.vue', () => ({
       "<button @click=\"$emit('done', config, '其他/欢迎使用 ContentToMd-2026-10-27.md')\">跳过引导测试</button>",
   },
 }))
-vi.mock('./pages/CollectPage.vue', () => ({ default: { template: '<div data-test="home">真实首页入口</div>' } }))
+vi.mock('./pages/CollectPage.vue', () => ({
+  default: {
+    props: ['config'],
+    template: '<div data-test="home">{{ config.domains.map(d => d.name).join("、") }}</div>',
+  },
+}))
 vi.mock('./pages/SettingsPage.vue', () => ({ default: { template: '<div />' } }))
 vi.mock('./pages/LibraryPage.vue', () => ({ default: { template: '<div />' } }))
 vi.mock('./pages/NotePage.vue', () => ({
@@ -100,4 +107,36 @@ it('跳过后重启保持首页，不因音视频未配置再次引导或庆祝'
   expect(document.body.textContent).not.toContain('跳过引导测试')
   expect(document.querySelector('[data-test="celebration"]')).toBeNull()
   expect(saveOnboarding).not.toHaveBeenCalled()
+})
+
+it('启动时补入已有库领域并保存，页面使用同步后的配置', async () => {
+  const config = defaultConfig()
+  config.vaultPath = 'C:\\test\\已有库'
+  config.domains.unshift({ id: 7, name: '已有分类' })
+  vi.mocked(loadConfigJson).mockResolvedValueOnce(JSON.stringify(config))
+  vi.mocked(inspectCollection).mockImplementationOnce(async (c) => ({
+    config: { ...c, domains: [c.domains[0], { id: 8, name: '设计UI' }, c.domains[1]] },
+    hasNotes: true,
+  }))
+  await mount()
+  expect(inspectCollection).toHaveBeenCalledWith(config)
+  expect(saveConfig).toHaveBeenCalledWith(
+    expect.objectContaining({
+      domains: [
+        { id: 7, name: '已有分类' },
+        { id: 8, name: '设计UI' },
+        { id: 99, name: '其他' },
+      ],
+    }),
+  )
+  expect(document.querySelector('[data-test="home"]')?.textContent).toBe('已有分类、设计UI、其他')
+})
+
+it('已有领域无变化时启动不重复保存配置', async () => {
+  const config = defaultConfig()
+  config.vaultPath = 'C:\\test\\空库'
+  vi.mocked(loadConfigJson).mockResolvedValueOnce(JSON.stringify(config))
+  await mount()
+  expect(inspectCollection).toHaveBeenCalledTimes(1)
+  expect(saveConfig).not.toHaveBeenCalled()
 })
