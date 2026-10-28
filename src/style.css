@@ -3,6 +3,26 @@
  * 分成几组，开发用的“设计调节页”（/dev/tuner.html）会整组替换来比较效果；
  * 作者选定后写进 docs/设计规范.md，再把这里的默认值改成选定的值。
  */
+@font-face {
+  font-family: 'Noto Sans SC';
+  src: url('./assets/fonts/noto-sans-sc-regular.woff2') format('woff2');
+  font-weight: 400 500;
+  font-style: normal;
+  font-display: swap;
+  ascent-override: 92.8%;
+  descent-override: 24.4%;
+  line-gap-override: 0%;
+}
+@font-face {
+  font-family: 'Noto Sans SC';
+  src: url('./assets/fonts/noto-sans-sc-bold.woff2') format('woff2');
+  font-weight: 600 700;
+  font-style: normal;
+  font-display: swap;
+  ascent-override: 92.8%;
+  descent-override: 24.4%;
+  line-gap-override: 0%;
+}
 :root {
   --brand-logo-size: 28px;
   --brand-font-size: 22px;
@@ -106,9 +126,8 @@
   --window-control-width: 46px;
   --ease: 180ms cubic-bezier(0.2, 0, 0, 1);
 
-  /* 苹方优先（作者电脑已装），没装的电脑退回微软雅黑 */
-  font-family:
-    'HarmonyOS Sans SC', 'PingFang SC', '苹方', 'Microsoft YaHei UI', 'Microsoft YaHei', system-ui, sans-serif;
+  /* 内置子集之外的生僻字交给微软雅黑。 */
+  font-family: 'Noto Sans SC', 'Microsoft YaHei UI', 'Microsoft YaHei', system-ui, sans-serif;
   font-size: var(--fs-md);
   color: var(--fg);
   background: var(--bg);

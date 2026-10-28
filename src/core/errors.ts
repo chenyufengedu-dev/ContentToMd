@@ -32,7 +32,10 @@ export const isAppError = (e: unknown, code?: ErrorCode): e is AppError =>
   e instanceof AppError && (code === undefined || e.code === code)
 
 /** 把任何错误转成给用户看的一句话 + 详细信息 */
-export function describeError(e: unknown): { code?: ErrorCode; message: string; detail?: string } {
-  if (e instanceof AppError) return { code: e.code, message: e.message, detail: e.detail || undefined }
+export function describeError(e: unknown, provider?: string): { code?: ErrorCode; message: string; detail?: string } {
+  if (e instanceof AppError) {
+    const message = e.code === 'balance' && provider ? `${provider} 账户余额不足，请先充值。` : e.message
+    return { code: e.code, message, detail: e.detail || undefined }
+  }
   return { message: '操作失败，请重试。', detail: e instanceof Error ? e.message : String(e) }
 }

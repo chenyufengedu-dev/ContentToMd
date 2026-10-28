@@ -3,8 +3,10 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { createApp, h, nextTick, type App } from 'vue'
 import OnboardingPage from './OnboardingPage.vue'
 import { defaultConfig } from '../core/config'
-import { saveConfig, saveOnboarding } from '../shell/tauri'
+import { saveConfig, saveOnboarding, writeNote, pickFolder } from '../shell/tauri'
 import { testService } from '../core/services'
+import { AppError } from '../core/errors'
+import { toast } from '../components/useToast'
 
 vi.mock('../shell/tauri', () => ({
   defaultCollectionFolder: vi.fn().mockResolvedValue('C:\\test\\收藏库'),
@@ -15,11 +17,13 @@ vi.mock('../shell/tauri', () => ({
   dirExists: vi.fn().mockResolvedValue(true),
   saveConfig: vi.fn().mockResolvedValue(undefined),
   saveOnboarding: vi.fn().mockResolvedValue(undefined),
+  writeNote: vi.fn().mockResolvedValue('其他/欢迎使用 ContentToMd.md'),
   httpFetch: vi.fn(),
   openLink: vi.fn(),
   guardClose: vi.fn().mockResolvedValue(() => {}),
 }))
 vi.mock('../core/services', () => ({ testService: vi.fn().mockResolvedValue(undefined) }))
+vi.mock('../components/useToast', () => ({ toast: vi.fn() }))
 vi.mock('../components/OnboardingBrand.vue', () => ({ default: { template: '<span>品牌动画</span>' } }))
 
 let app: App | undefined
@@ -55,15 +59,37 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-it('跳过也进入首页，只保存默认目录，不保存密钥', async () => {
+it('未选目录直接跳过使用默认目录，仍写欢迎笔记，不保存密钥', async () => {
   await click('暂时跳过')
   await settle()
   expect(saveConfig).toHaveBeenCalledWith(expect.objectContaining({ vaultPath: 'C:\\test\\收藏库' }))
   const saved = vi.mocked(saveConfig).mock.calls[0][0]
   expect(Object.values(saved.services).every((s) => s.apiKey === '')).toBe(true)
   expect(saveOnboarding).toHaveBeenCalledWith({ finished: true, celebrated: false })
-  expect(done).toHaveBeenCalledWith(saved, true)
+  expect(done).toHaveBeenCalledWith(saved, '其他/欢迎使用 ContentToMd.md')
   expect(testService).not.toHaveBeenCalled()
+  expect(writeNote).toHaveBeenCalledTimes(1)
+})
+
+it('已选择收藏库但跳过密钥，保留所选目录并返回欢迎笔记实际路径', async () => {
+  vi.mocked(pickFolder).mockResolvedValueOnce('C:\\test\\朋友试用收藏库')
+  vi.mocked(writeNote).mockResolvedValueOnce('其他/欢迎使用 ContentToMd-2026-10-27.md')
+  await click('开始')
+  await vi.advanceTimersByTimeAsync(40)
+  await click('更换')
+  await click('下一步')
+  await vi.advanceTimersByTimeAsync(40)
+  await click('暂时跳过')
+  await settle()
+  expect(saveConfig).toHaveBeenCalledWith(expect.objectContaining({ vaultPath: 'C:\\test\\朋友试用收藏库' }))
+  expect(writeNote).toHaveBeenCalledWith(
+    'C:\\test\\朋友试用收藏库',
+    '其他',
+    '欢迎使用 ContentToMd',
+    expect.any(String),
+    expect.any(String),
+  )
+  expect(done).toHaveBeenCalledWith(expect.any(Object), '其他/欢迎使用 ContentToMd-2026-10-27.md')
 })
 
 it('文字和图片通过即可完成，音视频选填；实际保存所选服务', async () => {
@@ -71,6 +97,7 @@ it('文字和图片通过即可完成，音视频选填；实际保存所选服�
   await vi.advanceTimersByTimeAsync(40)
   await click('下一步')
   await vi.advanceTimersByTimeAsync(40)
+  expect(document.body.textContent).toContain('注册登录 → 充值几元 → 创建密钥并复制')
   const input = document.querySelector<HTMLInputElement>('[aria-label="DeepSeek API 密钥"]')
   if (!input) throw new Error('没有密钥输入框')
   input.value = 'example-not-a-real-key'
@@ -85,7 +112,20 @@ it('文字和图片通过即可完成，音视频选填；实际保存所选服�
   expect(saved.services.text.apiKey).toBe('example-not-a-real-key')
   expect(saved.services.vision.apiKey).toBe('example-not-a-real-key')
   expect(saved.services.asr.apiKey).toBe('')
-  expect(done).toHaveBeenCalledWith(saved, false)
+  expect(writeNote).toHaveBeenCalledTimes(1)
+  const [root, domain, title, date, content] = vi.mocked(writeNote).mock.calls[0]
+  expect(root).toBe('C:\\test\\收藏库')
+  expect(domain).toBe('其他')
+  expect(title).toBe('欢迎使用 ContentToMd')
+  expect(date).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+  expect(content).toContain('title: "欢迎使用 ContentToMd"')
+  expect(content).toContain('原文精修')
+  expect(content).toContain('要点提炼')
+  expect(content).toContain('视觉收藏')
+  expect(content).toContain('设置 → 关于 → 反馈问题')
+  expect(content).not.toContain('朋友试用版')
+  expect(content).not.toContain('微信群')
+  expect(done).toHaveBeenCalledWith(saved, '其他/欢迎使用 ContentToMd.md')
 })
 
 it('保存失败不退出，也不标记引导完成', async () => {
@@ -98,7 +138,7 @@ it('保存失败不退出，也不标记引导完成', async () => {
 })
 
 it('连接失败可以原位重试，不要求重新填写同一密钥', async () => {
-  vi.mocked(testService).mockRejectedValueOnce(new Error('测试网络失败'))
+  vi.mocked(testService).mockRejectedValueOnce(new AppError('balance', '旧余额提示'))
   await click('开始')
   await vi.advanceTimersByTimeAsync(40)
   await click('下一步')
@@ -110,11 +150,15 @@ it('连接失败可以原位重试，不要求重新填写同一密钥', async (
   await nextTick()
   await vi.advanceTimersByTimeAsync(650)
   await settle()
+  expect(document.body.textContent).toContain('DeepSeek 账户余额不足，请先充值。')
   await click('重试')
   await vi.advanceTimersByTimeAsync(650)
   await settle()
   expect(input.value).toBe('example-retry-key')
+  vi.mocked(writeNote).mockRejectedValueOnce(new Error('临时收藏库无法写入'))
   await click('开始使用')
   await settle()
   expect(done).toHaveBeenCalled()
+  expect(saveOnboarding).toHaveBeenCalledWith({ finished: true, celebrated: false })
+  expect(toast).toHaveBeenCalledWith('配置已保存，但欢迎笔记写入失败：Error: 临时收藏库无法写入。', { kind: 'error' })
 })

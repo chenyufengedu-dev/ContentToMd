@@ -12,7 +12,8 @@ const props = defineProps<{
   title: string
   tone?: 'error' | 'info'
   cancelText: string
-  okText: string
+  /** 只需关闭的说明窗省略确认按钮，仍复用相同的关闭和焦点逻辑。 */
+  okText?: string
   danger?: boolean
   neutralText?: string
   /** Esc和遮罩仍走保留内容的neutral回调，不要求显示第三个按钮。 */
@@ -36,7 +37,9 @@ useModal(dialog, dismiss)
       <div class="buttons">
         <button v-if="neutralText" v-press class="neutral" @click="emit('neutral')">{{ neutralText }}</button>
         <button v-press class="soft" @click="emit('cancel')">{{ cancelText }}</button>
-        <button v-press="'tactile'" :class="danger ? 'danger' : 'primary'" @click="emit('ok')">{{ okText }}</button>
+        <button v-if="okText" v-press="'tactile'" :class="danger ? 'danger' : 'primary'" @click="emit('ok')">
+          {{ okText }}
+        </button>
       </div>
     </section>
   </div>

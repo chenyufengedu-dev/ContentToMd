@@ -965,7 +965,7 @@ onMounted(() => {
       <ul class="privacy">
         <li>发送给模型：提取的文字、压缩图片（长边≤1568像素）、音频、本次要求及已有标签名称。</li>
         <li>不发送：其他笔记正文、文件路径、文件夹结构及用户名等设备信息。</li>
-        <li>密钥仅存于本机配置文件：%APPDATA%\ContentToMd\config.json，不写入收藏库。</li>
+        <li>密钥保存在 Windows 凭据管理器中，不写入配置文件和收藏库。</li>
       </ul>
     </SettingCard>
 

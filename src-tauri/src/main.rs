@@ -1,6 +1,7 @@
 // 发布版不弹出控制台窗口
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod config_store;
 mod onboarding;
 mod window_state;
 
@@ -24,22 +25,13 @@ fn data_dir() -> Result<PathBuf, String> {
 /// 读取 config.json；还没有配置过时返回 None
 #[tauri::command]
 fn load_config() -> Result<Option<String>, String> {
-    let path = data_dir()?.join("config.json");
-    match fs::read_to_string(&path) {
-        Ok(s) => Ok(Some(s)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(format!("无法读取配置文件：{e}")),
-    }
+    config_store::load(&data_dir()?)
 }
 
 /// 先写临时文件再改名，避免写到一半中断导致配置损坏（方案第 10.5 节）
 #[tauri::command]
 fn save_config(json: String) -> Result<(), String> {
-    let dir = data_dir()?;
-    fs::create_dir_all(&dir).map_err(|e| format!("无法创建配置目录：{e}"))?;
-    let tmp = dir.join("config.json.tmp");
-    fs::write(&tmp, json).map_err(|e| format!("无法写入配置文件：{e}"))?;
-    fs::rename(&tmp, dir.join("config.json")).map_err(|e| format!("无法写入配置文件：{e}"))
+    config_store::save(&data_dir()?, &json)
 }
 
 /// 收藏库文件夹是否存在
