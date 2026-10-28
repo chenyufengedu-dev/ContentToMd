@@ -183,3 +183,13 @@ export function nextDomainId(domains: Domain[]): number {
   if (id === OTHER_DOMAIN_ID) id++
   return id
 }
+
+/** 接入已有收藏库时只补充缺少的领域，原有编号和配置保持不变。 */
+export function mergeCollectionDomains(config: Config, names: string[]): Config {
+  let merged = config
+  for (const name of names) {
+    const added = addDomain(merged, name)
+    if (typeof added !== 'string') merged = added.config
+  }
+  return merged
+}

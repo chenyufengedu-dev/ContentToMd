@@ -32,6 +32,7 @@ import {
   httpFetch,
   readUsage,
   dirExists,
+  inspectCollection,
   listObsidianVaults,
   ensureSubfolder,
   listSubfolders,
@@ -636,7 +637,10 @@ async function save(): Promise<boolean> {
   try {
     if (submitted.vault.kind === 'obsidian' && submitted.vaultPath && submitted.vault.subfolder.trim())
       await ensureSubfolder(submitted.vaultPath, submitted.vault.subfolder.trim())
+    if (submitted.vaultPath && notesRoot(submitted) !== savedRoot())
+      submitted.domains = (await inspectCollection(submitted)).config.domains
     await saveConfig(submitted)
+    if (notesRoot(draft) === notesRoot(submitted)) draft.domains = submitted.domains
     saved.value = JSON.stringify(submitted)
     emit('saved', submitted)
     for (const k of priceChanged) if (!priceDirty(k)) priceJustSaved[k] = true
@@ -1424,6 +1428,9 @@ input:focus {
 }
 .domains li input {
   height: var(--h-xs);
+}
+.domains li:has(> .chip-name:only-child) {
+  padding-right: var(--px-sm);
 }
 .chip-name {
   height: auto;

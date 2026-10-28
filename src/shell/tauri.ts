@@ -7,6 +7,7 @@ import { Menu } from '@tauri-apps/api/menu'
 import { open } from '@tauri-apps/plugin-dialog'
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
 import type { Config } from '../core/config'
+import { mergeCollectionDomains, notesRoot } from '../core/config'
 import type { Fetch } from '../core/services'
 import type { Job } from '../core/pipeline'
 import { DRAFT_JSON, toDraft, type DraftData } from '../core/draft'
@@ -42,6 +43,10 @@ export const loadConfigJson = () => invoke<string | null>('load_config')
 export const saveConfig = (c: Config) => invoke<void>('save_config', { json: JSON.stringify(c, null, 2) })
 export const dirExists = (path: string) => invoke<boolean>('dir_exists', { path })
 export const folderHasNotes = (path: string) => invoke<boolean>('folder_has_notes', { path })
+export async function inspectCollection(config: Config): Promise<{ config: Config; hasNotes: boolean }> {
+  const info = await invoke<{ domains: string[]; hasNotes: boolean }>('inspect_collection', { root: notesRoot(config) })
+  return { config: mergeCollectionDomains(config, info.domains), hasNotes: info.hasNotes }
+}
 
 export async function pickFolder(defaultPath?: string): Promise<string | null> {
   const r = await open({

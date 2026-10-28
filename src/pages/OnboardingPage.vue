@@ -22,6 +22,7 @@ import {
   defaultCollectionFolder,
   ensureSubfolder,
   dirExists,
+  inspectCollection,
   saveConfig,
   saveOnboarding,
   httpFetch,
@@ -244,6 +245,8 @@ async function finish(skip = false) {
         throw new Error('这个文件夹已不是 Obsidian 仓库，请重新选择。')
       if (base.vault.subfolder) await ensureSubfolder(base.vaultPath, base.vault.subfolder)
     }
+    const collection = await inspectCollection(base)
+    base.domains = collection.config.domains
     for (const kind of SERVICE_KINDS) {
       const service = services.value[kind]
       if (skip && service.status !== 'ok') continue
@@ -259,10 +262,12 @@ async function finish(skip = false) {
     let welcomePath: string | undefined
     const domain = base.domains.find((d) => d.id === OTHER_DOMAIN_ID)?.name ?? '其他'
     const date = today()
-    try {
-      welcomePath = await writeNote(notesRoot(base), domain, WELCOME_TITLE, date, buildWelcomeNote(domain, date))
-    } catch (error) {
-      welcomeFailure = `配置已保存，但欢迎笔记写入失败：${String(error)}。`
+    if (!collection.hasNotes) {
+      try {
+        welcomePath = await writeNote(notesRoot(base), domain, WELCOME_TITLE, date, buildWelcomeNote(domain, date))
+      } catch (error) {
+        welcomeFailure = `配置已保存，但欢迎笔记写入失败：${String(error)}。`
+      }
     }
     result.value = true
     emit('done', base, welcomePath)

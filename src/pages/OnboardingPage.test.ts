@@ -2,8 +2,8 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { createApp, h, nextTick, type App } from 'vue'
 import OnboardingPage from './OnboardingPage.vue'
-import { defaultConfig } from '../core/config'
-import { saveConfig, saveOnboarding, writeNote, pickFolder } from '../shell/tauri'
+import { defaultConfig, type Config } from '../core/config'
+import { saveConfig, saveOnboarding, writeNote, pickFolder, inspectCollection } from '../shell/tauri'
 import { testService } from '../core/services'
 import { AppError } from '../core/errors'
 import { toast } from '../components/useToast'
@@ -15,6 +15,7 @@ vi.mock('../shell/tauri', () => ({
   pickFolder: vi.fn(),
   ensureSubfolder: vi.fn(),
   dirExists: vi.fn().mockResolvedValue(true),
+  inspectCollection: vi.fn(async (config: Config) => ({ config, hasNotes: false })),
   saveConfig: vi.fn().mockResolvedValue(undefined),
   saveOnboarding: vi.fn().mockResolvedValue(undefined),
   writeNote: vi.fn().mockResolvedValue('其他/欢迎使用 ContentToMd.md'),
@@ -29,8 +30,7 @@ vi.mock('../components/OnboardingBrand.vue', () => ({ default: { template: '<spa
 let app: App | undefined
 const done = vi.fn()
 async function settle() {
-  await Promise.resolve()
-  await Promise.resolve()
+  for (let i = 0; i < 10; i++) await Promise.resolve()
   await nextTick()
 }
 async function click(text: string) {
@@ -90,6 +90,37 @@ it('已选择收藏库但跳过密钥，保留所选目录并返回欢迎笔记�
     expect.any(String),
   )
   expect(done).toHaveBeenCalledWith(expect.any(Object), '其他/欢迎使用 ContentToMd-2026-10-27.md')
+})
+
+it('连接已有笔记的收藏库时导入领域，不写欢迎笔记，也不返回欢迎入口', async () => {
+  vi.mocked(pickFolder).mockResolvedValueOnce('C:\\test\\已有库')
+  vi.mocked(inspectCollection).mockImplementationOnce(async (config) => ({
+    config: { ...config, domains: [{ id: 1, name: '设计UI' }, { id: 2, name: 'AI与Agent' }, ...config.domains] },
+    hasNotes: true,
+  }))
+  await click('开始')
+  await vi.advanceTimersByTimeAsync(40)
+  await click('更换')
+  await click('下一步')
+  await vi.advanceTimersByTimeAsync(40)
+  await click('暂时跳过')
+  await settle()
+  expect(inspectCollection).toHaveBeenCalledTimes(1)
+  const saved = vi.mocked(saveConfig).mock.lastCall?.[0]
+  expect(saved?.vaultPath).toBe('C:\\test\\已有库')
+  expect(saved?.domains.map((d) => d.name)).toEqual(['设计UI', 'AI与Agent', '其他'])
+  expect(writeNote).not.toHaveBeenCalled()
+  expect(done).toHaveBeenCalledWith(saved, undefined)
+})
+
+it('无法检查已有收藏库时不保存配置或写欢迎笔记，允许重试', async () => {
+  vi.mocked(inspectCollection).mockRejectedValueOnce(new Error('无法读取领域目录'))
+  await click('暂时跳过')
+  await settle()
+  expect(writeNote).not.toHaveBeenCalled()
+  expect(saveConfig).not.toHaveBeenCalled()
+  expect(done).not.toHaveBeenCalled()
+  expect(document.body.textContent).toContain('无法读取领域目录')
 })
 
 it('文字和图片通过即可完成，音视频选填；实际保存所选服务', async () => {

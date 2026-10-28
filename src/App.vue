@@ -11,6 +11,8 @@ import {
   restoreNote,
   loadOnboarding,
   saveOnboarding,
+  inspectCollection,
+  saveConfig,
 } from './shell/tauri'
 import type { Prompts } from './core/note'
 import { DEFAULT_PROMPTS } from './core/defaultPrompts'
@@ -136,17 +138,30 @@ async function leaveNote() {
 onMounted(async () => {
   try {
     const json = await loadConfigJson()
-    const loadedConfig = parseConfig(json)
+    let loadedConfig = parseConfig(json)
     onboardingState.value = await loadOnboarding()
     showOnboarding.value = json === null && !onboardingState.value.finished
     prompts.value = (await ensurePrompts(DEFAULT_PROMPTS)) as Prompts
+    if (!showOnboarding.value && loadedConfig.vaultPath) {
+      vaultMissing.value = !(await dirExists(notesRoot(loadedConfig)))
+      if (!vaultMissing.value) {
+        try {
+          const collection = await inspectCollection(loadedConfig)
+          if (collection.config !== loadedConfig) {
+            loadedConfig = collection.config
+            await saveConfig(loadedConfig)
+          }
+        } catch {
+          toast('已有领域同步失败，请重新打开软件后重试。', { kind: 'error' })
+        }
+      }
+    }
     config.value = loadedConfig
   } catch (e) {
     loadError.value = String(e) // 配置或指令文件读取失败
     return
   }
   if (showOnboarding.value) return
-  vaultMissing.value = !!config.value.vaultPath && !(await dirExists(notesRoot(config.value)))
   try {
     const root = notesRoot(config.value)
     const records = (await listEditRecoveries()).filter((r) => r.root === root)
