@@ -152,13 +152,17 @@ async function onSaved(c: Config) {
   config.value = c
   vaultMissing.value = !!c.vaultPath && !(await dirExists(notesRoot(c)))
 }
-function finishOnboarding(c: Config, skipped: boolean) {
+function finishOnboarding(c: Config, welcomePath?: string) {
   config.value = c
   onboardingState.value.finished = true
   page.value = 'home'
   showOnboarding.value = false
   celebrationPending.value = !onboardingState.value.celebrated
-  toast(skipped ? '欢迎使用，需要时可到设置完成配置。' : '准备好了，放入第一条内容试试。')
+  if (welcomePath) {
+    toast('欢迎笔记已放进收藏库，可以先看看。', {
+      action: { label: '去看看', run: () => openSavedNote(welcomePath) },
+    })
+  }
 }
 async function markCelebrated() {
   onboardingState.value.celebrated = true

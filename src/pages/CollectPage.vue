@@ -361,11 +361,10 @@ const itemInfo = computed(() =>
 )
 
 // 开始前检查需要的服务（方案第 8 节“没有配置所需服务”）
-const missingService = computed<string | null>(() => {
+const missingService = computed<ServiceKind | null>(() => {
   const need: ServiceKind[] =
     kind.value === '图片' ? ['vision'] : kind.value === '文字' || kind.value === '文档' ? ['text'] : ['asr', 'text']
-  const k = need.find((k) => !isServiceConfigured(props.config.services[k]))
-  return k ? SERVICE_LABELS[k] : null
+  return need.find((k) => !isServiceConfigured(props.config.services[k])) ?? null
 })
 
 // ---------------- 处理 ----------------
@@ -773,19 +772,18 @@ onBeforeUnmount(() => {
         <p v-else-if="waitNotice" class="notice info">
           <Clock :size="15" aria-hidden="true" /><span>{{ waitNotice }}</span>
         </p>
-        <p v-if="missingService && hasContent" class="notice">
-          <CircleAlert :size="15" aria-hidden="true" /><span>{{ missingService }}尚未配置。</span>
-          <button v-press class="link" @click="emit('goSettings')">去设置</button>
-        </p>
-
         <div class="actions">
+          <p v-if="missingService && hasContent" class="service-hint">
+            尚未配置{{ SERVICE_LABELS[missingService] }}服务，请先完成配置。
+          </p>
           <button
             v-press="'tactile'"
             class="primary start"
-            :disabled="!hasContent || !!missingService || !!lengthNotice"
-            @click="start"
+            :disabled="!hasContent || (!missingService && !!lengthNotice)"
+            @click="missingService ? emit('goSettings') : start()"
           >
-            开始处理 <span class="muted-on-primary">Ctrl+Enter</span>
+            <template v-if="missingService && hasContent">去配置服务</template>
+            <template v-else>开始处理 <span class="muted-on-primary">Ctrl+Enter</span></template>
           </button>
         </div>
       </div>
@@ -1180,8 +1178,14 @@ onBeforeUnmount(() => {
 
 .actions {
   display: flex;
+  align-items: center;
+  gap: var(--sp-4);
   justify-content: flex-end;
   margin-top: var(--sp-4);
+}
+.service-hint {
+  margin: 0 auto 0 0;
+  color: var(--warn);
 }
 .muted-on-primary {
   margin-left: var(--sp-3);

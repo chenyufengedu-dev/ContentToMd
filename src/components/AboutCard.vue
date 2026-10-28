@@ -9,6 +9,8 @@ import art from '../assets/about-art.json'
 import { appVersion, openLink } from '../shell/tauri'
 import { toast } from './useToast'
 import { ChevronRight, Github, Link2, MessageCircleMore, User } from './icons'
+import FeedbackDialog from './FeedbackDialog.vue'
+import { GITHUB_URL } from '../core/projectInfo'
 import {
   clamp,
   easeOut,
@@ -26,12 +28,9 @@ const props = defineProps<{ open: boolean }>()
 
 const AUTHOR = 'ChenyuFeng'
 const BLOG_URL = 'https://chenyu-blog.vercel.app/'
-/** 项目仓库地址：仓库建好后换成真正的地址 */
-const GITHUB_URL = 'https://github.com/'
-/** 反馈先去博客；仓库建好后改成仓库的问题页 */
-const FEEDBACK_URL = BLOG_URL
 /** 用到的主要开源项目、许可证和仓库地址（地址取自各依赖自己声明的 repository） */
 const CREDITS = [
+  { name: '思源黑体（Noto Sans SC）', license: 'SIL OFL 1.1', url: 'https://github.com/notofonts/noto-cjk' },
   { name: 'Tauri', license: 'MIT / Apache-2.0', url: 'https://github.com/tauri-apps/tauri' },
   { name: 'Vue', license: 'MIT', url: 'https://github.com/vuejs/core' },
   { name: 'Tiptap', license: 'MIT', url: 'https://github.com/ueberdosis/tiptap' },
@@ -43,15 +42,15 @@ const CREDITS = [
   { name: 'trash', license: 'MIT', url: 'https://github.com/ArturKovacs/trash' },
   { name: 'gray_matter', license: 'MIT', url: 'https://github.com/the-alchemists-of-arland/gray-matter-rs' },
 ]
-/** 链接：收起时放作者、博客、GitHub；展开时再加反馈 */
+/** 项目仓库入口始终保留，是否开放 Issues 反馈由反馈窗判断。 */
 const LINKS = [
-  { key: 'author', icon: User, text: AUTHOR, url: '', onlyOpen: false },
-  { key: 'blog', icon: Link2, text: '个人博客', url: BLOG_URL, onlyOpen: false },
-  { key: 'github', icon: Github, text: 'GitHub', url: GITHUB_URL, onlyOpen: false },
-  { key: 'feedback', icon: MessageCircleMore, text: '反馈问题', url: FEEDBACK_URL, onlyOpen: true },
+  { key: 'author', icon: User, text: AUTHOR, url: '' },
+  { key: 'blog', icon: Link2, text: '个人博客', url: BLOG_URL },
+  { key: 'github', icon: Github, text: 'GitHub', url: GITHUB_URL },
 ]
 
 const version = ref('')
+const showFeedback = ref(false)
 const showCredits = ref(false)
 const creditsMounted = ref(false)
 const creditsEl = ref<HTMLElement>()
@@ -293,13 +292,11 @@ onBeforeUnmount(() => {
     </span>
     <span v-if="version" class="ver">v{{ version }}</span>
     <ul class="links" aria-label="作者与链接">
-      <template v-for="l in LINKS" :key="l.key">
-        <li v-if="!l.onlyOpen" class="link">
-          <component :is="l.icon" :size="16" outline aria-hidden="true" />
-          <a v-if="l.url" :data-about-link="l.key" :href="l.url" @click.stop.prevent="visit(l.url)">{{ l.text }}</a>
-          <span v-else>{{ l.text }}</span>
-        </li>
-      </template>
+      <li v-for="l in LINKS" :key="l.key" class="link">
+        <component :is="l.icon" :size="16" outline aria-hidden="true" />
+        <a v-if="l.url" :data-about-link="l.key" :href="l.url" @click.stop.prevent="visit(l.url)">{{ l.text }}</a>
+        <span v-else>{{ l.text }}</span>
+      </li>
     </ul>
   </div>
 
@@ -353,6 +350,10 @@ onBeforeUnmount(() => {
           <a v-if="l.url" :data-about-link="l.key" :href="l.url" @click.stop.prevent="visit(l.url)">{{ l.text }}</a>
           <span v-else>{{ l.text }}</span>
         </li>
+        <li class="link">
+          <MessageCircleMore :size="16" outline aria-hidden="true" />
+          <button class="feedback-link" data-about-link="feedback" @click.stop="showFeedback = true">反馈问题</button>
+        </li>
       </ul>
       <p class="meta" data-fade>
         <span v-if="version">版本 {{ version }}</span>
@@ -373,6 +374,7 @@ onBeforeUnmount(() => {
       </p>
     </div>
   </div>
+  <FeedbackDialog v-if="showFeedback" :version="version" @close="showFeedback = false" />
 </template>
 
 <style scoped>
@@ -442,11 +444,23 @@ onBeforeUnmount(() => {
   font-size: var(--fs-md);
   color: var(--muted);
 }
-.link a {
+.link a,
+.feedback-link {
   color: inherit;
   text-decoration: none;
 }
-.link:has(a:hover) {
+.feedback-link {
+  height: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+}
+.feedback-link:hover:not(:disabled) {
+  background: none;
+}
+.link:has(a:hover),
+.link:has(.feedback-link:hover) {
   color: var(--accent);
 }
 

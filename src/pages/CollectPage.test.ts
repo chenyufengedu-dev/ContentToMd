@@ -56,12 +56,15 @@ async function flush() {
   for (let i = 0; i < 5; i++) await nextTick()
 }
 async function mount(active = true) {
-  const config = defaultConfig()
+  const config = reactive(defaultConfig())
   config.services.text.apiKey = 'isolated-test'
   const state = reactive({ active })
   const root = document.createElement('div')
+  const goSettings = vi.fn()
   document.body.append(root)
-  app = createApp({ render: () => h(CollectPage, { config, prompts: DEFAULT_PROMPTS, active: state.active }) })
+  app = createApp({
+    render: () => h(CollectPage, { config, prompts: DEFAULT_PROMPTS, active: state.active, onGoSettings: goSettings }),
+  })
   app.mount(root)
   await flush()
   function pick(name: string, promise = Promise.resolve(bytes('测试正文'))) {
@@ -72,8 +75,50 @@ async function mount(active = true) {
     Object.defineProperty(input, 'files', { configurable: true, value: [file] })
     input.dispatchEvent(new Event('change', { bubbles: true }))
   }
-  return { root, state, pick }
+  return { root, state, pick, config, goSettings }
 }
+it.each([
+  ['测试.txt', '尚未配置文字整理服务，请先完成配置。'],
+  ['测试.png', '尚未配置看图理解服务，请先完成配置。'],
+  ['测试.mp3', '尚未配置语音转写服务，请先完成配置。'],
+] as const)('缺少服务时%s显示设置主按钮，点击跳转而快捷键不触发', async (fileName, message) => {
+  const { root, pick, config, goSettings } = await mount()
+  config.services.text.apiKey = ''
+  pick(fileName)
+  await flush()
+  const button = root.querySelector<HTMLButtonElement>('.actions .primary')
+  if (!button) throw new Error('缺少主按钮')
+  expect(button.textContent?.trim()).toBe('去配置服务')
+  expect(button.disabled).toBe(false)
+  expect(root.querySelector('.actions')?.textContent).toContain(message)
+  expect(root.querySelector('.actions')?.previousElementSibling?.classList.contains('notice')).toBe(false)
+  window.dispatchEvent(new KeyboardEvent('keydown', { ctrlKey: true, key: 'Enter' }))
+  await flush()
+  expect(goSettings).not.toHaveBeenCalled()
+  expect(runJob).not.toHaveBeenCalled()
+  button.click()
+  expect(goSettings).toHaveBeenCalledTimes(1)
+  expect(runJob).not.toHaveBeenCalled()
+})
+
+it('服务配好后主按钮自动恢复开始处理并移除缺配置说明', async () => {
+  const { root, pick, config, goSettings } = await mount()
+  config.services.text.apiKey = ''
+  pick('测试.txt')
+  await flush()
+  expect(root.querySelector('.actions .primary')?.textContent?.trim()).toBe('去配置服务')
+  config.services.text.apiKey = 'isolated-restored'
+  await flush()
+  const button = root.querySelector<HTMLButtonElement>('.actions .primary')
+  if (!button) throw new Error('缺少主按钮')
+  expect(button.textContent).toContain('开始处理')
+  expect(button.disabled).toBe(false)
+  expect(root.querySelector('.actions')?.textContent).not.toContain('尚未配置')
+  button.click()
+  await flush()
+  expect(runJob).toHaveBeenCalledTimes(1)
+  expect(goSettings).not.toHaveBeenCalled()
+})
 it('较早的文字读取完成不能覆盖后来选择的文件', async () => {
   const { root, pick } = await mount()
   const old = deferred<ArrayBuffer>()

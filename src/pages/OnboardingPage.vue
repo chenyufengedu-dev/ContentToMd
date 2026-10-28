@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onBeforeUnmount, reactive, ref, watch } from 'vue'
-import { Check, ChevronRight, ExternalLink, Folder } from '../components/icons'
+import { Check, ChevronRight, Folder } from '../components/icons'
 import { vPress } from '../components/pressFeedback'
 import SelectBox from '../components/SelectBox.vue'
 import NoticeDialog from '../components/NoticeDialog.vue'
@@ -10,6 +10,8 @@ import {
   parseConfig,
   SERVICE_KINDS,
   SERVICE_LABELS,
+  OTHER_DOMAIN_ID,
+  notesRoot,
   type ServiceKind,
 } from '../core/config'
 import OnboardingBrand from '../components/OnboardingBrand.vue'
@@ -25,15 +27,19 @@ import {
   httpFetch,
   openLink,
   guardClose,
+  writeNote,
 } from '../shell/tauri'
+import { buildWelcomeNote, WELCOME_TITLE } from '../core/welcome'
+import { today } from '../core/note'
 import { testService } from '../core/services'
 import { describeError } from '../core/errors'
 import { toast } from '../components/useToast'
 import type { Config } from '../core/config'
 
 const props = defineProps<{ config: Config }>()
-const emit = defineEmits<{ done: [config: Config, skipped: boolean] }>()
+const emit = defineEmits<{ done: [config: Config, welcomePath?: string] }>()
 const saving = ref(false)
+const APPLICATION_STEPS = '注册登录 → 充值几元 → 创建密钥并复制'
 const saveError = ref('')
 const defaultFolder = ref('')
 
@@ -104,13 +110,7 @@ const canFinish = computed(() =>
 )
 const isTesting = computed(() => Object.values(services.value).some((s) => s.status === 'testing'))
 const finalActionLabel = computed(() => (isTesting.value ? '正在连接…' : canFinish.value ? '开始使用' : '暂时跳过'))
-const hasDraftInput = computed(
-  () =>
-    folder.value !== defaultFolder.value ||
-    !!vault.value ||
-    allServices.some((s) => !!s.apiKey.trim()) ||
-    Object.values(customServices).some((s) => !!(s.baseUrl.trim() || s.model.trim())),
-)
+const hasUntestedKey = computed(() => Object.values(services.value).some((s) => !!s.apiKey.trim() && s.status !== 'ok'))
 const subfolders = computed(() => [
   { value: '', label: '仓库根目录' },
   ...subfolderList.value.map((value) => ({ value, label: value })),
@@ -169,7 +169,8 @@ function scheduleTest(s: OnboardingService) {
     } catch (error) {
       if (controller.signal.aborted) return
       s.status = 'fail'
-      s.message = describeError(error).message
+      const provider = aiMode.value === 'recommended' ? (s.kind === 'asr' ? '硅基流动' : 'DeepSeek') : undefined
+      s.message = describeError(error, provider).message
     }
   }, 600)
   controller.signal.addEventListener('abort', () => clearTimeout(timer), { once: true })
@@ -225,33 +226,42 @@ async function finish(skip = false) {
   cancelTests()
   try {
     const base = parseConfig(JSON.stringify(props.config))
-    const usingDefault = skip || (!vault.value && (!folder.value || folder.value === defaultFolder.value))
+    const usingDefault = !vault.value && (!folder.value || folder.value === defaultFolder.value)
     const defaultPath = usingDefault ? await defaultCollectionFolder(true) : defaultFolder.value
-    base.vaultPath = skip ? defaultPath : vault.value || folder.value || defaultPath
+    base.vaultPath = vault.value || folder.value || defaultPath
     base.vault = {
-      kind: !skip && vault.value ? 'obsidian' : 'folder',
-      subfolder: !skip && vault.value ? subfolder.value : '',
+      kind: vault.value ? 'obsidian' : 'folder',
+      subfolder: vault.value ? subfolder.value : '',
     }
     if (!(await dirExists(base.vaultPath))) throw new Error('找不到收藏库文件夹，请重新选择。')
-    if (!skip) {
-      if (base.vault.kind === 'obsidian') {
-        if (!(await dirExists(`${base.vaultPath}\\.obsidian`)))
-          throw new Error('这个文件夹已不是 Obsidian 仓库，请重新选择。')
-        if (base.vault.subfolder) await ensureSubfolder(base.vaultPath, base.vault.subfolder)
-      }
-      for (const kind of SERVICE_KINDS) {
-        const service = services.value[kind]
-        base.services[kind] = {
-          baseUrl: service.baseUrl.trim(),
-          model: service.model.trim(),
-          apiKey: service.apiKey.trim(),
-        }
+    if (base.vault.kind === 'obsidian') {
+      if (!(await dirExists(`${base.vaultPath}\\.obsidian`)))
+        throw new Error('这个文件夹已不是 Obsidian 仓库，请重新选择。')
+      if (base.vault.subfolder) await ensureSubfolder(base.vaultPath, base.vault.subfolder)
+    }
+    for (const kind of SERVICE_KINDS) {
+      const service = services.value[kind]
+      if (skip && service.status !== 'ok') continue
+      base.services[kind] = {
+        baseUrl: service.baseUrl.trim(),
+        model: service.model.trim(),
+        apiKey: service.apiKey.trim(),
       }
     }
     await saveConfig(base)
     await saveOnboarding({ finished: true, celebrated: false })
+    let welcomeFailure = ''
+    let welcomePath: string | undefined
+    const domain = base.domains.find((d) => d.id === OTHER_DOMAIN_ID)?.name ?? '其他'
+    const date = today()
+    try {
+      welcomePath = await writeNote(notesRoot(base), domain, WELCOME_TITLE, date, buildWelcomeNote(domain, date))
+    } catch (error) {
+      welcomeFailure = `配置已保存，但欢迎笔记写入失败：${String(error)}。`
+    }
     result.value = true
-    emit('done', base, skip)
+    emit('done', base, welcomePath)
+    if (welcomeFailure) toast(welcomeFailure, { kind: 'error' })
   } catch (error) {
     saveError.value = String(error)
   } finally {
@@ -261,7 +271,7 @@ async function finish(skip = false) {
 function finalAction() {
   if (isTesting.value) return
   if (canFinish.value) finish()
-  else if (hasDraftInput.value) askSkip.value = true
+  else if (hasUntestedKey.value) askSkip.value = true
   else finish(true)
 }
 function confirmSkip() {
@@ -498,16 +508,19 @@ function chooseVault(path: string) {
                   >
                     <div class="provider-heading">
                       <h2>DeepSeek</h2>
-                      <a
-                        v-press
-                        class="key-link"
-                        href="https://platform.deepseek.com/api_keys"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        referrerpolicy="no-referrer"
-                        @click.prevent="applyLink('https://platform.deepseek.com/api_keys')"
-                        >获取密钥<ExternalLink :size="12"
-                      /></a>
+                      <div class="key-application">
+                        <a
+                          v-press
+                          class="key-link"
+                          href="https://platform.deepseek.com/api_keys"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          referrerpolicy="no-referrer"
+                          @click.prevent="applyLink('https://platform.deepseek.com/api_keys')"
+                          >去申请<ChevronRight :size="12"
+                        /></a>
+                        <p class="helper application-steps">{{ APPLICATION_STEPS }}</p>
+                      </div>
                     </div>
                     <p class="helper provider-description">用于整理文字和图片。</p>
                     <input
@@ -545,17 +558,20 @@ function chooseVault(path: string) {
                       </p>
                       <div v-if="audioOpen" class="audio-fields">
                         <div class="provider-heading">
-                          <strong>硅基流动</strong
-                          ><a
-                            v-press
-                            class="key-link"
-                            href="https://cloud.siliconflow.cn/account/ak"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            referrerpolicy="no-referrer"
-                            @click.prevent="applyLink('https://cloud.siliconflow.cn/account/ak')"
-                            >获取密钥<ExternalLink :size="12"
-                          /></a>
+                          <strong>硅基流动</strong>
+                          <div class="key-application">
+                            <a
+                              v-press
+                              class="key-link"
+                              href="https://cloud.siliconflow.cn/account/ak"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              referrerpolicy="no-referrer"
+                              @click.prevent="applyLink('https://cloud.siliconflow.cn/account/ak')"
+                              >去申请<ChevronRight :size="12"
+                            /></a>
+                            <p class="helper application-steps">{{ APPLICATION_STEPS }}</p>
+                          </div>
                         </div>
                         <input
                           v-model="recommendedServices.asr.apiKey"
@@ -682,7 +698,7 @@ function chooseVault(path: string) {
             v-press
             class="skip"
             :disabled="saving"
-            @click="hasDraftInput ? (askSkip = true) : finish(true)"
+            @click="hasUntestedKey ? (askSkip = true) : finish(true)"
           >
             暂时跳过
           </button>
@@ -691,14 +707,13 @@ function chooseVault(path: string) {
     </main>
     <NoticeDialog
       v-if="askSkip"
-      title="放弃本次配置？"
+      title="跳过未完成的密钥配置？"
       cancel-text="继续配置"
-      ok-text="放弃并跳过"
-      danger
+      ok-text="跳过并进入"
       @cancel="askSkip = false"
       @ok="confirmSkip"
     >
-      <p>本次引导填写的内容不会保存，之后可在设置中重新配置。</p>
+      <p>已选的收藏库和连接成功的服务会保留，未通过连接测试的密钥不会保存。</p>
     </NoticeDialog>
   </div>
 </template>
@@ -844,7 +859,9 @@ function chooseVault(path: string) {
   inset-inline: calc(var(--sp-7) * 2 - var(--sp-2));
 }
 .content-scroll.services-scroll {
-  right: var(--sp-6);
+  /* 为左侧返回按钮保留空间，内容中心仅向右补偿12px。 */
+  left: calc(var(--sp-7) * 2);
+  right: calc(var(--sp-6) * 2);
 }
 .content-scroll::-webkit-scrollbar {
   width: var(--sp-2);
@@ -1085,6 +1102,15 @@ h1 {
   display: inline-flex;
   align-items: center;
   gap: var(--sp-1);
+  font-size: var(--fs-sm);
+}
+.key-application {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+.application-steps {
+  margin: 0;
   font-size: var(--fs-sm);
 }
 .provider-description {
