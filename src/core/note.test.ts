@@ -13,7 +13,12 @@ import {
 } from './note'
 import { DEFAULT_PROMPTS } from './defaultPrompts'
 
-const domains = defaultConfig().domains
+const domains = [
+  { id: 1, name: '为人处世' },
+  { id: 2, name: '职场求职' },
+  { id: 3, name: '品牌商业' },
+  ...defaultConfig().domains,
+]
 const aiResult = {
   title: '商务礼仪三重点：摆正位置、端正态度、分清场合',
   domain_id: 1,
@@ -24,6 +29,17 @@ const aiResult = {
 }
 
 describe('parseAiResult', () => {
+  it('仅归入其他时保留合规的新领域建议，重名或不合规的建议丢弃', () => {
+    expect(
+      parseAiResult({ ...aiResult, domain_id: 99, suggested_domain: ' 摄影技巧 ' }, domains)?.draft.suggestedDomain,
+    ).toBe('摄影技巧')
+    for (const suggested_domain of ['其他', '为人处世', '设计/UI', '字', '超过六个字的领域', 123, null]) {
+      const parsed = parseAiResult({ ...aiResult, domain_id: 99, suggested_domain }, domains)
+      expect(parsed).not.toBeNull()
+      expect(parsed?.draft.suggestedDomain).toBeUndefined()
+    }
+    expect(parseAiResult({ ...aiResult, suggested_domain: '摄影技巧' }, domains)?.draft.suggestedDomain).toBeUndefined()
+  })
   it('正常结果：标签去空白、去重、丢掉非字符串', () => {
     const r = parseAiResult(aiResult, domains)
     expect(r?.domainFallback).toBe(false)
@@ -77,6 +93,14 @@ describe('parseAiResult', () => {
 })
 
 describe('指令拼装', () => {
+  it('已有用户旧指令也补上领域建议规则，不改写传入的指令', () => {
+    const prompts = { ...DEFAULT_PROMPTS, _通用: '旧指令，领域：{{领域列表}}，标签：{{已有标签}}。' }
+    const system = buildSystemPrompt(prompts, '要点提炼', domains, [])
+    expect(system).toContain('suggested_domain')
+    expect(system).toContain('2～6')
+    expect(prompts._通用).not.toContain('suggested_domain')
+    expect(buildSystemPrompt(DEFAULT_PROMPTS, '要点提炼', domains, []).match(/suggested_domain/g)).toHaveLength(1)
+  })
   it('领域列表和已有标签填进通用指令，后面接所选整理方式的指令', () => {
     const p = buildSystemPrompt(DEFAULT_PROMPTS, '要点提炼', domains, ['商务礼仪', '品牌营销'])
     expect(p).toContain('1 为人处世，2 职场求职')

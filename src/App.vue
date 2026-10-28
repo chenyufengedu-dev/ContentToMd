@@ -30,6 +30,15 @@ import { toast } from './components/useToast'
 const config = ref<Config | null>(null)
 const prompts = ref<Prompts | null>(null)
 const page = ref<Page>('home')
+const closeOrigin = ref<Page | null>(null)
+function revealCollectForClose() {
+  closeOrigin.value ??= page.value
+  page.value = 'home'
+}
+function cancelCollectClose() {
+  if (closeOrigin.value) page.value = closeOrigin.value
+  closeOrigin.value = null
+}
 const showOnboarding = ref(false)
 const onboardingState = ref({ finished: false, celebrated: false })
 const celebrationPending = ref(false)
@@ -181,7 +190,7 @@ async function markCelebrated() {
     <!-- 标题栏下面的内容区自己滚动，整个窗口不出滚动条，标题栏的宽度和位置就不会跟着页面变 -->
     <OnboardingPage v-if="showOnboarding" :config="config" @done="finishOnboarding" />
     <div v-else v-page-fade="`${page}:${notePath ?? ''}`" class="app-body">
-      <template v-if="page === 'library'">
+      <div v-if="page === 'library' || closeOrigin === 'library'" v-show="page === 'library'">
         <LibraryPage
           v-show="!notePath"
           ref="library"
@@ -202,16 +211,17 @@ async function markCelebrated() {
           @go-settings="page = 'settings'"
           @config-changed="(c) => (config = c)"
         />
-      </template>
-      <SettingsPage
-        v-if="page === 'settings'"
-        ref="settings"
-        :config="config"
-        :first-run="false"
-        @saved="onSaved"
-        @pending="(v) => (settingsPending = v)"
-        @domain-busy="(v) => (settingsDomainBusy = v)"
-      />
+      </div>
+      <div v-if="page === 'settings' || closeOrigin === 'settings'" v-show="page === 'settings'">
+        <SettingsPage
+          ref="settings"
+          :config="config"
+          :first-run="false"
+          @saved="onSaved"
+          @pending="(v) => (settingsPending = v)"
+          @domain-busy="(v) => (settingsDomainBusy = v)"
+        />
+      </div>
       <div v-show="page === 'home'">
         <p v-if="vaultMissing" class="fatal">找不到收藏库：{{ notesRoot(config) }}。请到设置中重新选择。</p>
         <CollectPage
@@ -222,6 +232,8 @@ async function markCelebrated() {
           @go-settings="page = 'settings'"
           @config-changed="(c) => (config = c)"
           @open-note="openSavedNote"
+          @reveal-for-close="revealCollectForClose"
+          @close-cancelled="cancelCollectClose"
         />
       </div>
     </div>

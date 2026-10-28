@@ -45,4 +45,4 @@
 
 ## 许可
 
-代码采用 [MIT](LICENSE)，作者 ChenyuFeng。内置思源黑体 Noto Sans SC 子集采用 [SIL OFL 1.1](src/assets/fonts/OFL.txt)；其他开源组件见软件设置页的“关于 → 开源致谢”。
+代码采用 [MIT](LICENSE)，作者 Caraxes。内置思源黑体 Noto Sans SC 子集采用 [SIL OFL 1.1](src/assets/fonts/OFL.txt)；其他开源组件见软件设置页的“关于 → 开源致谢”。

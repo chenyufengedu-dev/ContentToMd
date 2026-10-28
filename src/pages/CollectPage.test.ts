@@ -8,7 +8,7 @@ import { defaultConfig } from '../core/config'
 import { DEFAULT_PROMPTS } from '../core/defaultPrompts'
 import { readDocx, readPdf } from '../core/docText'
 import { runJob } from '../core/pipeline'
-import { writeNote } from '../shell/tauri'
+import { writeNote, guardClose } from '../shell/tauri'
 
 vi.mock('../shell/tauri', () => ({
   loadDraft: vi.fn().mockResolvedValue(null),
@@ -61,9 +61,17 @@ async function mount(active = true) {
   const state = reactive({ active })
   const root = document.createElement('div')
   const goSettings = vi.fn()
+  const revealForClose = vi.fn(() => (state.active = true))
   document.body.append(root)
   app = createApp({
-    render: () => h(CollectPage, { config, prompts: DEFAULT_PROMPTS, active: state.active, onGoSettings: goSettings }),
+    render: () =>
+      h(CollectPage, {
+        config,
+        prompts: DEFAULT_PROMPTS,
+        active: state.active,
+        onGoSettings: goSettings,
+        onRevealForClose: revealForClose,
+      }),
   })
   app.mount(root)
   await flush()
@@ -75,8 +83,22 @@ async function mount(active = true) {
     Object.defineProperty(input, 'files', { configurable: true, value: [file] })
     input.dispatchEvent(new Event('change', { bubbles: true }))
   }
-  return { root, state, pick, config, goSettings }
+  return { root, state, pick, config, goSettings, revealForClose }
 }
+it('隐藏页有未处理内容时，先请求App显示新增页，再显示关闭询问', async () => {
+  const { root, pick, state, revealForClose } = await mount(false)
+  pick('未处理.txt')
+  await flush()
+  const guard = vi.mocked(guardClose).mock.lastCall
+  if (!guard) throw new Error('缺少关闭保护')
+  expect(guard[0]()).toBe(true)
+  guard[1]()
+  expect(revealForClose).toHaveBeenCalledTimes(1)
+  expect(state.active).toBe(true)
+  expect(root.textContent).not.toContain('关闭软件？')
+  await flush()
+  expect(root.textContent).toContain('关闭软件？')
+})
 it.each([
   ['测试.txt', '尚未配置文字整理服务，请先完成配置。'],
   ['测试.png', '尚未配置看图理解服务，请先完成配置。'],
@@ -172,7 +194,14 @@ it('隐藏首页不拦截粘贴或响应开始快捷键，返回后恢复', asyn
   window.dispatchEvent(new KeyboardEvent('keydown', { ctrlKey: true, key: 'Enter' }))
   await flush()
   expect(runJob).toHaveBeenCalledTimes(1)
-  expect(root.textContent).toContain('隔离测试停止处理')
+  expect(root.textContent).toContain('操作失败，请重试。')
+  const copy = [...root.querySelectorAll('button')].find((b) => b.textContent === '复制错误信息')
+  if (!copy) throw new Error('缺少错误原文复制入口')
+  const writeText = vi.fn().mockResolvedValue(undefined)
+  vi.stubGlobal('navigator', { clipboard: { writeText } })
+  copy.click()
+  await flush()
+  expect(writeText).toHaveBeenCalledExactlyOnceWith('隔离测试停止处理')
 })
 it('隐藏的确认页也不响应保存快捷键，返回后正常保存', async () => {
   const { root, state, pick } = await mount()

@@ -12,9 +12,10 @@ const props = defineProps<{
   domains: Domain[]
   existingTags: string[]
   domainFallback?: boolean
+  suggestedDomain?: string
 }>()
 const domainId = defineModel<number>('domainId', { required: true })
-const emit = defineEmits<{ newDomain: [] }>()
+const emit = defineEmits<{ newDomain: [name?: string] }>()
 const tags = defineModel<string[]>('tags', { required: true })
 const keywords = defineModel<string[]>('keywords', { required: true })
 
@@ -74,6 +75,10 @@ const TIPS = {
       </div>
       <SelectBox v-model="domainChoice" class="domain" :options="domainOptions" aria-label="领域" size="md" />
       <p v-if="domainFallback" class="warn">已归入“其他”，可重新选择领域。</p>
+      <p v-if="suggestedDomain" class="domain-suggestion">
+        建议新建：{{ suggestedDomain }}
+        <button v-press class="link" @click="emit('newDomain', suggestedDomain)">新建</button>
+      </p>
     </div>
 
     <div class="field">
@@ -138,6 +143,11 @@ const TIPS = {
 </template>
 
 <style scoped>
+.domain-suggestion {
+  margin: var(--sp-2) 0 0;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
 .label {
   color: var(--fg-strong);
   font-weight: var(--fw-label);

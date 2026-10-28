@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { createApp, nextTick, watch, type App } from 'vue'
+import { createApp, h, nextTick, reactive, watch, type App } from 'vue'
 import type { Editor } from '@tiptap/core'
 import type * as TiptapVue from '@tiptap/vue-3'
 import ConfirmPage, { type EditInfo } from './ConfirmPage.vue'
@@ -17,6 +17,7 @@ import {
   writeNote,
   writeAttachment,
   removeAttachment,
+  saveConfig,
 } from '../shell/tauri'
 import type { NoteRecovery } from '../core/noteRecovery'
 
@@ -75,8 +76,10 @@ async function mount(
   editMode = true,
   pictures?: { files: JobImage[]; saved: NoteImage[] },
   recovery?: NoteRecovery,
+  suggestion?: string,
 ) {
-  const config = defaultConfig()
+  const config = reactive(defaultConfig())
+  config.domains.unshift({ id: 1, name: '为人处世' })
   const job: Job = {
     fileName: '旧标题.md',
     type: '文字',
@@ -85,7 +88,8 @@ async function mount(
     images: pictures?.files,
     draft: {
       title: '旧标题',
-      domainId: 1,
+      domainId: suggestion ? 99 : 1,
+      suggestedDomain: suggestion,
       tags: [],
       keywords: [],
       summary: '',
@@ -117,7 +121,7 @@ async function mount(
   const edited = vi.fn()
   const root = document.createElement('div')
   document.body.append(root)
-  app = createApp(ConfirmPage, {
+  const componentProps = {
     config,
     job,
     existingTags: [],
@@ -127,9 +131,20 @@ async function mount(
     onSaved: saved,
     onBack: back,
     onEdited: edited,
+    onConfigChanged: (next: typeof config) => Object.assign(config, next),
+  }
+  let controller: InstanceType<typeof ConfirmPage> | null = null
+  app = createApp({
+    render: () =>
+      h(ConfirmPage, {
+        ...componentProps,
+        ref: (instance) => {
+          controller = instance as InstanceType<typeof ConfirmPage> | null
+        },
+      }),
   })
   // Vue 的实例通过 defineExpose 暴露恢复副本的明确放弃入口。
-  const controller = app.mount(root) as InstanceType<typeof ConfirmPage>
+  app.mount(root)
   await nextTick()
   const titleField = root.querySelector<HTMLTextAreaElement>('textarea.title')
   const save = root.querySelector<HTMLButtonElement>('.action-row .btn-primary')
@@ -158,9 +173,44 @@ async function mount(
     flush,
     editor: currentEditor,
     job,
-    discardRecovery: controller.discardRecovery,
+    config,
+    discardRecovery: () => {
+      if (!controller) throw new Error('确认页已卸载')
+      return controller.discardRecovery()
+    },
   }
 }
+it('建议新领域复用新增入口，确认后更新领域列表和本笔记选择', async () => {
+  const view = await mount('正文', false, undefined, undefined, '摄影技巧')
+  const row = view.root.querySelector('.domain-suggestion')
+  expect(row?.textContent).toContain('建议新建：摄影技巧')
+  const create = row?.querySelector('button')
+  if (!create) throw new Error('缺少新建入口')
+  expect(view.job.draft?.domainId).toBe(99)
+  create.click()
+  await view.flush()
+  const name = view.root.querySelector<HTMLInputElement>('[aria-label="新领域的名字"]')
+  expect(name?.value).toBe('摄影技巧')
+  const confirm = [...view.root.querySelectorAll<HTMLButtonElement>('.dialog button')].find(
+    (b) => b.textContent === '新增并选择',
+  )
+  if (!confirm) throw new Error('缺少创建确认按钮')
+  vi.mocked(saveConfig).mockResolvedValue(undefined)
+  confirm.click()
+  await view.flush()
+  expect(saveConfig).toHaveBeenCalledTimes(1)
+  expect(view.config.domains.map((d) => d.name)).toEqual(['为人处世', '摄影技巧', '其他'])
+  expect(view.root.querySelector('[aria-label="领域"]')?.textContent).toContain('摄影技巧')
+  expect(view.root.querySelector('.domain-suggestion')).toBeNull()
+})
+it.each(['其他', '为人处世', '设计/UI', '字'])('确认页不显示不合规或重名建议：%s', async (suggestion) => {
+  const view = await mount('正文', false, undefined, undefined, suggestion)
+  expect(view.root.querySelector('.domain-suggestion')).toBeNull()
+})
+it('已有笔记页不显示领域建议', async () => {
+  const view = await mount('正文', true, undefined, undefined, '摄影技巧')
+  expect(view.root.querySelector('.domain-suggestion')).toBeNull()
+})
 it('已有笔记停顿后仅保存恢复副本，重开恢复后仍须主动保存', async () => {
   const first = await mount()
   await first.setTitle('恢复标题')

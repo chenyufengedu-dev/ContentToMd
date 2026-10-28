@@ -20,7 +20,7 @@ import {
   AudioLines,
   ImageOff,
 } from '../components/icons'
-import { type Config, addDomain, notesRoot, storeLabel } from '../core/config'
+import { type Config, addDomain, checkDomainName, OTHER_DOMAIN_ID, notesRoot, storeLabel } from '../core/config'
 import type { Job } from '../core/pipeline'
 import { buildMarkdown, safeFileTitle, today, type NoteDraft, type NoteImage, type NoteMeta } from '../core/note'
 import { cropForSave, type Rect } from '../core/image'
@@ -515,8 +515,19 @@ const titleMissing = computed(() => !form.title.trim())
 // ---- 新增领域（US4）：存进设置，再选上它 ----
 const newDomain = reactive({ open: false, name: '', error: '' })
 const newDomainInput = ref<HTMLInputElement>()
-async function startNewDomain() {
-  Object.assign(newDomain, { open: true, name: '', error: '' })
+const suggestedDomain = computed(() => {
+  const name = d.suggestedDomain
+  return !props.edit &&
+    form.domainId === OTHER_DOMAIN_ID &&
+    name &&
+    name.length >= 2 &&
+    name.length <= 6 &&
+    !checkDomainName(name, props.config.domains)
+    ? name
+    : undefined
+})
+async function startNewDomain(name = '') {
+  Object.assign(newDomain, { open: true, name, error: '' })
   await nextTick()
   newDomainInput.value?.focus()
 }
@@ -871,6 +882,7 @@ onBeforeUnmount(() => {
           :domains="config.domains"
           :existing-tags="existingTags"
           :domain-fallback="job.domainFallback"
+          :suggested-domain="suggestedDomain"
           @new-domain="startNewDomain"
         />
 

@@ -21,6 +21,7 @@ import {
   notesRoot,
 } from '../core/config'
 import { testService } from '../core/services'
+import CopyErrorButton from '../components/CopyErrorButton.vue'
 import { describeError } from '../core/errors'
 import {
   saveConfig,
@@ -666,7 +667,11 @@ async function saveAndClose() {
   else askClose.value = false // 没存成：留在设置页，保存条上会写原因
 }
 let unguard: (() => void) | undefined
-onBeforeUnmount(() => unguard?.())
+let disposed = false
+onBeforeUnmount(() => {
+  disposed = true
+  unguard?.()
+})
 onMounted(() => {
   guardClose(
     () => domainBusy.value || (pending.value && !props.firstRun),
@@ -675,7 +680,10 @@ onMounted(() => {
       else askClose.value = true
     },
   )
-    .then((f) => (unguard = f))
+    .then((f) => {
+      if (disposed) f()
+      else unguard = f
+    })
     .catch(() => {}) // 浏览器预览里没有窗口
 })
 </script>
@@ -848,6 +856,7 @@ onMounted(() => {
           </Transition>
           <span v-if="test[k].status === 'ok'" class="ok">✓ {{ test[k].message }}</span>
           <span v-if="test[k].status === 'fail'" class="err">{{ test[k].message }}</span>
+          <CopyErrorButton v-if="test[k].status === 'fail' && test[k].detail" :detail="test[k].detail" />
           <span v-if="spendText(k)" class="spend">{{ spendText(k) }}</span>
         </div>
         <div v-if="priceOpen[k]" class="price">
@@ -877,17 +886,13 @@ onMounted(() => {
             </button>
           </div>
         </div>
-        <details v-if="test[k].status === 'fail' && test[k].detail" class="detail">
-          <summary>详细信息</summary>
-          <pre>{{ test[k].detail }}</pre>
-        </details>
       </div>
     </SettingCard>
 
     <SettingCard
       id="domains"
       title="领域"
-      desc="每个领域对应一个文件夹，首次存入笔记时创建。点击名称可改名，“其他”不可删除。"
+      desc="整理时 AI 会把内容放进合适的领域；没有合适的领域时，会在确认页建议新建一个。也可以在这里自己添加。"
       :open="open === 'domains'"
       :closing="closing === 'domains'"
       @activate="activate('domains')"
@@ -963,9 +968,9 @@ onMounted(() => {
       @activate="activate('privacy')"
     >
       <ul class="privacy">
-        <li>发送给模型：提取的文字、压缩图片（长边≤1568像素）、音频、本次要求及已有标签名称。</li>
-        <li>不发送：其他笔记正文、文件路径、文件夹结构及用户名等设备信息。</li>
-        <li>密钥保存在 Windows 凭据管理器中，不写入配置文件和收藏库。</li>
+        <li>只把你放进来的内容和“本次要求”发给你自己配置的 AI 服务，其他笔记和电脑信息都不发送。</li>
+        <li>软件没有自己的服务器，不收集任何使用数据。</li>
+        <li>密钥只保存在本机的 Windows 凭据管理器里。</li>
       </ul>
     </SettingCard>
 
@@ -1396,11 +1401,6 @@ input:focus {
 .err {
   color: var(--err);
   font-size: var(--fs-sm);
-}
-.detail pre {
-  white-space: pre-wrap;
-  font-size: var(--fs-xs);
-  color: var(--muted);
 }
 
 /* ---- 领域：浅灰小标签，点名字改名，× 删除 ---- */

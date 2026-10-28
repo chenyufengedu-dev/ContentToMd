@@ -10,6 +10,7 @@ export type Fetch = (input: string, init?: RequestInit) => Promise<Response>
 
 /** 超时：文字和图片 120 秒，转写 300 秒（方案第 8 节） */
 export const TIMEOUT_MS: Record<ServiceKind, number> = { text: 120_000, vision: 120_000, asr: 300_000 }
+const TEST_TIMEOUT_MS = 20_000
 
 const join = (base: string, path: string) => base.replace(/\/+$/, '') + path
 
@@ -37,7 +38,14 @@ async function request(
   })
   stopped.catch(() => {}) // 没取消、没超时时这个 Promise 一直挂着，不算未处理的错误
   const timer = setTimeout(
-    () => stop(new AppError('timeout', '服务响应超时，请稍后重试。', `超过 ${timeoutMs / 1000} 秒`)),
+    () =>
+      stop(
+        new AppError(
+          'timeout',
+          timeoutMs === TEST_TIMEOUT_MS ? '连接超时，请稍后重试。' : '服务响应超时，请稍后重试。',
+          `超过 ${timeoutMs / 1000} 秒`,
+        ),
+      ),
     timeoutMs,
   )
   const onCancel = () => stop(new AppError('cancelled', '已取消'))
@@ -72,7 +80,7 @@ async function request(
 const TINY_PNG =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC'
 
-/** 测试连接：用最小的请求确认地址、模型和密钥都能用。测试只等 30 秒 */
+/** 测试连接：用最小的请求确认地址、模型和密钥都能用。 */
 export async function testService(
   kind: ServiceKind,
   s: ServiceConfig,
@@ -89,7 +97,7 @@ export async function testService(
       fetch,
       join(s.baseUrl, '/audio/transcriptions'),
       { method: 'POST', headers: auth, body: form },
-      30_000,
+      TEST_TIMEOUT_MS,
       cancel,
     )
     return
@@ -110,7 +118,7 @@ export async function testService(
       headers: { ...auth, 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: s.model.trim(), max_tokens: 5, messages: [{ role: 'user', content }] }),
     },
-    30_000,
+    TEST_TIMEOUT_MS,
     cancel,
   )
   const data = await res.json().catch(() => null)

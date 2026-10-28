@@ -516,7 +516,7 @@ dependencies = [
 
 [[package]]
 name = "content-to-md"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "gray_matter",
  "keyring",
