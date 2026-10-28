@@ -4,6 +4,9 @@ src-tauri/target/
 samples/
 dist/
 /docs/
+/s0/
+/CLAUDE.md
+/AGENTS.md
 _test_config.json
 src-tauri/gen/
 .claude/launch.json
