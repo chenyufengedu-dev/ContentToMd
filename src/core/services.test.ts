@@ -108,6 +108,19 @@ describe('服务返回的错误按错误码分类（方案第 8 节）', () => {
   })
 })
 
+it.each(['text', 'vision', 'asr'] as const)('测试%s连接只等待20秒，提示连接超时', async (kind) => {
+  vi.useFakeTimers()
+  try {
+    const pending = testService(kind, kind === 'asr' ? asr : text, () => new Promise(() => {})).catch((e: unknown) => e)
+    await vi.advanceTimersByTimeAsync(20_000)
+    const error = await pending
+    expect(error).toBeInstanceOf(AppError)
+    expect(error).toMatchObject({ code: 'timeout', message: '连接超时，请稍后重试。' })
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
 describe('chatJson', () => {
   const ok = (content: string, finish = 'stop') =>
     respond(200, { choices: [{ message: { content }, finish_reason: finish }] })

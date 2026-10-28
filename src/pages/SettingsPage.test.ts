@@ -5,6 +5,9 @@ import SettingsPage from './SettingsPage.vue'
 import { defaultConfig, type Config } from '../core/config'
 import { saveConfig, countDomainNotes, deleteDomain, restoreDomain, guardClose } from '../shell/tauri'
 import { toast } from '../components/useToast'
+import { testService } from '../core/services'
+import { AppError } from '../core/errors'
+vi.mock('../core/services', () => ({ testService: vi.fn() }))
 vi.mock('../components/useToast', () => ({ toast: vi.fn() }))
 
 vi.mock('../shell/tauri', () => ({
@@ -34,6 +37,7 @@ afterEach(() => {
 })
 async function mount(price?: number, setup?: (config: Config) => void) {
   const config = defaultConfig()
+  config.domains.unshift({ id: 1, name: '为人处世' })
   setup?.(config)
   config.services.text.price = price === undefined ? undefined : { input: price }
   const pending = vi.fn()
@@ -99,6 +103,54 @@ async function deleteFirstDomain(root: HTMLElement, existed = true) {
   await new Promise((resolve) => setTimeout(resolve, 0))
   await nextTick()
 }
+it('连接失败保持短提示，原文通过复制按钮提供，不再展开详细信息', async () => {
+  const { root } = await mount(undefined, (config) => {
+    config.services.text.apiKey = 'isolated-key'
+  })
+  vi.mocked(testService).mockRejectedValueOnce(
+    new AppError('network', '连接失败，请检查网络及接口地址。', 'TypeError: Failed to fetch'),
+  )
+  const test = [...root.querySelectorAll<HTMLButtonElement>('button')].find(
+    (button) => button.textContent?.trim() === '测试连接',
+  )
+  if (!test) throw new Error('没有测试连接按钮')
+  test.click()
+  for (let i = 0; i < 5; i++) await nextTick()
+  expect(root.textContent).toContain('连接失败，请检查网络及接口地址。')
+  expect(root.textContent).not.toContain('TypeError: Failed to fetch')
+  expect(root.querySelector('details')).toBeNull()
+  const copy = [...root.querySelectorAll('button')].find((button) => button.textContent === '复制错误信息')
+  if (!copy) throw new Error('缺少复制错误入口')
+  const writeText = vi.fn().mockResolvedValue(undefined)
+  vi.stubGlobal('navigator', { clipboard: { writeText } })
+  copy.click()
+  for (let i = 0; i < 3; i++) await nextTick()
+  expect(writeText).toHaveBeenCalledExactlyOnceWith('TypeError: Failed to fetch')
+  expect(toast).toHaveBeenCalledWith('已复制，反馈问题时可以粘贴给作者。')
+})
+it('设置页卸载后关闭监听才返回，也立即解除，不留下隐藏页询问', async () => {
+  let finish: ((release: Awaited<ReturnType<typeof guardClose>>) => void) | undefined
+  const release = vi.fn()
+  vi.mocked(guardClose).mockReturnValueOnce(
+    new Promise((resolve) => {
+      finish = resolve
+    }),
+  )
+  await mount()
+  app.unmount()
+  if (!finish) throw new Error('关闭监听未登记')
+  finish(release)
+  await nextTick()
+  expect(release).toHaveBeenCalledTimes(1)
+})
+it('隐私说明使用三句简明说明', async () => {
+  const { root } = await mount()
+  expect([...root.querySelectorAll('.privacy li')].map((li) => li.textContent)).toEqual([
+    '只把你放进来的内容和“本次要求”发给你自己配置的 AI 服务，其他笔记和电脑信息都不发送。',
+    '软件没有自己的服务器，不收集任何使用数据。',
+    '密钥只保存在本机的 Windows 凭据管理器里。',
+  ])
+})
 it('删除领域后配置保存失败，按已保存的位置恢复文件夹，列表保留', async () => {
   const { root } = await mount(undefined, (config) => (config.vaultPath = '隔离收藏库'))
   vi.mocked(saveConfig).mockRejectedValueOnce(new Error('磁盘写入失败'))

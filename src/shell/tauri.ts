@@ -3,6 +3,7 @@
 import { getVersion } from '@tauri-apps/api/app'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { Menu } from '@tauri-apps/api/menu'
 import { open } from '@tauri-apps/plugin-dialog'
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
 import type { Config } from '../core/config'
@@ -144,6 +145,21 @@ export const readUsage = async () => parseUsage(await invoke<string>('usage_read
 export const minimizeWindow = () => getCurrentWindow().minimize()
 export const toggleMaximizeWindow = () => getCurrentWindow().toggleMaximize()
 export const closeWindow = () => getCurrentWindow().close()
+let editMenu: Promise<Menu> | undefined
+export async function showEditMenu() {
+  editMenu ??= Menu.new({
+    items: [
+      { item: 'Cut', text: '剪切' },
+      { item: 'Copy', text: '复制' },
+      { item: 'Paste', text: '粘贴' },
+      { item: 'SelectAll', text: '全选' },
+    ],
+  }).catch((error: unknown) => {
+    editMenu = undefined
+    throw error
+  })
+  await (await editMenu).popup()
+}
 /**
  * 关窗口前问一句（F10、F22）：shouldAsk 返回 true 时拦下关闭，交给 ask 弹确认框。返回取消登记的函数。
  * 只向窗口注册一个监听：Tauri 里每个监听在自己没拦下时都会直接关掉窗口，多个页面各注册一个的话，

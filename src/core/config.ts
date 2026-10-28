@@ -21,16 +21,7 @@ const DEFAULT_SERVICES: Record<ServiceKind, { baseUrl: string; model: string }> 
   asr: { baseUrl: 'https://api.siliconflow.cn/v1', model: 'FunAudioLLM/SenseVoiceSmall' },
 }
 
-const DEFAULT_DOMAINS = [
-  { id: 1, name: '为人处世' },
-  { id: 2, name: '职场求职' },
-  { id: 3, name: '品牌商业' },
-  { id: 4, name: 'AI与Agent' },
-  { id: 5, name: '设计UI' },
-  { id: 6, name: '金融理财' },
-  { id: 7, name: '思考与表达' },
-  { id: OTHER_DOMAIN_ID, name: '其他' },
-]
+const DEFAULT_DOMAINS = [{ id: OTHER_DOMAIN_ID, name: '其他' }]
 
 const serviceSchema = (kind: ServiceKind) =>
   z

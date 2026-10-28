@@ -32,6 +32,7 @@ import {
 import { buildWelcomeNote, WELCOME_TITLE } from '../core/welcome'
 import { today } from '../core/note'
 import { testService } from '../core/services'
+import CopyErrorButton from '../components/CopyErrorButton.vue'
 import { describeError } from '../core/errors'
 import { toast } from '../components/useToast'
 import type { Config } from '../core/config'
@@ -67,6 +68,7 @@ interface OnboardingService {
   apiKey: string
   status: 'idle' | 'testing' | 'ok' | 'fail'
   message: string
+  detail?: string
 }
 function newService(kind: ServiceKind, recommended: boolean): OnboardingService {
   return {
@@ -94,7 +96,7 @@ const allServices = [...Object.values(recommendedServices), ...Object.values(cus
 const recommendedState = computed(() => {
   const required = [recommendedServices.text, recommendedServices.vision]
   const failed = required.find((s) => s.status === 'fail')
-  if (failed) return { status: 'fail', message: failed.message }
+  if (failed) return { status: 'fail', message: failed.message, detail: failed.detail }
   if (required.every((s) => s.status === 'ok')) return { status: 'ok', message: '文字与图片已连接' }
   if (required.some((s) => s.status === 'testing')) return { status: 'testing', message: '正在测试文字与图片…' }
   return { status: 'idle', message: '' }
@@ -142,6 +144,7 @@ function scheduleTest(s: OnboardingService) {
   requests.get(s)?.abort()
   s.status = 'idle'
   s.message = ''
+  s.detail = undefined
   if (
     !Object.values(services.value).includes(s) ||
     step.value !== 2 ||
@@ -170,7 +173,9 @@ function scheduleTest(s: OnboardingService) {
       if (controller.signal.aborted) return
       s.status = 'fail'
       const provider = aiMode.value === 'recommended' ? (s.kind === 'asr' ? '硅基流动' : 'DeepSeek') : undefined
-      s.message = describeError(error, provider).message
+      const described = describeError(error, provider)
+      s.message = described.message
+      s.detail = described.detail
     }
   }, 600)
   controller.signal.addEventListener('abort', () => clearTimeout(timer), { once: true })
@@ -537,6 +542,10 @@ function chooseVault(path: string) {
                         v-else-if="recommendedState.status === 'ok'"
                         :size="14"
                       />{{ recommendedState.message }}
+                      <CopyErrorButton
+                        v-if="recommendedState.status === 'fail' && recommendedState.detail"
+                        :detail="recommendedState.detail"
+                      />
                       <button v-if="recommendedState.status === 'fail'" v-press class="link" @click="retryRequired">
                         重试
                       </button>
@@ -590,6 +599,10 @@ function chooseVault(path: string) {
                               ? '正在测试连接…'
                               : recommendedServices.asr.message
                           }}
+                          <CopyErrorButton
+                            v-if="recommendedServices.asr.status === 'fail' && recommendedServices.asr.detail"
+                            :detail="recommendedServices.asr.detail"
+                          />
                           <button
                             v-if="recommendedServices.asr.status === 'fail'"
                             v-press
@@ -667,6 +680,10 @@ function chooseVault(path: string) {
                             ? '正在测试连接…'
                             : currentCustom.message || '填写完成后自动测试连接。'
                         }}
+                        <CopyErrorButton
+                          v-if="currentCustom.status === 'fail' && currentCustom.detail"
+                          :detail="currentCustom.detail"
+                        />
                         <button
                           v-if="currentCustom.status === 'fail'"
                           v-press

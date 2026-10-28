@@ -26,7 +26,7 @@ import {
 
 const props = defineProps<{ open: boolean }>()
 
-const AUTHOR = 'ChenyuFeng'
+const AUTHOR = 'Caraxes'
 const BLOG_URL = 'https://chenyu-blog.vercel.app/'
 /** 用到的主要开源项目、许可证和仓库地址（地址取自各依赖自己声明的 repository） */
 const CREDITS = [

@@ -16,20 +16,19 @@ import {
 } from './config'
 
 describe('parseConfig', () => {
+  it('已有用户的领域列表原样保留，不替换为新用户默认值', () => {
+    const domains = [
+      { id: 1, name: '为人处世' },
+      { id: 8, name: '摄影技巧' },
+      { id: 99, name: '其他' },
+    ]
+    expect(parseConfig(JSON.stringify({ domains })).domains).toEqual(domains)
+  })
   it('还没有配置过时返回默认配置', () => {
     const c = parseConfig(null)
     expect(c.vaultPath).toBe('')
     expect(c.services.text).toEqual({ baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash', apiKey: '' })
-    expect(c.domains.map((d) => d.name)).toEqual([
-      '为人处世',
-      '职场求职',
-      '品牌商业',
-      'AI与Agent',
-      '设计UI',
-      '金融理财',
-      '思考与表达',
-      '其他',
-    ])
+    expect(c.domains).toEqual([{ id: 99, name: '其他' }])
   })
 
   it('旧配置缺字段时用默认值补上，已有的值保留', () => {
@@ -42,9 +41,9 @@ describe('parseConfig', () => {
   it('领域列表被写坏时换回默认列表，而且每次是新的副本', () => {
     const a = parseConfig(JSON.stringify({ domains: 'oops' }))
     const b = parseConfig(JSON.stringify({ domains: [] }))
-    expect(a.domains).toHaveLength(8)
+    expect(a.domains).toHaveLength(1)
     a.domains[0].name = '被改了'
-    expect(b.domains[0].name).toBe('为人处世')
+    expect(b.domains[0].name).toBe('其他')
   })
 
   it('整个文件不是 JSON 时报错，不悄悄换成默认配置', () => {
@@ -64,7 +63,7 @@ describe('isConfigComplete', () => {
 })
 
 describe('领域', () => {
-  const domains = defaultConfig().domains
+  const domains = [{ id: 5, name: '设计UI' }, ...defaultConfig().domains]
   it('名称校验', () => {
     expect(checkDomainName('  ', domains)).toBe('请填写领域名。')
     expect(checkDomainName('设计/UI', domains)).toMatch('不能包含')
@@ -73,7 +72,7 @@ describe('领域', () => {
     expect(checkDomainName('读书笔记', domains)).toBeNull()
   })
   it('新编号跳过“其他”的 99', () => {
-    expect(nextDomainId(domains)).toBe(8)
+    expect(nextDomainId(domains)).toBe(6)
     expect(nextDomainId([...domains, { id: 98, name: 'x' }])).toBe(100)
   })
 })
@@ -179,6 +178,6 @@ describe('新增领域', () => {
   })
 
   it('名字不合规时返回原因', () => {
-    expect(addDomain(defaultConfig(), '为人处世')).toBe('该领域名已存在，请换一个名称。')
+    expect(addDomain(defaultConfig(), '其他')).toBe('该领域名已存在，请换一个名称。')
   })
 })

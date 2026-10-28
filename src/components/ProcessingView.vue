@@ -5,6 +5,7 @@
 import { vPress } from './pressFeedback'
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import FileTypeIcon from './FileTypeIcon.vue'
+import CopyErrorButton from './CopyErrorButton.vue'
 import { kindOfName, type FileKind } from './fileKind'
 import { type Job, STEP_LABELS } from '../core/pipeline'
 import type { ErrorCode } from '../core/errors'
@@ -134,11 +135,9 @@ function elapsed(s: { startedAt?: number; endedAt?: number }) {
 
       <template v-if="failed && error">
         <!-- 失败：在原来提示语的位置只写一行原因，不加底色；怎么办交给按钮 -->
-        <p class="hint fail-reason">{{ error.message }}</p>
-        <details v-if="error.detail" class="detail">
-          <summary>详细信息</summary>
-          <pre>{{ error.detail }}</pre>
-        </details>
+        <p class="hint fail-reason">
+          {{ error.message }} <CopyErrorButton v-if="error.detail" :detail="error.detail" />
+        </p>
         <div class="buttons">
           <button v-if="isAuthError" v-press="'tactile'" class="primary" @click="emit('goSettings')">去设置</button>
           <button v-else-if="canRetry" v-press="'tactile'" class="primary" @click="emit('retry')">重试</button>
@@ -385,19 +384,6 @@ function elapsed(s: { startedAt?: number; endedAt?: number }) {
 }
 .hint + .hint {
   margin-top: var(--sp-1);
-}
-.detail {
-  margin-top: var(--sp-1);
-  font-size: var(--fs-xs);
-  color: var(--faint);
-}
-.detail summary {
-  cursor: pointer;
-}
-.detail pre {
-  max-height: 96px;
-  overflow: auto;
-  white-space: pre-wrap;
 }
 /* 按钮紧跟在提示语下面 */
 .buttons {

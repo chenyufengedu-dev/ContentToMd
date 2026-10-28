@@ -4,7 +4,7 @@
 import { vPageFade } from '../components/pageFade'
 import { vImportSize } from '../components/importSize'
 import { vPress } from '../components/pressFeedback'
-import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef } from 'vue'
 import {
   type Config,
   SERVICE_LABELS,
@@ -53,7 +53,13 @@ import {
 } from '../components/icons'
 
 const props = withDefaults(defineProps<{ config: Config; prompts: Prompts; active?: boolean }>(), { active: true })
-const emit = defineEmits<{ goSettings: []; configChanged: [Config]; openNote: [path: string] }>()
+const emit = defineEmits<{
+  goSettings: []
+  configChanged: [Config]
+  openNote: [path: string]
+  revealForClose: []
+  closeCancelled: []
+}>()
 
 type Phase = 'drop' | 'processing' | 'failed' | 'confirm' | 'saved'
 const phase = ref<Phase>('drop')
@@ -536,8 +542,15 @@ function discardDraft() {
 
 // ---------------- 关闭窗口（F10，方案第 8 节，设计稿 设计稿/确认页/定稿-关闭确认弹窗.webp） ----------------
 const askClose = ref(false)
-const hasUnsaved = () => !!job.value && ['processing', 'failed', 'confirm'].includes(phase.value)
+function cancelClose() {
+  askClose.value = false
+  emit('closeCancelled')
+}
+const hasUnsaved = () =>
+  (phase.value === 'drop' && hasContent.value) ||
+  (!!job.value && ['processing', 'failed', 'confirm'].includes(phase.value))
 let unguard: (() => void) | undefined
+let disposed = false
 
 // ---------------- 保存后 ----------------
 const saved = ref<SavedNote | null>(null)
@@ -571,11 +584,19 @@ onMounted(() => {
   loadDraft()
     .then((d) => (pendingDraft.value = d))
     .catch(() => {})
-  guardClose(hasUnsaved, () => (askClose.value = true))
-    .then((f) => (unguard = f))
+  guardClose(hasUnsaved, async () => {
+    emit('revealForClose')
+    await nextTick()
+    askClose.value = true
+  })
+    .then((f) => {
+      if (disposed) f()
+      else unguard = f
+    })
     .catch(() => {})
 })
 onBeforeUnmount(() => {
+  disposed = true
   cancelImport()
   unguard?.()
   window.removeEventListener('keydown', onKey)
@@ -804,10 +825,10 @@ onBeforeUnmount(() => {
     title="关闭软件？"
     cancel-text="暂不关闭"
     ok-text="关闭软件"
-    @cancel="askClose = false"
+    @cancel="cancelClose"
     @ok="destroyWindow"
   >
-    <p>草稿会保留，下次打开可继续。</p>
+    <p>{{ phase === 'drop' ? '内容尚未处理，关闭后需要重新放入。' : '草稿会保留，下次打开可继续。' }}</p>
   </NoticeDialog>
 </template>
 

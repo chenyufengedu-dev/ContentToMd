@@ -2,7 +2,8 @@
 
 import { z } from 'zod'
 import type { Domain } from './config'
-import { OTHER_DOMAIN_ID } from './config'
+import { OTHER_DOMAIN_ID, checkDomainName } from './config'
+import domainSuggestion from '../prompts/_领域建议.md?raw'
 
 export type Mode = '原文精修' | '要点提炼' | '视觉收藏'
 export const MODES: Mode[] = ['要点提炼', '原文精修', '视觉收藏']
@@ -22,7 +23,10 @@ export function buildSystemPrompt(prompts: Prompts, mode: Mode, domains: Domain[
   const domainList = domains.map((d) => `${d.id} ${d.name}`).join('，')
   // 已有标签只附最常用的一部分，避免指令过长
   const tags = existingTags.length ? existingTags.slice(0, 200).join('、') : '（还没有）'
-  return prompts._通用.replace('{{领域列表}}', domainList).replace('{{已有标签}}', tags) + '\n\n' + prompts[mode]
+  const common = prompts._通用.includes('suggested_domain')
+    ? prompts._通用
+    : `${prompts._通用}\n${domainSuggestion.trim()}`
+  return common.replace('{{领域列表}}', domainList).replace('{{已有标签}}', tags) + '\n\n' + prompts[mode]
 }
 
 /**
@@ -60,6 +64,7 @@ const AiResultSchema = z.object({
     .min(1)
     .transform((t) => t.slice(0, 30)),
   domain_id: z.coerce.number().catch(Number.NaN),
+  suggested_domain: z.string().trim().min(2).max(6).optional().catch(undefined),
   tags: strList(8),
   keywords: strList(12),
   summary: z.string().trim().catch(''),
@@ -73,6 +78,7 @@ const AiResultSchema = z.object({
 export const NoteDraftSchema = z.object({
   title: z.string(),
   domainId: z.number(),
+  suggestedDomain: z.string().optional(),
   tags: z.array(z.string()),
   keywords: z.array(z.string()),
   summary: z.string(),
@@ -88,10 +94,15 @@ export function parseAiResult(
 ): { draft: NoteDraft; domainFallback: boolean; imageRegions: unknown[] } | null {
   const r = AiResultSchema.safeParse(raw)
   if (!r.success) return null
-  const { domain_id, image_regions, ...rest } = r.data
+  const { domain_id, image_regions, suggested_domain, ...rest } = r.data
   const known = domains.some((d) => d.id === domain_id)
+  const domainId = known ? domain_id : OTHER_DOMAIN_ID
+  const suggestion =
+    domainId === OTHER_DOMAIN_ID && suggested_domain && !checkDomainName(suggested_domain, domains)
+      ? suggested_domain
+      : undefined
   return {
-    draft: { ...rest, domainId: known ? domain_id : OTHER_DOMAIN_ID },
+    draft: { ...rest, domainId, ...(suggestion ? { suggestedDomain: suggestion } : {}) },
     domainFallback: !known,
     imageRegions: image_regions,
   }
