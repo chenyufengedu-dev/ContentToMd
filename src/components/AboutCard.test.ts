@@ -6,7 +6,7 @@ import { createApp, h, nextTick, ref, type App } from 'vue'
 import AboutCard from './AboutCard.vue'
 import { TIMELINE } from './aboutWriting'
 import { FEEDBACK_EMAIL, GITHUB_URL } from '../core/projectInfo'
-import { openLink } from '../shell/tauri'
+import { openLink, writeClipboard as nativeWriteClipboard } from '../shell/tauri'
 import { toast } from './useToast'
 
 const project = vi.hoisted(() => ({ repoPublic: false }))
@@ -20,6 +20,7 @@ vi.mock('../core/projectInfo', async (original) => ({
 vi.mock('../shell/tauri', () => ({
   appVersion: vi.fn().mockResolvedValue('0.0.1'),
   openLink: vi.fn(),
+  writeClipboard: vi.fn(),
 }))
 vi.mock('./useToast', () => ({ toast: vi.fn() }))
 
@@ -31,12 +32,11 @@ const animations: TestAnimation[] = []
 const originalAnimate = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'animate')
 let app: App | undefined
 let clock: MockInstance<() => number> | undefined
-const writeClipboard = vi.fn().mockResolvedValue(undefined)
+const writeClipboard = vi.mocked(nativeWriteClipboard)
 beforeEach(() => {
   vi.clearAllMocks()
   project.repoPublic = false
   writeClipboard.mockReset().mockResolvedValue(undefined)
-  vi.stubGlobal('navigator', { clipboard: { writeText: writeClipboard } })
   animations.length = 0
   vi.stubGlobal('matchMedia', () => ({ matches: false }))
   vi.stubGlobal(

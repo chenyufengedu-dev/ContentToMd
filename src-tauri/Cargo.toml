@@ -7,6 +7,7 @@ edition = "2021"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+clipboard-win = "5.4"
 gray_matter = "0.3.2"
 keyring = { version = "3.6.3", features = ["windows-native"] }
 serde = { version = "1.0.229", features = ["derive"] }

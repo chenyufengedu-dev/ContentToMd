@@ -1,7 +1,7 @@
 // 确认页预览（只在开发时用：npx vite 后打开 /dev/confirm.html）。
 // 用固定的示例内容渲染确认页，改样式时对照看；地址加 ?source=1 时直接切到原文对照，
 // 再加 &link=1 时自动点正文第二个小标题下的第一条，显示原文定位和连线（截图用）；
-// ?image=1 用 samples/网页滚动动画.png 看视觉收藏（按一个假的 AI 主体区域自动裁剪），再加 &crop=1 直接打开调整裁剪
+// ?image=1 用自绘读书笔记流程图看视觉收藏，再加 &crop=1 直接打开调整裁剪
 // ?savefail=1 模拟保存失败（见文件末尾）
 import { createApp, h, nextTick, reactive } from 'vue'
 import '../src/style.css'
@@ -15,21 +15,24 @@ import { SAMPLE_JOB, SAMPLE_EXISTING_TAGS, SAMPLE_IMAGE_DRAFT } from './sample'
 const query = new URLSearchParams(location.search)
 
 async function imageJob(): Promise<Job> {
-  const blob = await (await fetch('/samples/网页滚动动画.png')).blob()
-  const job = newImageJob([new File([blob], '网页滚动动画.png', { type: 'image/png' })], '视觉收藏')
+  const blob = await (await fetch('/assets/reading-notes.svg')).blob()
+  const job = newImageJob([new File([blob], '读书笔记流程.svg', { type: 'image/svg+xml' })], '视觉收藏')
   job.draft = SAMPLE_IMAGE_DRAFT
-  job.source = 'https://www.xiaohongshu.com/explore/xxxx'
+  job.source = 'https://example.com/reading-notes'
   const img = job.images![0]
   img.autoCrop = img.crop = autoCrop(await readPixels(img.file), [0, 0.12, 1, 0.76])
   return job
 }
 
 const job = query.has('image') ? await imageJob() : SAMPLE_JOB
+const config = defaultConfig()
+config.vaultPath = 'D:/演示收藏库'
+config.domains.unshift({ id: 1, name: '学习阅读' })
 createApp({
   render: () => [
     h(TitleBar, { page: 'home', onlySettings: false }),
     h(ConfirmPage, {
-      config: { ...defaultConfig(), vaultPath: 'D:/测试收藏库' },
+      config,
       job: reactive(job),
       existingTags: SAMPLE_EXISTING_TAGS,
     }),

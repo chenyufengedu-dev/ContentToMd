@@ -4,14 +4,14 @@ import { ChevronRight } from './icons'
 import { vPress } from './pressFeedback'
 import { toast } from './useToast'
 import { FEEDBACK_EMAIL, GITHUB_URL, REPO_PUBLIC } from '../core/projectInfo'
-import { openLink } from '../shell/tauri'
+import { openLink, writeClipboard } from '../shell/tauri'
 
 defineProps<{ version: string }>()
 const emit = defineEmits<{ close: [] }>()
 
 async function copyEmail() {
   try {
-    await navigator.clipboard.writeText(FEEDBACK_EMAIL)
+    await writeClipboard(FEEDBACK_EMAIL)
   } catch {
     toast('邮箱复制失败，请手动复制。', { kind: 'error' })
     return

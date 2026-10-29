@@ -19,6 +19,7 @@ import {
   switchVaultKind,
   storeLabel,
   notesRoot,
+  defaultConfig,
 } from '../core/config'
 import { testService } from '../core/services'
 import CopyErrorButton from '../components/CopyErrorButton.vue'
@@ -638,7 +639,7 @@ async function save(): Promise<boolean> {
     if (submitted.vault.kind === 'obsidian' && submitted.vaultPath && submitted.vault.subfolder.trim())
       await ensureSubfolder(submitted.vaultPath, submitted.vault.subfolder.trim())
     if (submitted.vaultPath && notesRoot(submitted) !== savedRoot())
-      submitted.domains = (await inspectCollection(submitted)).config.domains
+      submitted.domains = (await inspectCollection({ ...submitted, domains: defaultConfig().domains })).config.domains
     await saveConfig(submitted)
     if (notesRoot(draft) === notesRoot(submitted)) draft.domains = submitted.domains
     saved.value = JSON.stringify(submitted)

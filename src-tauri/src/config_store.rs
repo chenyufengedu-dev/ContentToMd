@@ -47,6 +47,10 @@ pub fn save(dir: &Path, json: &str) -> Result<(), String> {
     save_at(dir, json, &windows_secrets(dir)?)
 }
 
+pub fn clear_secrets(dir: &Path) -> Result<(), String> {
+    windows_secrets(dir)?.write(None)
+}
+
 trait Secrets {
     fn read(&self) -> Result<Option<String>, String>;
     fn write(&self, value: Option<&str>) -> Result<(), String>;
@@ -321,7 +325,7 @@ mod tests {
                 fs::read_to_string(dir.0.join("config.json")).map_err(|e| e.to_string())?,
             ))
         })();
-        secrets.write(None).unwrap();
+        clear_secrets(&dir.0).unwrap();
         let (loaded, credential, disk) = outcome.unwrap();
         let loaded: Value = serde_json::from_str(&loaded.unwrap()).unwrap();
         assert_eq!(loaded["services"]["text"]["apiKey"], "test-only-text");

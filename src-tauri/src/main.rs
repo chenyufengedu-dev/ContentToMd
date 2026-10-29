@@ -1,8 +1,10 @@
 // 发布版不弹出控制台窗口
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod clipboard;
 mod config_store;
 mod onboarding;
+mod uninstall;
 mod window_state;
 
 use std::collections::HashMap;
@@ -1302,6 +1304,13 @@ fn destroy_window(window: tauri::Window) -> tauri::Result<()> {
 }
 
 fn main() {
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--uninstall-cleanup")) {
+        let result = uninstall::run();
+        if let Err(error) = &result {
+            eprintln!("{error}");
+        }
+        std::process::exit(if result.is_ok() { 0 } else { 1 });
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             if let Some(window) = app.get_webview_window("main") {
@@ -1335,6 +1344,8 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            clipboard::read_clipboard,
+            clipboard::write_clipboard,
             destroy_window,
             load_config,
             onboarding::load_onboarding,
@@ -1394,9 +1405,9 @@ mod tests {
     }
 
     /// 每个用例一个独立的临时收藏库，测完删掉
-    struct TempVault(PathBuf);
+    pub(super) struct TempVault(pub(super) PathBuf);
     impl TempVault {
-        fn new(name: &str) -> Self {
+        pub(super) fn new(name: &str) -> Self {
             let p = std::env::temp_dir()
                 .join(format!("contenttomd-test-{name}-{}", std::process::id()));
             let _ = fs::remove_dir_all(&p);

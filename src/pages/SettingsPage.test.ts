@@ -11,6 +11,7 @@ import {
   guardClose,
   inspectCollection,
   pickFolder,
+  writeClipboard,
 } from '../shell/tauri'
 import { toast } from '../components/useToast'
 import { testService } from '../core/services'
@@ -26,6 +27,7 @@ vi.mock('../shell/tauri', () => ({
   listSubfolders: vi.fn().mockResolvedValue([]),
   guardClose: vi.fn().mockResolvedValue(() => {}),
   pickFolder: vi.fn(),
+  writeClipboard: vi.fn(),
   countDomainNotes: vi.fn(),
   deleteDomain: vi.fn(),
   restoreDomain: vi.fn(),
@@ -130,8 +132,7 @@ it('连接失败保持短提示，原文通过复制按钮提供，不再展开�
   expect(root.querySelector('details')).toBeNull()
   const copy = [...root.querySelectorAll('button')].find((button) => button.textContent === '复制错误信息')
   if (!copy) throw new Error('缺少复制错误入口')
-  const writeText = vi.fn().mockResolvedValue(undefined)
-  vi.stubGlobal('navigator', { clipboard: { writeText } })
+  const writeText = vi.mocked(writeClipboard).mockResolvedValueOnce(undefined)
   copy.click()
   for (let i = 0; i < 3; i++) await nextTick()
   expect(writeText).toHaveBeenCalledExactlyOnceWith('TypeError: Failed to fetch')
@@ -161,11 +162,11 @@ it('隐私说明使用三句简明说明', async () => {
   ])
 })
 
-it('切换到已有收藏库时，补充领域后保存并更新设置列表', async () => {
+it('切换到已有收藏库时，重建领域后保存，不沿用旧库领域', async () => {
   const { root, vm, saved } = await mount()
   vi.mocked(pickFolder).mockResolvedValueOnce('C:\\test\\已有库')
   vi.mocked(inspectCollection).mockImplementationOnce(async (config) => ({
-    config: { ...config, domains: [config.domains[0], { id: 2, name: '设计UI' }, config.domains[1]] },
+    config: { ...config, domains: [{ id: 1, name: '设计UI' }, ...config.domains] },
     hasNotes: true,
   }))
   const choose = [...root.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === '选择文件夹')
@@ -173,10 +174,47 @@ it('切换到已有收藏库时，补充领域后保存并更新设置列表', a
   choose.click()
   for (let i = 0; i < 3; i++) await nextTick()
   expect(await vm.save()).toBe(true)
-  expect(inspectCollection).toHaveBeenCalledWith(expect.objectContaining({ vaultPath: 'C:\\test\\已有库' }))
-  expect(saved.mock.lastCall?.[0].domains.map((d: { name: string }) => d.name)).toEqual(['为人处世', '设计UI', '其他'])
+  expect(inspectCollection).toHaveBeenCalledWith(
+    expect.objectContaining({
+      vaultPath: 'C:\\test\\已有库',
+      domains: [{ id: 99, name: '其他' }],
+    }),
+  )
+  expect(saved.mock.lastCall?.[0].domains.map((d: { name: string }) => d.name)).toEqual(['设计UI', '其他'])
   expect(root.querySelector('[aria-label="删除领域 设计UI"]')).not.toBeNull()
+  expect(root.querySelector('[aria-label="删除领域 为人处世"]')).toBeNull()
 })
+it('切换到空收藏库后只有其他，同一收藏库保存设置则保留自建领域', async () => {
+  const { root, vm, saved } = await mount(undefined, (config) => {
+    config.vaultPath = 'C:\\test\\旧库'
+  })
+  expect(await vm.save()).toBe(true)
+  expect(inspectCollection).not.toHaveBeenCalled()
+  expect(saved.mock.lastCall?.[0].domains.map((d: { name: string }) => d.name)).toEqual(['为人处世', '其他'])
+  vi.mocked(pickFolder).mockResolvedValueOnce('C:\\test\\空库')
+  const choose = [...root.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === '选择文件夹')
+  if (!choose) throw new Error('缺少选择文件夹按钮')
+  choose.click()
+  for (let i = 0; i < 3; i++) await nextTick()
+  expect(await vm.save()).toBe(true)
+  expect(saved.mock.lastCall?.[0].domains).toEqual([{ id: 99, name: '其他' }])
+  expect(root.querySelector('[aria-label="删除领域 为人处世"]')).toBeNull()
+})
+
+it('新收藏库读取失败时，不保存新配置或清除旧领域', async () => {
+  const { root, vm, saved } = await mount()
+  vi.mocked(pickFolder).mockResolvedValueOnce('C:\\test\\不可读库')
+  vi.mocked(inspectCollection).mockRejectedValueOnce(new Error('模拟目录读取失败'))
+  const choose = [...root.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === '选择文件夹')
+  if (!choose) throw new Error('缺少选择文件夹按钮')
+  choose.click()
+  for (let i = 0; i < 3; i++) await nextTick()
+  expect(await vm.save()).toBe(false)
+  expect(saved).not.toHaveBeenCalled()
+  expect(saveConfig).not.toHaveBeenCalled()
+  expect(root.querySelector('[aria-label="删除领域 为人处世"]')).not.toBeNull()
+})
+
 it('删除领域后配置保存失败，按已保存的位置恢复文件夹，列表保留', async () => {
   const { root } = await mount(undefined, (config) => (config.vaultPath = '隔离收藏库'))
   vi.mocked(saveConfig).mockRejectedValueOnce(new Error('磁盘写入失败'))

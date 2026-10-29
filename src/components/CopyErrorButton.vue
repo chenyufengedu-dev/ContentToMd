@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { vPress } from './pressFeedback'
 import { toast } from './useToast'
+import { writeClipboard } from '../shell/tauri'
 
 const props = defineProps<{ detail: string }>()
 async function copy() {
   try {
-    await navigator.clipboard.writeText(props.detail)
+    await writeClipboard(props.detail)
   } catch {
     toast('复制失败，请稍后重试。', { kind: 'error' })
     return

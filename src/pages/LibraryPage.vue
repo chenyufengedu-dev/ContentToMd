@@ -270,6 +270,9 @@ defineExpose({ load })
   position: sticky;
   top: var(--sp-6);
   align-self: start;
+  max-height: calc(100vh - var(--titlebar-h) - var(--sp-6) - var(--sp-7));
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
 }
 .group-label {
   margin: 0 0 var(--sp-4);

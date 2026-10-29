@@ -3,6 +3,8 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { createApp, nextTick, type App } from 'vue'
 import CopyErrorButton from './CopyErrorButton.vue'
 import { toast } from './useToast'
+import { writeClipboard } from '../shell/tauri'
+vi.mock('../shell/tauri', () => ({ writeClipboard: vi.fn() }))
 vi.mock('./useToast', () => ({ toast: vi.fn() }))
 let app: App | undefined
 afterEach(() => {
@@ -13,8 +15,9 @@ afterEach(() => {
 })
 it.each([true, false])('复制技术原文并提示结果（成功：%s）', async (success) => {
   vi.stubGlobal('matchMedia', () => ({ matches: true }))
-  const writeText = success ? vi.fn().mockResolvedValue(undefined) : vi.fn().mockRejectedValue(new Error('denied'))
-  vi.stubGlobal('navigator', { clipboard: { writeText } })
+  const writeText = vi.mocked(writeClipboard)
+  if (success) writeText.mockResolvedValueOnce(undefined)
+  else writeText.mockRejectedValueOnce(new Error('denied'))
   const root = document.createElement('div')
   document.body.append(root)
   app = createApp(CopyErrorButton, { detail: 'HTTP 500 provider diagnostic' })

@@ -8,7 +8,7 @@ import { defaultConfig } from '../core/config'
 import { DEFAULT_PROMPTS } from '../core/defaultPrompts'
 import { readDocx, readPdf } from '../core/docText'
 import { runJob } from '../core/pipeline'
-import { writeNote, guardClose } from '../shell/tauri'
+import { writeNote, guardClose, writeClipboard } from '../shell/tauri'
 
 vi.mock('../shell/tauri', () => ({
   loadDraft: vi.fn().mockResolvedValue(null),
@@ -17,6 +17,7 @@ vi.mock('../shell/tauri', () => ({
   saveDraft: vi.fn().mockResolvedValue(undefined),
   listVaultTags: vi.fn().mockResolvedValue([]),
   appendUsage: vi.fn(),
+  writeClipboard: vi.fn().mockResolvedValue(undefined),
   httpFetch: vi.fn(),
   destroyWindow: vi.fn(),
   writeNote: vi.fn().mockResolvedValue('为人处世/测试.md'),
@@ -197,11 +198,9 @@ it('隐藏首页不拦截粘贴或响应开始快捷键，返回后恢复', asyn
   expect(root.textContent).toContain('操作失败，请重试。')
   const copy = [...root.querySelectorAll('button')].find((b) => b.textContent === '复制错误信息')
   if (!copy) throw new Error('缺少错误原文复制入口')
-  const writeText = vi.fn().mockResolvedValue(undefined)
-  vi.stubGlobal('navigator', { clipboard: { writeText } })
   copy.click()
   await flush()
-  expect(writeText).toHaveBeenCalledExactlyOnceWith('隔离测试停止处理')
+  expect(writeClipboard).toHaveBeenCalledExactlyOnceWith('隔离测试停止处理')
 })
 it('隐藏的确认页也不响应保存快捷键，返回后正常保存', async () => {
   const { root, state, pick } = await mount()
