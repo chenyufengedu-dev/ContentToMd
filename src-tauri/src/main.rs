@@ -855,6 +855,14 @@ fn save_note_at(
     if !same {
         fs::remove_file(&old).map_err(|e| io_msg(&old, e))?;
     }
+    // 笔记落盘后再清理旧引用；读不全其他笔记时保留图片，清理失败不回滚已保存的笔记。
+    if let Ok(images) = unreferenced_attachments(root, expected, "") {
+        for image in images {
+            if let Ok(path) = inside_root(root, &image) {
+                let _ = trash::delete(path);
+            }
+        }
+    }
     Ok(format!("{domain}/{stem}.md"))
 }
 
@@ -906,12 +914,14 @@ fn attachment_refs(text: &str) -> Vec<String> {
 }
 
 /// 各领域文件夹下所有 .md 的相对路径（和收藏库页读的范围一样）
-fn all_note_paths(root: &std::path::Path) -> Vec<String> {
+fn all_note_paths(root: &std::path::Path) -> Result<Vec<String>, String> {
     let mut v = Vec::new();
-    let Ok(domains) = fs::read_dir(root) else {
-        return v;
-    };
-    for d in domains.flatten().filter(|d| d.path().is_dir()) {
+    let domains = fs::read_dir(root).map_err(|e| io_msg(root, e))?;
+    for d in domains {
+        let d = d.map_err(|e| io_msg(root, e))?;
+        if !d.path().is_dir() {
+            continue;
+        }
         if ensure_inside(root, &d.path()).is_err() {
             continue;
         }
@@ -919,10 +929,9 @@ fn all_note_paths(root: &std::path::Path) -> Vec<String> {
         if domain.starts_with('.') || domain == "附件" {
             continue;
         }
-        let Ok(files) = fs::read_dir(d.path()) else {
-            continue;
-        };
-        for f in files.flatten() {
+        let files = fs::read_dir(d.path()).map_err(|e| io_msg(&d.path(), e))?;
+        for f in files {
+            let f = f.map_err(|e| io_msg(&d.path(), e))?;
             if ensure_inside(root, &f.path()).is_err() {
                 continue;
             }
@@ -934,19 +943,34 @@ fn all_note_paths(root: &std::path::Path) -> Vec<String> {
             }
         }
     }
-    v
+    Ok(v)
 }
 
 /// 删除这条笔记时该一起删的图片：它引用的、文件还在、别的笔记都没用到的
 fn unused_attachments(root: &std::path::Path, rel: &str) -> Result<Vec<String>, String> {
     let path = inside_root(root, rel)?;
     let text = fs::read_to_string(&path).map_err(|e| io_msg(&path, e))?;
-    let others: Vec<String> = all_note_paths(root)
+    unreferenced_attachments(root, &text, rel)
+}
+
+fn unreferenced_attachments(
+    root: &std::path::Path,
+    text: &str,
+    excluded_note: &str,
+) -> Result<Vec<String>, String> {
+    let candidates = attachment_refs(text);
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+    let others = all_note_paths(root)?
         .into_iter()
-        .filter(|p| p != rel)
-        .filter_map(|p| fs::read_to_string(root.join(&p)).ok())
-        .collect();
-    Ok(attachment_refs(&text)
+        .filter(|p| p != excluded_note)
+        .map(|p| {
+            let path = inside_root(root, &p)?;
+            fs::read_to_string(&path).map_err(|e| io_msg(&path, e))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(candidates
         .into_iter()
         .filter(|a| inside_root(root, a).is_ok_and(|p| p.is_file()))
         .filter(|a| !others.iter().any(|o| attachment_refs(o).contains(a)))
@@ -1051,9 +1075,11 @@ fn count_domain_notes(root: String, domain: String) -> Result<usize, String> {
 /// 删除领域时一起放进回收站的图片：这个领域里的笔记用到的、别的领域的笔记都没用到的
 fn images_only_in_domain(root: &std::path::Path, domain: &str) -> Vec<String> {
     let prefix = format!("{domain}/");
-    let (inside, outside): (Vec<String>, Vec<String>) = all_note_paths(root)
-        .into_iter()
-        .partition(|p| p.starts_with(&prefix));
+    let Ok(paths) = all_note_paths(root) else {
+        return Vec::new();
+    };
+    let (inside, outside): (Vec<String>, Vec<String>) =
+        paths.into_iter().partition(|p| p.starts_with(&prefix));
     let outside_text: Vec<String> = outside
         .iter()
         .filter_map(|p| fs::read_to_string(root.join(p)).ok())
@@ -1709,6 +1735,51 @@ aliases:
         );
         assert!(save_note_at(&root, "其他/甲.md", "..", "甲", "x", "甲的内容").is_err());
         assert!(save_note_at(&root, "../外面.md", "其他", "甲", "x", "").is_err());
+    }
+
+    #[test]
+    fn 保存后仅清理被替换且不再引用的附件() {
+        let v = TempVault::new("replaced-images");
+        fs::create_dir_all(v.0.join("附件")).unwrap();
+        for name in ["旧图", "共享", "新图", "无关"] {
+            fs::write(v.0.join(format!("附件/{name}.png")), b"image").unwrap();
+        }
+        let old = "![](../附件/旧图.png)\n![](../附件/共享.png)";
+        let rel = write(&v, "其他", "甲", old).unwrap();
+        write(&v, "其他", "乙", "![](../附件/共享.png)").unwrap();
+        let new = "![](../附件/新图.png)";
+        assert!(save_note_at(&v.0, &rel, "其他", "甲", new, "过期内容").is_err());
+        assert!(v.0.join("附件/旧图.png").exists());
+        save_note_at(&v.0, &rel, "新领域", "甲", new, old).unwrap();
+        assert!(!v.0.join("附件/旧图.png").exists());
+        for name in ["共享", "新图", "无关"] {
+            assert!(v.0.join(format!("附件/{name}.png")).exists());
+        }
+        fs::write(v.0.join("附件/再裁剪.png"), b"cropped").unwrap();
+        save_note_at(
+            &v.0,
+            "新领域/甲.md",
+            "新领域",
+            "甲",
+            "![](../附件/再裁剪.png)",
+            new,
+        )
+        .unwrap();
+        assert!(!v.0.join("附件/新图.png").exists());
+        assert!(v.0.join("附件/再裁剪.png").exists());
+    }
+
+    #[test]
+    fn 保存时无法读取其他笔记就保留旧附件() {
+        let v = TempVault::new("unreadable-image-reference");
+        fs::create_dir_all(v.0.join("附件")).unwrap();
+        fs::write(v.0.join("附件/旧图.png"), b"image").unwrap();
+        let old = "![](../附件/旧图.png)";
+        let rel = write(&v, "其他", "甲", old).unwrap();
+        fs::write(v.0.join("其他/无法读取.md"), [0xff]).unwrap();
+        save_note_at(&v.0, &rel, "其他", "甲", "新正文", old).unwrap();
+        assert!(v.0.join("附件/旧图.png").exists());
+        assert_eq!(fs::read_to_string(v.0.join(rel)).unwrap(), "新正文");
     }
 
     #[test]

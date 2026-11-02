@@ -345,7 +345,7 @@ function picture() {
     saved: [{ path: '../附件/原图.png', caption: '原始说明' }],
   }
 }
-it('编辑页仅裁剪图片也触发待保存，另存附件并同步正文与封面，原附件保留', async () => {
+it('编辑页仅裁剪图片也触发待保存，另存附件并同步正文与封面，旧附件由保存入口清理', async () => {
   const pictures = picture()
   const view = await mount('正文不变', true, pictures)
   await cropFirst(view.root)
