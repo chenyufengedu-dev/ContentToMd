@@ -26,7 +26,7 @@ Platform bookmarks, phone albums, and local folders each hold a piece, with no s
 
 ContentToMd shortens that distance: **drop scattered content in, let AI organize it, review it, and save it to one knowledge base.** Notes are plain Markdown files that work directly in Obsidian, where you can keep linking, searching, and building.
 
-## What's different
+## Features
 
 - **One entry point for many formats.** Video, audio, screenshots, text-based PDFs, Word (DOCX), and text files all go through the same window and come out as notes in a consistent format.
 - **A knowledge base that grows its own structure.** Notes are filed by domain and can carry tags. When no domain fits, AI suggests a new one; it's created only if you approve.
