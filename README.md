@@ -1,5 +1,7 @@
 # ContentToMd
 
+简体中文 | [English](README.en.md)
+
 **收藏不再散落，让值得留下的内容进入自己的知识库。**
 
 ContentToMd 是一个 Windows 桌面工具，把视频、音频、截图和文档整理成 Markdown 笔记，存进 Obsidian 或本地文件夹。
@@ -63,6 +65,7 @@ It supports local video and audio files, screenshots, text-based PDFs, DOCX docu
 Review and edit the generated notes alongside the source before saving them.
 Save notes and attachments directly to an Obsidian vault or a local folder.
 Use your own API keys for compatible AI services, with usage billed by your provider.
+Full English README: [README.en.md](README.en.md).
 
 ## 许可证
 
