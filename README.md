@@ -34,7 +34,7 @@ ContentToMd 想缩短这段距离：**把散落的内容放进来，让 AI 帮�
 
 ## 怎么用
 
-1. **安装。** 运行 Windows 10/11 x64 安装包，安装包暂由作者提供。
+1. **安装。** 从 [Releases](https://github.com/chenyufengedu-dev/ContentToMd/releases) 下载 `ContentToMd_x.y.z_x64-setup.exe` 并运行（Windows 10/11 x64）。当前为早期测试版。
 2. **配置。** 跟随引导选择收藏库、填写 AI 密钥。[DeepSeek](https://platform.deepseek.com/api_keys) 用于文字和看图，[硅基流动](https://cloud.siliconflow.cn/account/ak) 用于音视频转写：注册登录 → 按需充值 → 创建并复制密钥。也可在设置中配置其他兼容服务。
 3. **整理。** 拖入、粘贴或选择内容，选用要点提炼、原文精修或视觉收藏，检查后保存。支持图片、音视频、MD/TXT、可提取文字的 PDF 和 DOCX。
 
