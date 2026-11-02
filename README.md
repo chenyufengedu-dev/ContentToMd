@@ -1,22 +1,24 @@
 # ContentToMd
 
-**把每天遇到的好东西，变成自己的知识库。**
+**收藏不再散落，让值得留下的内容进入自己的知识库。**
 
-刷到有用的视频、随手截的图、存下的文档，ContentToMd 把它们整理成 Markdown 笔记，按领域归档，放进你的 Obsidian 或自己选择的文件夹，长期积累、随时查找。
+刷小红书、抖音时保存的视频，随手截的图、拍的照片、下载的文档，常常散在不同平台和文件夹里。收藏了很多，真正需要时却找不到。
+
+ContentToMd 把这些内容统一整理成 Markdown 笔记，核对后按领域归档，存进 Obsidian 或自己选择的文件夹。让收藏不只停在“存过”，而是成为可以查找、回看和继续积累的知识。
 
 ![Windows](https://img.shields.io/badge/Windows-10%2F11%20x64-0078D4)
 ![Version](https://img.shields.io/badge/version-0.1.0-5b5bd6)
 [![License](https://img.shields.io/badge/license-MIT-1f2937)](LICENSE)
 
-<!-- 演示动图占位：![ContentToMd 使用演示](assets/screenshots/demo.gif) -->
-
-![ContentToMd 笔记编辑界面](assets/screenshots/note.png)
+![ContentToMd 使用演示](assets/screenshots/demo.gif)
 
 ## 为什么做它
 
-我对很多事情都好奇，看到值得学的就截图、存文档、下载视频。可存下来的东西散在各处，很少再打开，更谈不上变成自己的知识。
+喜欢保存内容的人，往往不缺收藏，缺的是把收藏变成知识库的那一步。
 
-ContentToMd 想补上中间这一步：**收藏 → 整理 → 归档 → 积累**。AI 负责把内容理成笔记，我负责核对和决定留下什么，最后它们都进了同一个知识库。
+平台收藏夹、手机相册、本地文件夹各存一份，没有统一入口；手动搬到一起，还要自己提炼、命名、分类。整理成本越高，存下来的内容就越容易被遗忘。
+
+ContentToMd 想缩短这段距离：**把散落的内容放进来，让 AI 帮忙整理，核对后存进同一个知识库。** 笔记是普通 Markdown 文件，可以直接接入 Obsidian，继续链接、搜索和积累，让外界的信息逐渐沉淀为自己的知识。
 
 ## 有什么不同
 
@@ -26,15 +28,15 @@ ContentToMd 想补上中间这一步：**收藏 → 整理 → 归档 → 积累
 - **直接接上 Obsidian。** 笔记是普通 Markdown 加附件，存进 Obsidian 库就能用，可以继续链接、搜索、整理。不用注册 ContentToMd 账号，软件没有自己的服务器，文件永远是你的。
 - **用自己的密钥，按量付费。** 软件免费，少量文字整理大约一条一分钱。
 
+![ContentToMd 笔记编辑界面](assets/screenshots/note.png)
+
 ## 怎么用
 
 1. **安装。** 运行 Windows 10/11 x64 安装包，安装包暂由作者提供。
 2. **配置。** 跟随引导选择收藏库、填写 AI 密钥。[DeepSeek](https://platform.deepseek.com/api_keys) 用于文字和看图，[硅基流动](https://cloud.siliconflow.cn/account/ak) 用于音视频转写：注册登录 → 按需充值 → 创建并复制密钥。也可在设置中配置其他兼容服务。
 3. **整理。** 拖入、粘贴或选择内容，选用要点提炼、原文精修或视觉收藏，检查后保存。支持图片、音视频、MD/TXT、可提取文字的 PDF 和 DOCX。
 
-## 费用与隐私
-
-以 DeepSeek Flash 输入 3000、输出 1000 tokens 为例，不计缓存优惠约 **0.007～0.014 元**，以[服务商定价和账单](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)为准。填好单价后，保存时显示单条估算，设置页可查看本月和累计费用。
+## 数据与隐私
 
 处理时，本次内容、整理要求和领域、标签名称会发给你配置的 AI 服务；不发送其他笔记正文。密钥只保存在本机 Windows 凭据管理器中。
 
