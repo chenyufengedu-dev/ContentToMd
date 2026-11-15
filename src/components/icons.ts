@@ -144,6 +144,49 @@ export const Hash = icon(
   'Hash',
   '<path d="M6.75 3.5L5.75 14.5M12.5 3.5l-1 11"/><path class="l2" d="M3.5 6.75h11.5M3 11.25h11.5"/>',
 )
+export const ModeKeyPoints = icon(
+  'ModeKeyPoints',
+  '<rect class="soft l2" x="3" y="2.5" width="12" height="13" rx="2.5"/><path d="M6.25 6.5h0M6.25 9.25h0M6.25 12h0" style="stroke-width:2"/><path class="a txt-line" d="M8.75 6.5h3.25"/><path class="l2 a txt-line txt-line2" d="M8.75 9.25h3.25"/><path class="l2 a txt-line txt-line3" d="M8.75 12h2"/>',
+)
+export const ModeRefine = icon(
+  'ModeRefine',
+  '<path class="l2" d="M10.5 2.5H5.5A2.5 2.5 0 0 0 3 5v8a2.5 2.5 0 0 0 2.5 2.5h7A2.5 2.5 0 0 0 15 13V8.25"/><path class="l2" d="M6 7h3M6 9.75h6M6 12.5h4.5"/><path class="soft a part plus-s" d="M13.75 1.75l.75 1.75 1.75.75-1.75.75-.75 1.75-.75-1.75-1.75-.75 1.75-.75z"/>',
+)
+export const ModeVisual = icon(
+  'ModeVisual',
+  '<rect class="soft l2" x="3" y="2.5" width="12" height="13" rx="2.5"/><circle class="a part img-sun" cx="7" cy="6.75" r="1.25"/><path class="a img-hills" d="M3.25 12.5l3-2.6a1.5 1.5 0 0 1 2 0l1.6 1.4 1-.85a1.5 1.5 0 0 1 1.95 0l2 1.75"/>',
+)
+export const ModeExtract = icon(
+  'ModeExtract',
+  '<g class="a part extract-frame"><path d="M3 6V5a2 2 0 0 1 2-2h1M12 3h1a2 2 0 0 1 2 2v1M15 12v1a2 2 0 0 1-2 2h-1M6 15H5a2 2 0 0 1-2-2v-1"/></g><path class="a txt-line extract-l1" d="M6.25 7.5h5.5"/><path class="l2 a txt-line extract-l2" d="M6.25 10.5h3.5"/><path class="part extract-scan" d="M4.5 9h9"/>',
+)
+export const Play = icon(
+  'Play',
+  '<path class="soft a part play-tri" d="M6 4.6a1 1 0 0 1 1.52-.85l6.6 4.4a1 1 0 0 1 0 1.7l-6.6 4.4A1 1 0 0 1 6 13.4z"/>',
+)
+export const Pause = icon(
+  'Pause',
+  '<rect class="soft a part pause-1" x="4.75" y="4" width="3" height="10" rx="1"/><rect class="soft a part pause-2" x="10.25" y="4" width="3" height="10" rx="1"/>',
+)
+const speaker =
+  '<path class="soft" d="M2.75 7.5a1 1 0 0 1 1-1h1.75l3.35-2.6a.6.6 0 0 1 .97.47v9.26a.6.6 0 0 1-.97.47L5.5 11.5H3.75a1 1 0 0 1-1-1z"/>'
+export const Volume = icon(
+  'Volume',
+  speaker +
+    '<path class="a vol-w1" d="M12.25 6.75a3.2 3.2 0 0 1 0 4.5"/><path class="l2 a vol-w2" d="M14.5 4.75a6 6 0 0 1 0 8.5"/>',
+)
+export const VolumeMute = icon(
+  'VolumeMute',
+  speaker + '<g class="a part x-all"><path d="M12.5 7.25l3.5 3.5M16 7.25l-3.5 3.5"/></g>',
+)
+export const Expand = icon(
+  'Expand',
+  '<path class="a ex-1" d="M3 6.75V5a2 2 0 0 1 2-2h1.75"/><path class="a ex-2" d="M11.25 3H13a2 2 0 0 1 2 2v1.75"/><path class="a ex-3" d="M15 11.25V13a2 2 0 0 1-2 2h-1.75"/><path class="a ex-4" d="M6.75 15H5a2 2 0 0 1-2-2v-1.75"/>',
+)
+export const Camera = icon(
+  'Camera',
+  '<path class="soft l2" d="M2.5 7.25a2 2 0 0 1 2-2h1.4l.9-1.35a1 1 0 0 1 .83-.45h2.74a1 1 0 0 1 .83.45l.9 1.35h1.4a2 2 0 0 1 2 2v5.5a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2z"/><circle class="a part cam-lens" cx="9" cy="10" r="2.4"/><circle class="cam-flash" cx="13" cy="7.75" r=".3" style="stroke-width:1.6"/>',
+)
 export const LayoutGrid = icon(
   'LayoutGrid',
   '<rect class="soft" x="2.75" y="2.75" width="5.5" height="5.5" rx="1.75"/><rect class="soft l2" x="9.75" y="2.75" width="5.5" height="5.5" rx="1.75"/><rect class="soft l2" x="2.75" y="9.75" width="5.5" height="5.5" rx="1.75"/><rect class="soft l2" x="9.75" y="9.75" width="5.5" height="5.5" rx="1.75"/>',

@@ -64,7 +64,107 @@
   transform-box: view-box;
 }
 
+.ai :is(.extract-scan, .cam-flash) {
+  opacity: 0;
+}
+
 @media (prefers-reduced-motion: no-preference) {
+  :is(button, a, [data-ai-hover]):hover .ai .extract-frame {
+    animation: ai-extract-frame 0.6s var(--ai-spring) both;
+  }
+  :is(button, a, [data-ai-hover]):hover .ai .extract-scan {
+    animation: ai-extract-scan 0.9s cubic-bezier(0.3, 0.9, 0.3, 1) both;
+  }
+  :is(button, a, [data-ai-hover]):hover .ai .play-tri {
+    animation: ai-play-tri 0.5s var(--ai-spring) both;
+  }
+  :is(button, a, [data-ai-hover]):hover .ai :is(.pause-1, .pause-2) {
+    animation: ai-pause-bar 0.5s var(--ai-spring) both;
+  }
+  :is(button, a, [data-ai-hover]):hover .ai .pause-2 {
+    animation-delay: 0.07s;
+  }
+  :is(button, a, [data-ai-hover]):hover .ai :is(.vol-w1, .vol-w2) {
+    animation: ai-volume-wave 0.6s var(--ai-spring) both;
+  }
+  :is(button, a, [data-ai-hover]):hover .ai .vol-w2 {
+    animation-delay: 0.1s;
+  }
+  :is(button, a, [data-ai-hover]):hover .ai :is(.ex-1, .ex-2, .ex-3, .ex-4) {
+    animation: ai-expand-corner 0.6s var(--ai-spring) both;
+  }
+  .ai .ex-1 {
+    --ex-x: -1.2px;
+    --ex-y: -1.2px;
+  }
+  .ai .ex-2 {
+    --ex-x: 1.2px;
+    --ex-y: -1.2px;
+  }
+  .ai .ex-3 {
+    --ex-x: 1.2px;
+    --ex-y: 1.2px;
+  }
+  .ai .ex-4 {
+    --ex-x: -1.2px;
+    --ex-y: 1.2px;
+  }
+  :is(button, a, [data-ai-hover]):hover .ai .cam-lens {
+    animation: ai-camera-lens 0.55s var(--ai-spring) both;
+  }
+  :is(button, a, [data-ai-hover]):hover .ai .cam-flash {
+    animation: ai-camera-flash 0.5s var(--ai-spring) both;
+  }
+
+  @keyframes ai-extract-frame {
+    40% {
+      transform: scale(0.88);
+    }
+  }
+  @keyframes ai-extract-scan {
+    from {
+      transform: translateY(-4px);
+      opacity: 0;
+    }
+    50% {
+      opacity: 0.9;
+    }
+    to {
+      transform: translateY(4px);
+      opacity: 0;
+    }
+  }
+  @keyframes ai-play-tri {
+    35% {
+      transform: scale(0.8);
+    }
+  }
+  @keyframes ai-pause-bar {
+    40% {
+      transform: scaleY(0.6);
+    }
+  }
+  @keyframes ai-volume-wave {
+    from {
+      transform: translateX(-2px);
+      opacity: 0;
+    }
+  }
+  @keyframes ai-expand-corner {
+    40% {
+      transform: translate(var(--ex-x), var(--ex-y));
+    }
+  }
+  @keyframes ai-camera-lens {
+    40% {
+      transform: scale(0.6);
+    }
+  }
+  @keyframes ai-camera-flash {
+    30% {
+      opacity: 1;
+    }
+  }
   /* 成功类：出现时圆弹出、对勾一笔描出来 */
   .ai .check-ring {
     animation: ai-pop 0.6s var(--ai-spring) both;
@@ -153,6 +253,12 @@
   }
   :is(button, a, [data-ai-hover]):hover .ai .txt-line3 {
     animation-delay: 0.16s;
+  }
+  :is(button, a, [data-ai-hover]):hover .ai .extract-l1 {
+    animation-delay: 0.35s;
+  }
+  :is(button, a, [data-ai-hover]):hover .ai .extract-l2 {
+    animation-delay: 0.45s;
   }
   :is(button, a, [data-ai-hover]):hover .ai .img-sun {
     animation-name: ai-sun;

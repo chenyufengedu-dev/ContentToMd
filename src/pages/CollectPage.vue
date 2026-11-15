@@ -44,10 +44,11 @@ import {
   CircleAlert,
   Clock,
   FilePlus2,
-  FileText,
-  Image as ImageIcon,
   Link2,
-  PenLine,
+  ModeExtract,
+  ModeKeyPoints,
+  ModeRefine,
+  ModeVisual,
   Plus,
   X,
 } from '../components/icons'
@@ -80,7 +81,7 @@ const SUPPORTED: { kind: FileKind; label: string }[] = [
 ]
 const MAX_BYTES = 1024 ** 3 // 音视频 ≤ 1GB（方案第 11 节）
 const MAX_TEXT_BYTES = 10 * 1024 ** 2
-const MODE_ICONS = { 要点提炼: FileText, 原文精修: PenLine, 视觉收藏: ImageIcon }
+const MODE_ICONS = { 要点提炼: ModeKeyPoints, 原文精修: ModeRefine, 视觉收藏: ModeVisual, 提取内容: ModeExtract }
 /** 缩略图下面的时长：5:12 */
 const fmtDuration = (s: number) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`
 
