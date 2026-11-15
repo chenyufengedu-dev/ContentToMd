@@ -22,31 +22,40 @@ import {
 } from '../components/icons'
 import { type Config, addDomain, checkDomainName, OTHER_DOMAIN_ID, notesRoot, storeLabel } from '../core/config'
 import type { Job } from '../core/pipeline'
+import { resolveAttachment } from '../core/library'
 import { buildMarkdown, safeFileTitle, today, type NoteDraft, type NoteImage, type NoteMeta } from '../core/note'
 import { cropForSave, type Rect } from '../core/image'
 import { saveFailure, type SaveFailure } from '../core/saveFailure'
 import { matchToSource } from '../core/sourceMatch'
 import {
   clearEditRecovery,
+  readVideoAttachment,
+  openLink,
+  openNote,
   saveEditRecovery,
   removeAttachment,
   saveConfig,
   saveNote,
   writeAttachment,
+  writeClipboard,
   writeNote,
 } from '../shell/tauri'
 import type { NoteRecovery } from '../core/noteRecovery'
 import { editorExtensions, fixCallouts } from '../editor/extensions'
 import { linkedBlockKey } from '../editor/linkedBlock'
+import InfoTip from '../components/InfoTip.vue'
 import NoteProps from '../components/NoteProps.vue'
 import SourcePanel from '../components/SourcePanel.vue'
+import OriginalImagePanel from '../components/OriginalImagePanel.vue'
 import EditorToolbar from '../components/EditorToolbar.vue'
+import { Camera, Expand, Pause, Play, Plus, Volume, VolumeMute, X } from '../components/icons'
 import CropDialog from '../components/CropDialog.vue'
 import NoticeDialog from '../components/NoticeDialog.vue'
 import { toast } from '../components/useToast'
 
 /** 打开已有笔记修改（F22）：和确认页是同一个界面，保存时改原来的文件，不是新建 */
 export interface EditInfo {
+  attachments?: string[]
   /** 打开时的完整文件，保存前用于检查外部修改 */
   originalText: string
   /** 笔记相对存放文件夹的路径 */
@@ -67,12 +76,13 @@ const props = withDefaults(
   defineProps<{
     config: Config
     job: Job
+    videoFile?: File
     existingTags: string[]
     edit?: EditInfo
     active?: boolean
     recovery?: NoteRecovery
   }>(),
-  { active: true, edit: undefined, recovery: undefined },
+  { active: true, edit: undefined, recovery: undefined, videoFile: undefined },
 )
 /** 保存成功页要用的：笔记相对收藏库的路径、没写进去的图片（比如“第 2 张”），以及左边预览框的文字 */
 export interface SavedNote {
@@ -109,16 +119,268 @@ const form = reactive({
 const created = props.edit?.meta.created || today()
 /** 内容来自语音转写（只有音频、视频）；文字、文档、图片不是 */
 const fromSpeech = props.job.type === '音频' || props.job.type === '视频'
+const attachmentPicker = ref<HTMLInputElement>()
+const savedAttachments = ref(props.edit?.attachments ?? [])
+const pendingAttachments = ref<File[]>([])
+const attachmentToRemove = ref<{ index: number; pending: boolean } | null>(null)
+
+function pickAttachments(event: Event) {
+  const input = event.currentTarget as HTMLInputElement
+  pendingAttachments.value.push(...Array.from(input.files ?? []))
+  input.value = ''
+}
+
+function removeNoteAttachment() {
+  const target = attachmentToRemove.value
+  if (!target || saving.value) return
+  const list = target.pending ? pendingAttachments.value : savedAttachments.value
+  list.splice(target.index, 1)
+  attachmentToRemove.value = null
+}
+
+async function openNoteAttachment(path: string) {
+  if (!props.edit) return
+  try {
+    const rel = resolveAttachment(props.edit.path, path)
+    if (!rel.startsWith('附件/')) throw new Error('附件路径不合法')
+    await openNote(notesRoot(props.config), rel, false)
+  } catch {
+    toast('无法打开附件。')
+  }
+}
+
+const sourceLink = ref(props.edit?.meta.source ?? props.job.source ?? '')
+const sourceEdit = ref<string | null>(null)
+const sourceInput = ref<HTMLInputElement>()
+
+async function editSourceLink() {
+  sourceEdit.value = sourceLink.value
+  await nextTick()
+  sourceInput.value?.focus({ preventScroll: true })
+  sourceInput.value?.setSelectionRange(0, 0)
+  if (sourceInput.value) sourceInput.value.scrollLeft = 0
+}
+
+function applySourceLink() {
+  if (sourceEdit.value === null) return
+  sourceLink.value = sourceEdit.value.trim()
+  sourceEdit.value = null
+}
+
+async function copySourceLink() {
+  try {
+    await writeClipboard(sourceLink.value)
+    toast('来源链接已复制。')
+  } catch {
+    toast('未能复制来源链接。')
+  }
+}
+async function openSourceLink() {
+  try {
+    await openLink(sourceLink.value)
+  } catch {
+    toast('无法打开来源链接。')
+  }
+}
+
 const transcript = props.job.transcript ?? ''
+/** 提取内容：图片显示原图对照；视频只显示口播稿，不出现原图对照 */
+const extracting = computed(() => props.job.mode === '提取内容')
+const imageCompare = computed(() => extracting.value && (props.job.images?.length ?? 0) > 0)
+const textCompare = computed(() => !extracting.value && !!transcript && !imageCompare.value)
+const imageTexts = computed(() => props.job.draft?.image_texts ?? [])
+const missingImages = computed(() => imageTexts.value.flatMap((text, i) => (text.trim() ? [] : [i + 1])))
+const missingImagesText = computed(() => {
+  const list = missingImages.value
+  if (!list.length) return ''
+  return `第 ${list.join('、')} 张没有识别到文字；其他图片的文字仍可编辑和保存。`
+})
 
 // ---------------- 图片（F29）----------------
 // 图片放在正文前面，按裁剪框显示；悬停时可以调整裁剪或恢复原图
+const videoPanel = ref(false)
+const videoPlayer = ref<HTMLVideoElement>()
+const videoUrl = ref(props.videoFile ? URL.createObjectURL(props.videoFile) : '')
+const videoLoadError = ref(false)
+const videoFrames = ref<{ file: File; caption: string; width: number; height: number; crop?: Rect | null }[]>([])
+const removedFrames = ref<number[]>([])
+const askKeepVideo = ref(false)
+const keepVideo = ref(false)
+const capturing = ref(false)
+const zoomFrame = ref('')
+const removedDraftPictures = ref<number[]>([])
+const frameToDelete = ref<{ saved: boolean; index: number; picture?: boolean } | null>(null)
+
+function askPictureDelete(index: number) {
+  const picture = pics[index]
+  const added = videoFrames.value.findIndex((frame) => frame.file === picture.file)
+  frameToDelete.value =
+    added >= 0
+      ? { saved: false, index: added }
+      : props.edit
+        ? { saved: true, index: picture.noteImageIndex ?? index, picture: true }
+        : { saved: false, index, picture: true }
+}
+
+function confirmFrameDelete() {
+  const target = frameToDelete.value
+  if (target && !saving.value) {
+    if (target.saved) removedFrames.value.push(target.index)
+    else if (target.picture) removedDraftPictures.value.push(target.index)
+    else videoFrames.value.splice(target.index, 1)
+  }
+  frameToDelete.value = null
+}
+const expandedVideo = ref<HTMLDialogElement>()
+const videoExpanded = ref(false)
+const muted = ref(false)
+const volume = ref(1)
+function expandVideo() {
+  expandedVideo.value?.showModal()
+  videoExpanded.value = true
+}
+function changeVolume(event: Event) {
+  if (!(event.target instanceof HTMLInputElement)) return
+  volume.value = event.target.valueAsNumber
+  if (videoPlayer.value) videoPlayer.value.volume = volume.value
+  if (volume.value > 0) muted.value = false
+}
+const playTime = ref(0)
+const playDuration = ref(0)
+const videoAspect = ref(16 / 9)
+
+function loadVideoMetadata() {
+  const player = videoPlayer.value
+  if (!player) return
+  playDuration.value = player.duration
+  if (player.videoHeight > 0) videoAspect.value = player.videoWidth / player.videoHeight
+}
+const playing = ref(false)
+function playbackTime(value: number) {
+  const seconds = Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+}
+function seekFrame(caption: string) {
+  const parts = caption.match(/^(\d+):(\d{2})$/)
+  if (parts && videoPlayer.value) {
+    videoPlayer.value.currentTime = Number(parts[1]) * 60 + Number(parts[2])
+    playTime.value = videoPlayer.value.currentTime
+  }
+}
+function seekFromSlider(event: Event) {
+  if (event.target instanceof HTMLInputElement && videoPlayer.value) {
+    videoPlayer.value.currentTime = event.target.valueAsNumber
+    playTime.value = videoPlayer.value.currentTime
+  }
+}
+function togglePlayback() {
+  const player = videoPlayer.value
+  if (!player) return
+  if (player.paused) void player.play().catch(() => toast('无法播放视频。'))
+  else player.pause()
+}
+let disposed = false
+const videoLoading = new AbortController()
+
+function switchFromVideo(compare: boolean) {
+  videoPanel.value = false
+  setComparing(compare)
+}
+
+function confirmVideoSave() {
+  askKeepVideo.value = false
+  void save(keepVideo.value)
+}
+
+async function showVideo() {
+  setComparing(false)
+  videoPanel.value = true
+  const edit = props.edit
+  if (!edit?.meta.video || videoUrl.value || videoLoadError.value) return
+  try {
+    const path = resolveAttachment(edit.path, edit.meta.video)
+    const blob = await readVideoAttachment(notesRoot(props.config), path, videoLoading.signal)
+    if (!disposed && !videoUrl.value) videoUrl.value = URL.createObjectURL(blob)
+  } catch {
+    videoLoadError.value = true
+  }
+}
+
+async function captureVideoFrame() {
+  const video = videoPlayer.value
+  if (!video || capturing.value || saving.value) return
+  capturing.value = true
+  try {
+    video.pause()
+    const deadline = Date.now() + 3000
+    while ((video.seeking || video.readyState < 2) && Date.now() < deadline)
+      await new Promise((resolve) => setTimeout(resolve, 40))
+    if (disposed || videoPlayer.value !== video) return
+    if (video.seeking || video.readyState < 2 || !video.videoWidth) {
+      toast('视频还没定位完成，请重试。')
+      return
+    }
+    const canvas = document.createElement('canvas')
+    canvas.width = video.videoWidth
+    canvas.height = video.videoHeight
+    const context = canvas.getContext('2d')
+    if (!context) return
+    const seconds = Math.floor(video.currentTime)
+    const caption = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
+    context.drawImage(video, 0, 0)
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
+    if (blob && !disposed && videoPlayer.value === video) {
+      const file = new File([blob], '画面.png', { type: 'image/png' })
+      pics.push({ file, noteImageIndex: -1 })
+      picUrls.push(URL.createObjectURL(file))
+      naturals.value.push({ w: canvas.width, h: canvas.height })
+      videoFrames.value.push({
+        file,
+        caption,
+        width: canvas.width,
+        height: canvas.height,
+      })
+      toast(`已截取 ${caption}。`)
+    }
+  } catch {
+    toast('无法截取当前画面，请重试。')
+  } finally {
+    capturing.value = false
+  }
+}
+
+const frameUrls = ref<string[]>([])
+watch(
+  videoFrames,
+  (frames) => {
+    frameUrls.value.forEach((url) => URL.revokeObjectURL(url))
+    frameUrls.value = frames.map((frame) => URL.createObjectURL(frame.file))
+  },
+  { deep: true },
+)
+onBeforeUnmount(() => {
+  disposed = true
+  videoLoading.abort()
+  if (videoUrl.value) URL.revokeObjectURL(videoUrl.value)
+  frameUrls.value.forEach((url) => URL.revokeObjectURL(url))
+  savedFrameUrls.forEach((url) => URL.revokeObjectURL(url))
+})
+
 const pics = reactive(props.job.images ?? [])
 let savedImages = props.edit?.images.map((img) => ({ ...img })) ?? []
 let savedCrops = pics.map((p) => (p.crop ? { ...p.crop } : null))
 let savedCover = props.edit?.meta.cover ?? ''
 let savedFileContent = props.edit?.originalText ?? ''
 const picUrls = pics.map((p) => URL.createObjectURL(p.file))
+const savedFrameUrls = reactive(
+  new Map(
+    pics.flatMap((pic, i) => {
+      const path = savedImages[pic.noteImageIndex ?? i]?.path
+      return path ? [[path, picUrls[i]] as const] : []
+    }),
+  ),
+)
+const savedFrames = ref(savedImages)
 const naturals = ref(pics.map(() => ({ w: 0, h: 0 })))
 function onPicLoad(i: number, e: Event) {
   const el = e.target as HTMLImageElement
@@ -132,7 +394,9 @@ function cropView(i: number) {
   return {
     box: { aspectRatio: `${c.w} / ${c.h}` },
     fig: {
-      width: pics[i].width ? `min(100%, ${pics[i].width}px)` : `min(100%, calc(var(--pic-max-h) * ${c.w / c.h}))`,
+      width: pics[i].width
+        ? `min(100%, ${Math.max(MIN_PIC_WIDTH, pics[i].width)}px)`
+        : `min(100%, var(--pic-max-w), calc(var(--pic-max-h) * ${c.w / c.h}))`,
     },
     img: {
       width: `${(n.w / c.w) * 100}%`,
@@ -221,6 +485,7 @@ const cropNote = computed(() => {
   return p.crop ? '已应用手动裁剪' : '已恢复原图'
 })
 const cropping = ref<number | null>(null)
+const pictureMenu = ref<number | null>(null)
 function onCropDone(crops: (Rect | null)[]) {
   crops.forEach((c, i) => (pics[i].crop = c))
   cropping.value = null
@@ -239,15 +504,20 @@ const editor = useEditor({
 
 // ---------------- 打开已有笔记：有没有改动 ----------------
 const bodyTick = ref(0)
-const snapshot = () =>
-  JSON.stringify([
-    form.title,
-    form.domainId,
-    form.tags,
-    form.keywords,
-    form.summary,
-    pics.map((p) => [p.crop ?? null, p.width ?? null]),
-  ]) + editorBody()
+const snapshotFields = (includePendingFrames = true, attachments = savedAttachments.value) => [
+  form.title,
+  form.domainId,
+  form.tags,
+  form.keywords,
+  form.summary,
+  sourceLink.value,
+  attachments,
+  includePendingFrames ? pendingAttachments.value.map((file) => file.name) : [],
+  pics.map((p) => [p.crop ?? null, p.width ?? null]),
+  includePendingFrames ? videoFrames.value.map((f) => [f.caption, f.crop]) : [],
+  includePendingFrames ? removedFrames.value : [],
+]
+const snapshot = () => JSON.stringify(snapshotFields()) + editorBody()
 const baseline = ref<string | null>(null)
 // 只改属性时不让编辑器的格式规范化或不支持节点改写原文。
 let originalBody = start.body
@@ -404,24 +674,14 @@ const duration = computed(() => {
 // ---------------- 对照原文 ----------------
 // 右栏两个标签页：「属性信息」（默认，所有修改在这里做）和「原文对照」。
 // 对照原文时，标题下多出一行属性（只看不改），点它回到属性信息。
-// 用浏览器的视图过渡让这次切换平滑（WebView2 支持；不支持时直接切换）
 const comparing = ref(false)
+const activeImage = ref<number | null>(null)
 function setComparing(on: boolean) {
   if (on === comparing.value) return
-  let applied = false
-  const apply = async () => {
-    if (applied) return
-    applied = true
-    comparing.value = on
-    if (!on) clearLink()
-    else refreshCoverage()
-    await nextTick()
-  }
-  const doc = document as Document & { startViewTransition?: (cb: () => Promise<void>) => unknown }
-  if (!doc.startViewTransition) return void apply()
-  doc.startViewTransition(apply)
-  // 窗口不在绘制时（比如被挡住）视图过渡可能迟迟不开始，0.5 秒后直接切换，不让界面卡住
-  setTimeout(() => void apply(), 500)
+  comparing.value = on
+  activeImage.value = null
+  if (!on) clearLink()
+  else if (textCompare.value) refreshCoverage()
 }
 
 /** 正文里参与比对的段落：段落、列表项、引用里的段落，按出现顺序 */
@@ -450,12 +710,31 @@ function markBlock(pos: number | null) {
 }
 const linkedEl = () => paperEl.value?.querySelector<HTMLElement>('.is-linked') ?? null
 
-/** 对照时点击正文的一段：原文里对应的句子高亮，并画一条连线（F30） */
+/** 图片提取：正文段落属于哪张图——往上找最近的“### 第 N 张”，没有就按第一张 */
+function imageIndexAtBlock(block: HTMLElement): number {
+  if (pics.length <= 1) return 0
+  const root = paperEl.value?.querySelector('.tiptap')
+  let el: Element | null = block
+  while (el && el !== root) {
+    if (el instanceof HTMLElement && el.tagName === 'H3') {
+      const m = /^第\s*(\d+)\s*张/.exec(el.textContent ?? '')
+      if (m) return Number(m[1]) - 1
+    }
+    el = el.previousElementSibling ?? el.parentElement
+  }
+  return 0
+}
+
+/** 对照时点击正文的一段：原文里对应的句子高亮，并画一条连线（F30）；图片提取时高亮对应的原图 */
 function onBodyClick(e: MouseEvent) {
   if (!comparing.value) return
   // 列表项里面还包着一层段落，点到的通常是里面那层，所以先找列表项
   const target = e.target as HTMLElement
   const block = target.closest<HTMLElement>('li') ?? target.closest<HTMLElement>('p')
+  if (imageCompare.value) {
+    activeImage.value = block ? imageIndexAtBlock(block) : null
+    return
+  }
   const blocks = bodyBlocks()
   const idx = block ? blocks.indexOf(block) : -1
   if (idx < 0 || !editor.value) {
@@ -481,6 +760,10 @@ const paperEl = ref<HTMLElement>()
 const panel = ref<InstanceType<typeof SourcePanel>>()
 const link = ref<string | null>(null)
 function updateLink() {
+  if (imageCompare.value) {
+    link.value = null
+    return
+  }
   const target = panel.value?.activeRect()
   const view = panel.value?.viewportRect()
   const host = confirmEl.value?.getBoundingClientRect()
@@ -565,17 +848,30 @@ async function writeImage(title: string, root: string, picture: { file: File; cr
 async function writeImages(
   title: string,
   root: string,
-  pictures: { file: File; crop: Rect | null; width?: number }[],
+  pictures: { file: File; crop: Rect | null; width?: number; caption: string; retainOriginal?: boolean }[],
 ): Promise<{ images: NoteImage[]; written: string[]; failed: string[] }> {
   const images: NoteImage[] = []
   const written: string[] = []
   const failed: string[] = []
   for (const [i, p] of pictures.entries()) {
+    const start = written.length
     try {
       const rel = await writeImage(title, root, p, i)
       written.push(rel)
-      images.push({ path: `../${rel}`, caption: d.image_captions[i] ?? '', width: p.width })
+      let original: string | undefined
+      if (p.retainOriginal && p.crop) {
+        const source = await writeImage(title, root, { file: p.file, crop: null }, i)
+        written.push(source)
+        original = `../${source}`
+      }
+      images.push({
+        ...(original && p.crop ? { original, crop: p.crop } : {}),
+        path: `../${rel}`,
+        caption: p.caption,
+        width: p.width,
+      })
     } catch {
+      await Promise.allSettled(written.splice(start).map((path) => removeAttachment(root, path)))
       failed.push(`第 ${i + 1} 张`)
     }
   }
@@ -588,7 +884,8 @@ async function saveEdit(e: EditInfo) {
   if (!editor.value) return
   const title = form.title.trim()
   const domain = domainName.value
-  const submittedSnapshot = snapshot()
+  const attachments = [...savedAttachments.value]
+  const submittedFields = snapshotFields(false, attachments)
   const submittedEditorBody = editorBody()
   const submittedBody = bodyToSave()
   const root = notesRoot(props.config)
@@ -610,20 +907,46 @@ async function saveEdit(e: EditInfo) {
     index: p.noteImageIndex ?? i,
     changed: JSON.stringify(submittedCrops[i]) !== JSON.stringify(savedCrops[i]),
   }))
-  const meta = { ...e.meta, domain, cover: savedCover }
+  const meta = { ...e.meta, domain, cover: savedCover, source: sourceLink.value }
   const written: string[] = []
   try {
     for (const p of pictures) {
+      if (removedFrames.value.includes(p.index) || !images[p.index]) continue
       images[p.index] = { ...images[p.index], width: p.width }
       if (!p.changed) continue
       const previous = images[p.index]
-      const rel = await writeImage(title, root, p, p.index)
-      written.push(rel)
-      const path = `../${rel}`
-      images[p.index] = { ...previous, path }
+      let path = !p.crop ? previous.original : undefined
+      if (!path) {
+        const rel = await writeImage(title, root, p, p.index)
+        written.push(rel)
+        path = `../${rel}`
+      }
+      const original = previous.original ?? (imageCompare.value && p.crop ? previous.path : undefined)
+      images[p.index] = {
+        ...previous,
+        path,
+        original: p.crop ? original : undefined,
+        crop: original && p.crop ? p.crop : undefined,
+      }
+      if (props.job.type === '视频') savedFrameUrls.set(path, picUrls[pictures.indexOf(p)])
       if (meta.cover === previous.path) meta.cover = path
     }
-    const md = buildMarkdown(submitted, meta, images)
+    for (const index of [...removedFrames.value].sort((a, b) => b - a)) {
+      if (meta.cover === images[index]?.path) meta.cover = ''
+      images.splice(index, 1)
+    }
+    if (!meta.cover) meta.cover = images[0]?.path ?? ''
+    if (props.job.type === '视频') {
+      if (videoFrames.value.length) await appendVideoFrames(root, title, images, written)
+      meta.cover = images[0]?.path ?? ''
+    }
+    const pending = [...pendingAttachments.value]
+    for (const file of pending) {
+      const rel = await writeAttachment(root, today().slice(0, 7), file.name, file)
+      written.push(rel)
+      attachments.push(`../${rel}`)
+    }
+    const md = buildMarkdown(submitted, meta, images, attachments)
     // 文件名跟着标题走；标题没改过就不动文件名（笔记可能重名时加过日期，或在 Obsidian 里改过名）
     const stem = title === savedTitle ? e.stem : safeFileTitle(title)
     const rel = await saveNote(root, e.path, domain, stem, md, savedFileContent)
@@ -631,11 +954,42 @@ async function saveEdit(e: EditInfo) {
     const previousRecoveryPath = recoveryPath
     recoveryPath = rel
     void clearEditRecovery(root, previousRecoveryPath).catch(reportRecoveryError)
+    if (props.job.type === '视频') {
+      const added = images.slice(images.length - videoFrames.value.length)
+      for (const [i, frame] of videoFrames.value.entries())
+        savedFrameUrls.set(added[i].path, URL.createObjectURL(frame.file))
+      const paths = new Set(images.map((image) => image.path))
+      for (const [path, url] of savedFrameUrls) {
+        if (!paths.has(path)) {
+          if (!picUrls.includes(url)) URL.revokeObjectURL(url)
+          savedFrameUrls.delete(path)
+        }
+      }
+    }
+    {
+      const removed = new Set(removedFrames.value)
+      for (const [i, picture] of pics.entries()) {
+        const oldIndex = picture.noteImageIndex ?? i
+        if (oldIndex === -1) {
+          const addedIndex = videoFrames.value.findIndex((frame) => frame.file === picture.file)
+          picture.noteImageIndex = addedIndex < 0 ? -2 : images.length - videoFrames.value.length + addedIndex
+        } else if (oldIndex >= 0) {
+          picture.noteImageIndex = removed.has(oldIndex)
+            ? -2
+            : oldIndex - [...removed].filter((index) => index < oldIndex).length
+        }
+      }
+      savedFrames.value = images
+      videoFrames.value = []
+      removedFrames.value = []
+    }
     savedImages = images
     savedCrops = submittedCrops
     savedCover = meta.cover
     savedTitle = title
-    baseline.value = submittedSnapshot
+    savedAttachments.value = attachments
+    pendingAttachments.value = []
+    baseline.value = JSON.stringify(submittedFields) + submittedEditorBody
     originalBody = submittedBody
     originalEditorBody = submittedEditorBody
     // 点完保存告诉用户结果：改了领域就说移到了哪里，改了文件名就说新名字
@@ -655,8 +1009,22 @@ async function saveEdit(e: EditInfo) {
   }
 }
 
-async function save() {
-  if (saving.value || titleMissing.value || !editor.value) return
+async function appendVideoFrames(root: string, title: string, images: NoteImage[], written: string[]) {
+  for (const frame of videoFrames.value) {
+    const picture = pics.find((pic) => pic.file === frame.file)
+    const rel = await writeImage(title, root, { file: frame.file, crop: picture?.crop ?? null }, images.length)
+    written.push(rel)
+    images.push({ path: `../${rel}`, caption: frame.caption, width: picture?.width })
+  }
+}
+
+async function save(videoChoice?: boolean) {
+  if (saving.value || capturing.value || titleMissing.value || !editor.value) return
+  if (!props.edit && props.videoFile && videoChoice === undefined) {
+    keepVideo.value = false
+    askKeepVideo.value = true
+    return
+  }
   if (props.edit && !dirty.value) return
   saving.value = true
   saveError.value = null
@@ -679,23 +1047,62 @@ async function save() {
     body: bodyToSave(),
     image_captions: [...d.image_captions],
   }
-  const pictures = pics.map((p) => ({ file: p.file, crop: p.crop ? { ...p.crop } : null, width: p.width }))
-  const { images, written, failed } = await writeImages(title, root, pictures)
-  const md = buildMarkdown(
-    submitted,
-    {
-      domain,
-      type: props.job.type,
-      mode: props.job.mode,
-      source: props.job.source ?? '',
-      platform: props.job.platform ?? '',
-      author: props.job.author ?? '',
-      created,
-      cover: images[0]?.path ?? '',
-    },
-    images,
+  const pictures = pics.flatMap((p, i) =>
+    p.noteImageIndex === -1 || removedDraftPictures.value.includes(i)
+      ? []
+      : [
+          {
+            file: p.file,
+            crop: p.crop ? { ...p.crop } : null,
+            width: p.width,
+            caption: d.image_captions[i] ?? '',
+            retainOriginal: !!p.region || imageCompare.value,
+          },
+        ],
   )
+  const { images, written, failed } = await writeImages(title, root, pictures)
   try {
+    if (videoFrames.value.length) await appendVideoFrames(root, title, images, written)
+    let transcriptPath = ''
+    if (textCompare.value) {
+      const rel = await writeAttachment(
+        root,
+        created.slice(0, 7),
+        `${created}-${safeFileTitle(title).slice(0, 20)}-原文.txt`,
+        new Blob([transcript], { type: 'text/plain' }),
+      )
+      written.push(rel)
+      transcriptPath = `../${rel}`
+    }
+    let video = ''
+    if (videoChoice && props.videoFile) {
+      const ext = props.videoFile.name.toLowerCase().endsWith('.mov') ? 'mov' : 'mp4'
+      const rel = await writeAttachment(
+        root,
+        created.slice(0, 7),
+        `${created}-${safeFileTitle(title).slice(0, 20)}-原视频.${ext}`,
+        props.videoFile,
+      )
+      written.push(rel)
+      video = `../${rel}`
+    }
+    const md = buildMarkdown(
+      submitted,
+      {
+        domain,
+        type: props.job.type,
+        mode: props.job.mode,
+        source: props.job.source ?? '',
+        platform: props.job.platform ?? '',
+        author: props.job.author ?? '',
+        created,
+        collectedAt: new Date().toISOString(),
+        cover: images[0]?.path ?? '',
+        video,
+        transcript: transcriptPath,
+      },
+      images,
+    )
     const rel = await writeNote(root, domain, safeFileTitle(title), created, md)
     emit('saved', {
       path: rel,
@@ -718,8 +1125,9 @@ const confirmingDiscard = ref(false)
 
 // Esc 优先收起局部状态，笔记编辑模式再复用返回入口。
 function onKey(e: KeyboardEvent) {
-  if (!props.active) return
+  if (!props.active || videoExpanded.value) return
   if (e.ctrlKey && e.key.toLowerCase() === 's') {
+    if (askKeepVideo.value || zoomFrame.value || videoExpanded.value) return
     e.preventDefault()
     save()
   } else if (e.key === 'Escape') {
@@ -767,7 +1175,7 @@ onBeforeUnmount(() => {
         </label>
         <p v-if="titleMissing" class="field-error">请填写标题。</p>
 
-        <label class="editable summary" style="view-transition-name: note-summary">
+        <label v-if="!extracting" class="editable summary" style="view-transition-name: note-summary">
           <textarea v-model="form.summary" rows="1" aria-label="这条讲什么" placeholder="用一句话概括内容" />
           <Pencil class="edit-hint" :size="16" duotone aria-hidden="true" />
         </label>
@@ -792,15 +1200,35 @@ onBeforeUnmount(() => {
         </button>
 
         <div v-if="pics.length" class="pics">
-          <figure v-for="(p, i) in pics" :key="picUrls[i]" class="pic" :style="cropView(i).fig">
-            <div class="pic-crop" :style="cropView(i).box">
+          <figure
+            v-for="(p, i) in pics"
+            v-show="
+              !removedDraftPictures.includes(i) &&
+              (job.type !== '视频'
+                ? !edit || ((p.noteImageIndex ?? i) >= 0 && !removedFrames.includes(p.noteImageIndex ?? i))
+                : p.noteImageIndex === -1
+                  ? videoFrames.some((frame) => frame.file === p.file)
+                  : !removedFrames.includes(p.noteImageIndex ?? i) && !!savedFrames[p.noteImageIndex ?? i])
+            "
+            :key="picUrls[i]"
+            class="pic"
+            :class="{ 'pic-menu-open': pictureMenu === i }"
+            :style="cropView(i).fig"
+          >
+            <button
+              type="button"
+              class="pic-crop"
+              aria-label="查看大图"
+              :style="cropView(i).box"
+              @click="zoomFrame = picUrls[i]"
+            >
               <img
                 :src="picUrls[i]"
                 :alt="edit ? (edit.images[p.noteImageIndex ?? i]?.caption ?? '') : (d.image_captions[i] ?? '')"
                 :style="cropView(i).img"
                 @load="onPicLoad(i, $event)"
               />
-            </div>
+            </button>
             <button
               class="pic-resize"
               aria-label="调整图片大小"
@@ -814,7 +1242,33 @@ onBeforeUnmount(() => {
             >
               <span aria-hidden="true"></span>
             </button>
-            <div class="pic-tools">
+            <button
+              type="button"
+              class="frame-remove"
+              aria-label="删除图片"
+              title="删除图片"
+              :disabled="saving"
+              @click="askPictureDelete(i)"
+            >
+              <X :size="12" aria-hidden="true" data-ai-no-spin />
+            </button>
+            <button
+              v-press="'icon'"
+              type="button"
+              class="pic-menu"
+              aria-label="图片操作"
+              :aria-expanded="pictureMenu === i"
+              @click.stop="pictureMenu = pictureMenu === i ? null : i"
+              @keydown.esc.stop="pictureMenu = null"
+            >
+              ⋯
+            </button>
+            <div
+              class="pic-tools"
+              :class="{ 'menu-open': pictureMenu === i }"
+              @click="pictureMenu = null"
+              @keydown.esc.stop="pictureMenu = null"
+            >
               <button v-press aria-label="调整裁剪" title="调整裁剪" @click="cropping = i">调整裁剪</button>
               <button
                 v-if="p.crop || p.width !== undefined"
@@ -828,6 +1282,7 @@ onBeforeUnmount(() => {
           </figure>
           <p v-if="cropNote && !edit" class="pic-note">{{ cropNote }}</p>
         </div>
+        <p v-if="missingImagesText" class="body-notice" role="status">{{ missingImagesText }}</p>
         <div v-if="edit && edit.missing" class="pics">
           <div v-for="n in edit.missing" :key="n" class="pic-missing">
             <ImageOff :size="22" aria-hidden="true" />图片文件不存在
@@ -856,94 +1311,434 @@ onBeforeUnmount(() => {
 
     <aside class="side">
       <div class="tabs" role="tablist" aria-label="右栏">
-        <!-- 图片没有转写原文，只有属性信息 -->
-        <button v-if="transcript" v-press role="tab" class="tab" :aria-selected="comparing" @click="setComparing(true)">
+        <!-- 提取内容的图片用完整原图和选区对照；普通图片没有对照页，只有属性信息 -->
+        <button
+          v-if="imageCompare"
+          v-press
+          role="tab"
+          class="tab"
+          :aria-selected="comparing"
+          @click="switchFromVideo(true)"
+        >
+          原图对照
+        </button>
+        <button
+          v-else-if="textCompare"
+          role="tab"
+          class="tab"
+          :aria-selected="comparing"
+          @click="switchFromVideo(true)"
+        >
           原文对照
         </button>
-        <button v-press role="tab" class="tab" :aria-selected="!comparing" @click="setComparing(false)">
+        <button
+          v-press
+          role="tab"
+          class="tab"
+          :aria-selected="!comparing && !videoPanel"
+          @click="switchFromVideo(false)"
+        >
           属性信息
         </button>
-      </div>
-
-      <div v-if="!comparing" class="side-main props-area" style="view-transition-name: props-card">
-        <!-- 文件名就是标题：两边改的是同一个东西（文件名里不允许的字符保存时换成“-”） -->
-        <label class="file-field">
-          <h3>文件名</h3>
-          <span class="name-input">
-            <input v-model="form.title" spellcheck="false" aria-label="文件名" />
-            <span class="ext">.md</span>
-          </span>
-        </label>
-
-        <NoteProps
-          v-model:domain-id="form.domainId"
-          v-model:tags="form.tags"
-          v-model:keywords="form.keywords"
-          :domains="config.domains"
-          :existing-tags="existingTags"
-          :domain-fallback="job.domainFallback"
-          :suggested-domain="suggestedDomain"
-          @new-domain="startNewDomain"
-        />
-
-        <div class="source">
-          <h3>来源信息</h3>
-          <dl class="facts">
-            <div v-if="pics.length" class="fact">
-              <dt><ImageIcon :size="16" />图片</dt>
-              <dd>{{ pics.length }} 张</dd>
-            </div>
-            <div v-else-if="!edit" class="fact">
-              <dt><AudioLines v-if="job.type === '音频'" :size="16" /><Video v-else :size="16" />{{ job.type }}文件</dt>
-              <dd class="file">{{ job.fileName }}</dd>
-            </div>
-            <div v-if="edit && edit.meta.platform" class="fact">
-              <dt><Video :size="16" />平台</dt>
-              <dd>{{ edit.meta.platform }}</dd>
-            </div>
-            <div v-if="edit && edit.meta.author" class="fact">
-              <dt><User :size="16" />作者</dt>
-              <dd class="file">{{ edit.meta.author }}</dd>
-            </div>
-            <div v-if="duration" class="fact">
-              <dt><Clock :size="16" />时长</dt>
-              <dd>{{ duration }}</dd>
-            </div>
-            <div class="fact">
-              <dt><FileText :size="16" />整理方式</dt>
-              <dd>{{ job.mode }}</dd>
-            </div>
-            <div v-if="fromSpeech && !edit" class="fact">
-              <dt><Mic :size="16" />内容来自</dt>
-              <dd>语音转写</dd>
-            </div>
-            <div v-if="job.source || edit?.meta.source" class="fact">
-              <dt><Link2 :size="16" />来源链接</dt>
-              <dd class="file link-text" :title="edit?.meta.source ?? job.source">
-                {{ edit?.meta.source ?? job.source }}
-              </dd>
-            </div>
-            <div class="fact">
-              <dt><CalendarDays :size="16" />收藏日期</dt>
-              <dd>{{ created }}</dd>
-            </div>
-          </dl>
-        </div>
-        <button v-if="edit?.canOpen" v-press class="btn btn-secondary open-obsidian" @click="emit('open')">
-          <ExternalLink :size="14" aria-hidden="true" />在 Obsidian 中打开
+        <button
+          v-if="job.type === '视频' && (videoFile || edit?.meta.video || savedImages.length)"
+          role="tab"
+          class="tab"
+          :aria-selected="videoPanel"
+          @click="showVideo"
+        >
+          视频画面
         </button>
+        <span class="tab-indicator" aria-hidden="true"></span>
       </div>
 
-      <SourcePanel
-        v-else
-        ref="panel"
-        class="side-main"
-        style="view-transition-name: source-panel"
-        :sentences="coverage.sentences"
-        :unused="coverage.unused"
-        :active="activeMatch"
-        @scroll="updateLink"
-      />
+      <div class="tab-panels">
+        <Transition name="sidebar-tab">
+          <div v-if="videoPanel" class="side-main props-area video-panel" :inert="!videoPanel">
+            <dialog
+              id="expanded-note-video"
+              ref="expandedVideo"
+              class="expanded-video"
+              aria-label="视频画面"
+              @close="videoExpanded = false"
+            >
+              <header class="expanded-video-header">
+                <strong>视频画面</strong>
+                <button class="link" type="button" aria-label="关闭放大视频" @click="expandedVideo?.close()">×</button>
+              </header>
+            </dialog>
+            <Teleport defer to="#expanded-note-video" :disabled="!videoExpanded">
+              <div v-if="videoUrl" class="video-unit" :style="{ '--video-aspect': videoAspect }">
+                <video
+                  ref="videoPlayer"
+                  :src="videoUrl"
+                  :muted="muted"
+                  :volume.prop="volume"
+                  preload="metadata"
+                  class="video-player"
+                  @loadedmetadata="loadVideoMetadata"
+                  @timeupdate="playTime = videoPlayer?.currentTime ?? 0"
+                  @play="playing = true"
+                  @pause="playing = false"
+                  @ended="playing = false"
+                />
+                <div class="video-controls">
+                  <button
+                    v-press="'icon'"
+                    type="button"
+                    class="video-icon"
+                    :aria-label="playing ? '暂停' : '播放'"
+                    :title="playing ? '暂停' : '播放'"
+                    @click="togglePlayback"
+                  >
+                    <component :is="playing ? Pause : Play" :size="16" />
+                  </button>
+                  <input
+                    class="video-progress"
+                    aria-label="视频进度"
+                    type="range"
+                    min="0"
+                    :max="playDuration"
+                    step="0.1"
+                    :value="playTime"
+                    @input="seekFromSlider"
+                  />
+                  <span class="video-clock">{{ playbackTime(playTime) }} / {{ playbackTime(playDuration) }}</span>
+                  <div class="video-sound">
+                    <button
+                      v-press="'icon'"
+                      type="button"
+                      class="video-icon"
+                      :aria-label="muted ? '取消静音' : '静音'"
+                      :title="muted ? '取消静音' : '静音'"
+                      @click="muted = !muted"
+                    >
+                      <component :is="muted ? VolumeMute : Volume" :size="16" />
+                    </button>
+                    <div class="video-volume-popup">
+                      <input
+                        class="video-volume"
+                        aria-label="音量"
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.05"
+                        :value="volume"
+                        @input="changeVolume"
+                      />
+                    </div>
+                  </div>
+                  <button
+                    v-if="!videoExpanded"
+                    type="button"
+                    class="video-icon"
+                    title="放大视频"
+                    aria-label="放大视频"
+                    @click="expandVideo"
+                  >
+                    <Expand :size="16" />
+                  </button>
+                  <button
+                    v-if="!videoExpanded"
+                    v-press="'icon'"
+                    type="button"
+                    class="video-icon video-capture-compact"
+                    aria-label="截取当前画面"
+                    title="截取当前画面"
+                    :disabled="capturing || saving"
+                    @click="captureVideoFrame"
+                  >
+                    <Camera :size="16" aria-hidden="true" />
+                  </button>
+                </div>
+                <div v-if="videoExpanded" class="video-capture">
+                  <button
+                    v-press
+                    class="btn btn-secondary video-capture-button"
+                    :disabled="capturing || saving"
+                    @click="captureVideoFrame"
+                  >
+                    <Camera :size="16" aria-hidden="true" />
+                    截取当前画面
+                  </button>
+                </div>
+              </div>
+            </Teleport>
+            <p v-if="!videoUrl" class="video-status">
+              {{
+                videoLoadError
+                  ? '无法读取原视频。'
+                  : edit?.meta.video
+                    ? '正在读取原视频。'
+                    : '未保留原视频，只可查看已截取的画面。'
+              }}
+            </p>
+            <div class="video-heading-row">
+              <h3 class="video-heading">
+                已截取画面
+                <span class="frame-count"
+                  ><span class="compact-frame-separator" aria-hidden="true">· </span
+                  >{{ savedFrames.length - removedFrames.length + videoFrames.length }} 张</span
+                >
+              </h3>
+              <button
+                v-if="videoUrl && !videoExpanded"
+                v-press
+                class="btn btn-secondary video-capture-button"
+                :disabled="capturing || saving"
+                @click="captureVideoFrame"
+              >
+                <Camera :size="16" aria-hidden="true" />
+                截取当前画面
+              </button>
+            </div>
+            <div class="video-frames">
+              <template v-for="(frame, i) in savedFrames" :key="frame.path">
+                <div v-if="!removedFrames.includes(i)" class="video-frame">
+                  <button
+                    type="button"
+                    class="video-thumb"
+                    :aria-label="'放大 ' + frame.caption"
+                    @click="zoomFrame = savedFrameUrls.get(frame.path) ?? ''"
+                  >
+                    <img
+                      v-if="savedFrameUrls.get(frame.path)"
+                      :src="savedFrameUrls.get(frame.path)"
+                      :alt="frame.caption"
+                    />
+                  </button>
+                  <button
+                    v-if="videoUrl"
+                    type="button"
+                    class="frame-time"
+                    :aria-label="'跳到 ' + frame.caption"
+                    @click="seekFrame(frame.caption)"
+                  >
+                    {{ frame.caption }}
+                  </button>
+                  <span v-else class="frame-time">{{ frame.caption }}</span>
+                  <button
+                    v-press
+                    type="button"
+                    class="frame-remove"
+                    :disabled="saving"
+                    aria-label="移除截图"
+                    title="移除截图"
+                    @click="frameToDelete = { saved: true, index: i }"
+                  >
+                    <X :size="12" aria-hidden="true" data-ai-no-spin />
+                  </button>
+                </div>
+              </template>
+              <div v-for="(frame, i) in videoFrames" :key="frameUrls[i]" class="video-frame">
+                <button
+                  type="button"
+                  class="video-thumb"
+                  :aria-label="'放大 ' + frame.caption"
+                  @click="zoomFrame = frameUrls[i] ?? ''"
+                >
+                  <img v-if="frameUrls[i]" :src="frameUrls[i]" :alt="frame.caption" />
+                </button>
+                <button
+                  v-if="videoUrl"
+                  type="button"
+                  class="frame-time"
+                  :aria-label="'跳到 ' + frame.caption"
+                  @click="seekFrame(frame.caption)"
+                >
+                  {{ frame.caption }}
+                </button>
+                <span v-else class="frame-time">{{ frame.caption }}</span>
+                <button
+                  v-press
+                  type="button"
+                  class="frame-remove"
+                  :disabled="saving"
+                  aria-label="移除截图"
+                  title="移除截图"
+                  @click="frameToDelete = { saved: false, index: i }"
+                >
+                  <X :size="12" aria-hidden="true" data-ai-no-spin />
+                </button>
+              </div>
+            </div>
+          </div>
+        </Transition>
+        <Transition name="sidebar-tab">
+          <div v-show="!videoPanel && !comparing" :inert="videoPanel || comparing" class="side-main props-area">
+            <!-- 文件名就是标题：两边改的是同一个东西（文件名里不允许的字符保存时换成“-”） -->
+            <label class="file-field">
+              <h3>文件名</h3>
+              <span class="name-input">
+                <input v-model="form.title" spellcheck="false" aria-label="文件名" />
+                <span class="ext">.md</span>
+              </span>
+            </label>
+
+            <NoteProps
+              v-model:domain-id="form.domainId"
+              v-model:tags="form.tags"
+              v-model:keywords="form.keywords"
+              :domains="config.domains"
+              :existing-tags="existingTags"
+              :domain-fallback="job.domainFallback"
+              :suggested-domain="suggestedDomain"
+              @new-domain="startNewDomain"
+            />
+
+            <div class="source">
+              <h3>来源信息</h3>
+              <dl class="facts">
+                <div v-if="pics.length" class="fact">
+                  <dt><ImageIcon :size="16" />图片</dt>
+                  <dd>{{ pics.length }} 张</dd>
+                </div>
+                <div v-else-if="!edit" class="fact">
+                  <dt>
+                    <AudioLines v-if="job.type === '音频'" :size="16" /><Video v-else :size="16" />{{ job.type }}文件
+                  </dt>
+                  <dd class="file">{{ job.fileName }}</dd>
+                </div>
+                <div v-if="edit && edit.meta.platform" class="fact">
+                  <dt><Video :size="16" />平台</dt>
+                  <dd>{{ edit.meta.platform }}</dd>
+                </div>
+                <div v-if="edit && edit.meta.author" class="fact">
+                  <dt><User :size="16" />作者</dt>
+                  <dd class="file">{{ edit.meta.author }}</dd>
+                </div>
+                <div v-if="duration" class="fact">
+                  <dt><Clock :size="16" />时长</dt>
+                  <dd>{{ duration }}</dd>
+                </div>
+                <div class="fact">
+                  <dt><FileText :size="16" />整理方式</dt>
+                  <dd>{{ job.mode }}</dd>
+                </div>
+                <div v-if="fromSpeech && !edit" class="fact">
+                  <dt><Mic :size="16" />内容来自</dt>
+                  <dd>语音转写</dd>
+                </div>
+                <div v-if="sourceLink || edit" class="fact" :class="{ 'editing-source': sourceEdit !== null }">
+                  <dt><Link2 :size="16" />来源链接</dt>
+                  <dd class="file link-text">
+                    <template v-if="sourceEdit !== null">
+                      <input
+                        ref="sourceInput"
+                        v-model="sourceEdit"
+                        type="text"
+                        aria-label="来源链接"
+                        @keydown.enter.stop.prevent="applySourceLink"
+                        @keydown.esc.stop.prevent="sourceEdit = null"
+                      />
+                      <button v-press type="button" class="link" @mousedown.prevent @click="applySourceLink">
+                        确定
+                      </button>
+                    </template>
+                    <template v-else>
+                      <a v-if="/^https?:\/\//i.test(sourceLink)" :href="sourceLink" @click.prevent="openSourceLink">
+                        {{ sourceLink }}
+                      </a>
+                      <span v-else-if="sourceLink">{{ sourceLink }}</span>
+                      <button v-if="edit && sourceLink" v-press type="button" class="link" @click="copySourceLink">
+                        复制
+                      </button>
+                      <button v-if="edit" v-press type="button" class="link" @click="editSourceLink">
+                        {{ sourceLink ? '编辑' : '添加来源链接' }}
+                      </button>
+                    </template>
+                  </dd>
+                </div>
+                <div class="fact">
+                  <dt><CalendarDays :size="16" />收藏日期</dt>
+                  <dd>{{ created }}</dd>
+                </div>
+              </dl>
+              <template v-if="edit">
+                <div class="attachment-heading">
+                  <h3>附件 <InfoTip text="可添加相关文件。保存修改后，附件会复制到收藏库。" /></h3>
+                  <button
+                    v-press="'icon'"
+                    type="button"
+                    class="link attachment-add"
+                    :disabled="saving"
+                    @click="attachmentPicker?.click()"
+                  >
+                    <Plus :size="14" aria-hidden="true" /><span>添加附件</span>
+                  </button>
+                  <input ref="attachmentPicker" type="file" multiple hidden @change="pickAttachments" />
+                </div>
+                <ul v-if="savedAttachments.length || pendingAttachments.length" class="facts note-attachments">
+                  <li v-for="(path, i) in savedAttachments" :key="path">
+                    <FileText :size="16" aria-hidden="true" />
+                    <button
+                      class="attachment-name attachment-open"
+                      :title="path.split('/').pop()"
+                      @click="openNoteAttachment(path)"
+                    >
+                      {{ path.split('/').pop() }}
+                    </button>
+                    <button
+                      v-press
+                      class="link"
+                      :disabled="saving"
+                      @click="attachmentToRemove = { index: i, pending: false }"
+                    >
+                      移除
+                    </button>
+                  </li>
+                  <li v-for="(file, i) in pendingAttachments" :key="i">
+                    <FileText :size="16" aria-hidden="true" />
+                    <span class="attachment-name" :title="file.name">{{ file.name }}</span>
+                    <span class="attachment-status">待保存</span>
+                    <button
+                      v-press
+                      class="link"
+                      :disabled="saving"
+                      @click="attachmentToRemove = { index: i, pending: true }"
+                    >
+                      移除
+                    </button>
+                  </li>
+                </ul>
+              </template>
+            </div>
+            <button v-if="edit?.canOpen" v-press class="btn btn-secondary open-obsidian" @click="emit('open')">
+              <ExternalLink :size="14" aria-hidden="true" />在 Obsidian 中打开
+            </button>
+          </div>
+        </Transition>
+        <Transition name="sidebar-tab">
+          <OriginalImagePanel
+            v-if="imageCompare"
+            v-show="comparing && !videoPanel"
+            :inert="!comparing || videoPanel"
+            class="side-main"
+            :images="
+              pics.map((p, i) => ({
+                url: picUrls[i],
+                name: p.file.name,
+                region: p.region ?? null,
+                text: imageTexts[i] ?? '',
+              }))
+            "
+            :active="activeImage"
+            :show-text="!edit"
+            @preview="zoomFrame = $event"
+          />
+          <SourcePanel
+            v-else-if="textCompare"
+            v-show="comparing && !videoPanel"
+            ref="panel"
+            :inert="!comparing || videoPanel"
+            class="side-main"
+            :sentences="coverage.sentences"
+            :unused="coverage.unused"
+            :active="activeMatch"
+            @scroll="updateLink"
+          />
+        </Transition>
+      </div>
 
       <footer class="actions">
         <p v-if="saveError && !failDialog" class="save-fail">
@@ -967,7 +1762,7 @@ onBeforeUnmount(() => {
             v-press="'tactile'"
             class="btn btn-primary"
             :disabled="saving || titleMissing || !dirty"
-            @click="save"
+            @click="save()"
           >
             {{ saving ? '保存中…' : saveError ? '重新保存' : '保存修改' }}<span class="kbd">Ctrl+S</span>
           </button>
@@ -981,7 +1776,7 @@ onBeforeUnmount(() => {
         </template>
         <div v-else class="action-row">
           <button v-press class="btn btn-secondary" @click="confirmingDiscard = true">放弃</button>
-          <button v-press="'tactile'" class="btn btn-primary" :disabled="saving || titleMissing" @click="save">
+          <button v-press="'tactile'" class="btn btn-primary" :disabled="saving || titleMissing" @click="save()">
             {{ saving ? '保存中…' : saveError ? '重新保存' : '保存' }}<span class="kbd">Ctrl+S</span>
           </button>
         </div>
@@ -989,13 +1784,53 @@ onBeforeUnmount(() => {
     </aside>
 
     <NoticeDialog
+      v-if="frameToDelete"
+      :title="frameToDelete.picture ? '删除图片' : '删除截图'"
+      cancel-text="取消"
+      ok-text="删除"
+      danger
+      @cancel="frameToDelete = null"
+      @ok="confirmFrameDelete"
+    >
+      <p>这张{{ frameToDelete.picture ? '图片' : '截图' }}将从当前笔记中移除。确定删除吗？</p>
+    </NoticeDialog>
+    <NoticeDialog
+      v-if="attachmentToRemove"
+      title="移除附件"
+      cancel-text="取消"
+      ok-text="移除"
+      danger
+      @cancel="attachmentToRemove = null"
+      @ok="removeNoteAttachment"
+    >
+      <p>确定从这篇笔记移除附件吗？</p>
+    </NoticeDialog>
+    <NoticeDialog v-if="zoomFrame" title="查看图片" cancel-text="关闭" @cancel="zoomFrame = ''">
+      <img :src="zoomFrame" alt="查看图片" class="image-preview" />
+    </NoticeDialog>
+    <NoticeDialog
+      v-if="askKeepVideo && videoFile"
+      title="保存视频笔记"
+      cancel-text="取消"
+      ok-text="保存"
+      @cancel="askKeepVideo = false"
+      @ok="confirmVideoSave"
+    >
+      <p>已截取的画面会随笔记保存。保留原视频后，重开笔记可继续截取。</p>
+      <label class="keep-video-option">
+        <input v-model="keepVideo" type="checkbox" />
+        <span>保留原视频</span>
+        <span class="video-size">（{{ (videoFile.size / 1024 / 1024).toFixed(1) }} MB）</span>
+      </label>
+    </NoticeDialog>
+    <NoticeDialog
       v-if="failDialog && saveError"
       title="保存失败"
       tone="error"
       cancel-text="继续编辑"
       ok-text="重新保存"
       @cancel="failDialog = false"
-      @ok="save"
+      @ok="save()"
     >
       <p>{{ saveError.reason }}</p>
       <p v-if="saveError.toSettings">
@@ -1055,9 +1890,6 @@ onBeforeUnmount(() => {
   gap: var(--panel-gap);
   padding: var(--window-pad);
   padding-top: 0;
-}
-.confirm.comparing {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 0.8fr);
 }
 
 /* 纸面和右栏共用的面板外观：由“层次”令牌决定是平铺还是卡片 */
@@ -1264,7 +2096,8 @@ onBeforeUnmount(() => {
   background: var(--line);
 }
 .pics {
-  --pic-max-h: 240px; /* 所有图片按这个高度显示，宽度按比例，太宽时缩到正文宽度；多张时并排 */
+  --pic-max-w: 280px;
+  --pic-max-h: 180px;
   margin-top: var(--sp-4);
   display: flex;
   flex-wrap: wrap;
@@ -1275,13 +2108,22 @@ onBeforeUnmount(() => {
   width: 100%;
 }
 .pic {
+  container-type: inline-size;
   position: relative;
   margin: 0;
   flex-shrink: 0;
 }
+.pic-menu-open {
+  z-index: 2;
+}
 .pic-crop {
+  display: block;
+  padding: 0;
+  border: 0;
+  cursor: zoom-in;
   position: relative;
   width: 100%;
+  height: auto;
   overflow: hidden;
   border-radius: var(--radius-md);
   background: var(--card-muted);
@@ -1297,18 +2139,47 @@ onBeforeUnmount(() => {
 .pic-tools {
   position: absolute;
   top: var(--sp-2);
-  right: var(--sp-2);
+  right: var(--sp-5);
   display: flex;
   gap: var(--sp-1);
   flex-wrap: wrap;
   justify-content: flex-end;
-  max-width: calc(100% - var(--sp-2) * 2);
+  max-width: calc(100% - var(--sp-5) + var(--sp-2));
   opacity: 0;
   transition: opacity var(--ease);
 }
 .pic:hover .pic-tools,
 .pic:focus-within .pic-tools {
   opacity: 1;
+}
+.pic-menu {
+  display: none;
+}
+@container (max-width: 200px) {
+  .pic button.pic-menu {
+    position: absolute;
+    top: var(--sp-1);
+    left: var(--sp-1);
+    display: block;
+    height: var(--h-xs);
+    padding-inline: var(--sp-2);
+  }
+  .pic .pic-tools {
+    display: none;
+  }
+  .pic .pic-tools.menu-open {
+    display: grid;
+    top: calc(var(--h-xs) + var(--sp-2));
+    left: var(--sp-1);
+    right: auto;
+    max-width: none;
+    padding: var(--sp-1);
+    background: var(--card);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-card);
+    z-index: 2;
+    opacity: 1;
+  }
 }
 .pic-tools button {
   height: var(--h-xs);
@@ -1520,6 +2391,338 @@ onBeforeUnmount(() => {
   flex-direction: column;
   overflow: hidden;
 }
+.video-panel {
+  container: video-sidebar / inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.video-player {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: contain;
+  border-radius: var(--panel-radius);
+  background: var(--primary);
+}
+.video-capture {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: var(--sp-2);
+}
+.video-unit {
+  container-type: inline-size;
+  min-width: 0;
+}
+.video-controls button.video-icon {
+  min-width: var(--h-md);
+  border-radius: var(--radius-md);
+}
+.expanded-video {
+  width: min(85vw, 960px);
+  max-height: 90vh;
+  padding: var(--sp-4);
+  border: 1px solid var(--line);
+  border-radius: var(--panel-radius);
+  background: var(--card);
+  color: var(--fg);
+}
+.expanded-video::backdrop {
+  background: rgb(15 18 25 / 28%);
+}
+.expanded-video-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--sp-2);
+}
+.expanded-video .video-unit {
+  width: min(100%, calc(65vh * var(--video-aspect)));
+  margin-inline: auto;
+}
+.expanded-video .video-player {
+  aspect-ratio: var(--video-aspect);
+  background: transparent;
+}
+.video-sound {
+  position: relative;
+  flex: none;
+}
+.video-volume-popup {
+  position: absolute;
+  z-index: 2;
+  bottom: 100%;
+  left: 50%;
+  translate: -50% 0;
+  display: grid;
+  place-items: center;
+  padding: var(--sp-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--card);
+  opacity: 0;
+  pointer-events: none;
+}
+.video-sound:hover .video-volume-popup,
+.video-sound:focus-within .video-volume-popup {
+  opacity: 1;
+  pointer-events: auto;
+}
+.video-controls input.video-volume {
+  appearance: none;
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: var(--sp-3);
+  height: calc(var(--sp-7) * 2);
+  margin: 0;
+  background: transparent;
+}
+.video-volume::-webkit-slider-runnable-track {
+  width: calc(var(--sp-1) / 2);
+  border-radius: var(--radius-pill);
+  background: var(--line-strong);
+}
+.video-volume::-webkit-slider-thumb {
+  appearance: none;
+  width: var(--sp-2);
+  height: var(--sp-2);
+  margin-inline: 0;
+  margin-block-start: calc((var(--sp-1) / 2 - var(--sp-2)) / 2);
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+}
+.video-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  padding: 0 var(--sp-1);
+  border: 0;
+  background: transparent;
+}
+
+.video-heading-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+.video-heading-row .frame-count {
+  margin-inline-start: var(--sp-1);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  font-weight: normal;
+}
+.video-heading {
+  margin: 0;
+}
+.video-heading-row .video-capture-button,
+.video-capture .video-capture-button {
+  flex: none;
+  width: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.video-controls .video-capture-compact,
+.compact-frame-separator {
+  display: none;
+}
+@container video-sidebar (max-width: 340px) {
+  .video-heading-row .video-capture-button {
+    display: none;
+  }
+  .video-controls .video-capture-compact {
+    display: inline-grid;
+    place-items: center;
+  }
+  .compact-frame-separator {
+    display: inline;
+  }
+  .video-controls {
+    row-gap: var(--sp-1);
+  }
+  .video-heading-row {
+    margin-top: var(--sp-2);
+  }
+}
+.frame-count {
+  margin-inline-start: var(--sp-1);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  font-weight: normal;
+}
+.video-heading {
+  margin: var(--sp-2) 0 0;
+  font-size: inherit;
+}
+.image-preview {
+  display: block;
+  max-width: 100%;
+  max-height: 60vh;
+  margin-inline: auto;
+  object-fit: contain;
+}
+.keep-video-option {
+  display: flex;
+  align-items: center;
+  margin-top: var(--sp-3);
+}
+.keep-video-option input {
+  margin: 0 var(--sp-2) 0 0;
+  accent-color: var(--accent);
+}
+.video-size,
+.video-status {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+.video-status {
+  margin: 0;
+}
+.video-frames {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+.video-frame {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .video-frame:hover .video-thumb {
+    transform: scale(1.02);
+  }
+}
+button.video-thumb {
+  display: block;
+  transition: transform 150ms ease-out;
+  height: calc(var(--sp-7) * 3 * 9 / 16);
+  padding: 0;
+  border: 0;
+  position: relative;
+  width: calc(var(--sp-7) * 3);
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: var(--panel-radius);
+}
+.video-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.video-frame .frame-time {
+  position: absolute;
+  right: var(--sp-1);
+  bottom: var(--sp-1);
+  height: auto;
+  padding: var(--sp-1);
+  border: 0;
+  border-radius: var(--sp-1);
+  background: var(--primary);
+  color: var(--card);
+  font-size: var(--fs-sm);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.video-frame button.frame-time:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+.video-frame button.frame-remove,
+.pic button.frame-remove {
+  position: absolute;
+  top: 0;
+  right: 0;
+  transform: translate(35%, -35%);
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: var(--sp-5);
+  height: var(--sp-5);
+  padding: 0;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: var(--err);
+  color: #fff;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--ease);
+}
+.frame-remove:hover:not(:disabled) {
+  background: var(--err);
+}
+.frame-remove svg {
+  transition: transform var(--ease);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .frame-remove:hover:not(:disabled) svg {
+    transform: rotate(90deg);
+  }
+}
+.pic:hover .frame-remove,
+.pic:focus-within .frame-remove,
+.video-frame:hover .frame-remove,
+.video-frame:focus-within .frame-remove {
+  opacity: 1;
+  pointer-events: auto;
+}
+.video-thumb:focus-visible {
+  outline: 1px solid var(--accent);
+}
+.video-controls input.video-progress {
+  margin: 0;
+}
+@container (max-width: 340px) {
+  .video-controls {
+    flex-wrap: wrap;
+  }
+  .video-controls input.video-progress {
+    order: -1;
+    flex: 0 0 100%;
+    width: 100%;
+  }
+  .video-controls .video-clock {
+    margin-inline-end: auto;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  button.frame-remove {
+    transition: none;
+  }
+}
+
+.tab-panels {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+  isolation: isolate;
+}
+.tab-panels > .side-main {
+  grid-area: 1 / 1;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .sidebar-tab-enter-active,
+  .sidebar-tab-leave-active {
+    transition: opacity 75ms ease;
+  }
+  .sidebar-tab-enter-active {
+    transition-delay: 75ms;
+  }
+  .sidebar-tab-enter-from,
+  .sidebar-tab-leave-to {
+    opacity: 0;
+  }
+  .sidebar-tab-leave-active {
+    pointer-events: none;
+  }
+}
+
 .side-main {
   flex: 1;
   min-height: 0;
@@ -1530,6 +2733,7 @@ onBeforeUnmount(() => {
 }
 /* 右栏顶部的两个标签页：当前那个深色字、下面一条强调色细线 */
 .tabs {
+  position: relative;
   flex: none;
   display: flex;
   gap: var(--sp-5);
@@ -1544,7 +2748,39 @@ onBeforeUnmount(() => {
   border-radius: 0;
   background: none;
   color: var(--faint);
-  box-shadow: inset 0 -2px 0 transparent;
+}
+.tab:focus:not(:focus-visible),
+.tab:active:not(:disabled) {
+  background: transparent;
+  outline: none;
+}
+.pending-video-image {
+  display: block;
+  width: min(100%, calc(var(--sp-7) * 9));
+}
+.video-clock {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.video-controls {
+  margin-top: var(--sp-3);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.video-controls input {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--accent);
+}
+.video-progress:focus-visible {
+  outline: none;
+}
+.video-progress:focus-visible::-webkit-slider-thumb {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
 }
 .tab:hover:not(:disabled) {
   background: none;
@@ -1553,7 +2789,30 @@ onBeforeUnmount(() => {
 .tab[aria-selected='true'] {
   color: var(--fg-strong);
   font-weight: var(--fw-label);
-  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.tab {
+  font-size: inherit;
+  width: 4em;
+}
+.tab-indicator {
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  width: 4em;
+  height: 2px;
+  background: var(--accent);
+  pointer-events: none;
+}
+.tabs:has(.tab:nth-child(2)[aria-selected='true']) .tab-indicator {
+  transform: translateX(calc(100% + var(--sp-5)));
+}
+.tabs:has(.tab:nth-child(3)[aria-selected='true']) .tab-indicator {
+  transform: translateX(calc(200% + var(--sp-5) * 2));
+}
+@media (prefers-reduced-motion: no-preference) {
+  .tab-indicator {
+    transition: transform 150ms cubic-bezier(0.2, 0, 0, 1);
+  }
 }
 /* 文件名（右栏第一行）：和下面的属性一样的小标题，下面一个输入框，后缀 .md 淡色 */
 .file-field {
@@ -1604,6 +2863,67 @@ onBeforeUnmount(() => {
   border-radius: var(--radius-md);
   font-size: var(--fs-sm);
 }
+.attachment-heading,
+.note-attachments li {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.attachment-heading {
+  justify-content: space-between;
+  margin-top: var(--sp-5);
+}
+.attachment-heading h3 {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin: 0;
+}
+.attachment-add {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.note-attachments {
+  margin-top: var(--sp-2);
+  list-style: none;
+}
+.note-attachments li > svg {
+  color: var(--faint);
+}
+.note-attachments li + li {
+  border-top: 1px solid var(--line);
+}
+.note-attachments li {
+  min-height: var(--h-md);
+}
+.note-attachments li > :not(.attachment-name) {
+  flex: none;
+}
+.note-attachments .attachment-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.note-attachments .attachment-open {
+  height: var(--h-sm);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+}
+.note-attachments .attachment-open:hover:not(:disabled),
+.note-attachments .attachment-open:focus-visible {
+  background: transparent;
+  text-decoration: underline;
+}
+.attachment-status {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
 .fact {
   display: flex;
   align-items: center;
@@ -1630,10 +2950,43 @@ onBeforeUnmount(() => {
   overflow-wrap: anywhere;
 }
 .fact .link-text {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: var(--h-xs);
+  min-width: 0;
+  gap: var(--sp-1);
+  white-space: nowrap;
+}
+.editing-source .link-text {
+  flex: 1;
+}
+.fact .link-text input {
+  box-sizing: border-box;
+  min-width: 0;
+  width: 0;
+  flex: 1;
+  height: var(--h-xs);
+  padding-inline: var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  color: var(--fg);
+  font: inherit;
+}
+.fact .link-text input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+.fact .link-text button {
+  flex: none;
+}
+.fact .link-text a,
+.fact .link-text span {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-  overflow-wrap: normal;
+  color: var(--accent);
 }
 /* 底部操作：右栏最下面，两种状态下位置不变 */
 .actions {

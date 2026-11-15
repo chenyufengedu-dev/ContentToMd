@@ -1,7 +1,7 @@
 // 一条内容的处理流程。音视频：提取声音 → 转写 → 整理；图片：读取图片 → 看图整理（整理完顺便算出自动裁剪框）。
 // 每一步的结果都留在 job 里，重试时从失败的那一步继续，已经付过费的步骤不再重复（方案第 6.2 节）
 
-import type { Config, ServiceKind } from './config'
+import { OTHER_DOMAIN_ID, type Config, type ServiceKind } from './config'
 import { decodeTo16kMono, splitChunks, toWav, cleanTranscript, effectiveLength, wavSeconds } from './audio'
 import { transcribe, chatJson, type Fetch } from './services'
 import { AppError, isAppError } from './errors'
@@ -10,10 +10,12 @@ import { CONCURRENCY, isCondensed, lengthProblem, mapPool, REFINE_SINGLE_MAX, sp
 import { estimateAsrCost, estimateCost, keyId, type Usage, type UsageRecord } from './cost'
 import { autoCrop, type Pixels, type Rect } from './image'
 import {
+  buildImageExtractionBody,
   buildSystemPrompt,
   buildUserMessage,
   parseAiResult,
   previewText,
+  titleFromText,
   type Mode,
   type NoteDraft,
   type Prompts,
@@ -46,6 +48,8 @@ export interface JobImage {
   aiUrl?: string
   autoCrop?: Rect | null
   crop?: Rect | null
+  /** 提取内容：用户框选的识别范围（只影响发给看图服务的图，保存和对照仍用完整原图） */
+  region?: Rect | null
 }
 
 export interface Job {
@@ -76,7 +80,7 @@ export interface Job {
   /** 整理时 AI 已经生成的文字（去掉了格式），处理中的预览框一个字一个字显示 */
   preview?: string
   /** 长文分块精修时已经精修好的块（按块号），失败重试时只补没做完的；整理完成后清掉 */
-  chunkResults?: Record<number, { draft: NoteDraft; domainFallback: boolean }>
+  chunkResults?: Record<number, { draft: NoteDraft; domainFallback: boolean } | 'skip'>
   chunkTotal?: number
 }
 
@@ -90,14 +94,15 @@ export function newTextJob(fileName: string, text: string, mode: Mode, type: Sou
   return { fileName, type, mode, steps: [{ id: 'organize', status: 'pending' }], transcript: text }
 }
 
-export function newImageJob(files: File[], mode: Mode): Job {
+export function newImageJob(files: (File | { file: File; region?: Rect | null })[], mode: Mode): Job {
   const ids: StepId[] = ['read', 'organize']
+  const items = files.map((x) => (x instanceof File ? { file: x } : x))
   return {
-    fileName: files[0]?.name ?? '',
+    fileName: items[0]?.file.name ?? '',
     type: '图片',
     mode,
     steps: ids.map((id) => ({ id, status: 'pending' })),
-    images: files.map((file) => ({ file })),
+    images: items.map((i) => ({ file: i.file, region: i.region ?? null })),
   }
 }
 
@@ -107,8 +112,8 @@ export interface RunContext {
   existingTags: string[]
   fetch: Fetch
   readFile: () => Promise<ArrayBuffer>
-  /** 图片压缩成发给看图服务的 data URL、读出像素：要用 WebView 的画布，由界面注入（见 image.ts） */
-  toAiUrl: (b: Blob) => Promise<string>
+  /** 图片压缩成发给看图服务的 data URL（可只取一个识别范围）、读出像素：要用 WebView 的画布，由界面注入（见 image.ts） */
+  toAiUrl: (b: Blob, crop?: Rect | null) => Promise<string>
   readPixels: (b: Blob) => Promise<Pixels>
   cancel: AbortSignal
   onUpdate: () => void
@@ -209,12 +214,30 @@ const STEPS: Record<StepId, (job: Job, ctx: RunContext, step: StepState) => Prom
   },
 
   async read(job, ctx) {
-    for (const img of job.images!) img.aiUrl ??= await ctx.toAiUrl(img.file)
+    for (const img of job.images!) img.aiUrl ??= await ctx.toAiUrl(img.file, img.region ?? null)
   },
 
   async organize(job, ctx, step) {
-    const system = buildSystemPrompt(ctx.prompts, job.mode, ctx.config.domains, ctx.existingTags)
     const images = job.images
+    // 视频/音频的提取内容只要口播稿，不再花一次文字整理的钱
+    if (job.mode === '提取内容' && !images) {
+      const text = (job.transcript ?? '').trim()
+      if (!text) throw new AppError('no_text', '没有可提取的文字。')
+      const problem = lengthProblem(job.mode, text.length)
+      if (problem) throw new AppError('too_long', problem)
+      job.draft = {
+        title: titleFromText(text, job.fileName),
+        domainId: OTHER_DOMAIN_ID,
+        tags: [],
+        keywords: [],
+        summary: '',
+        body: text,
+        image_captions: [],
+        image_texts: [],
+      }
+      return
+    }
+    const system = buildSystemPrompt(ctx.prompts, job.mode, ctx.config.domains, ctx.existingTags)
     const kind = images ? 'vision' : 'text'
     const extra = { shareText: job.shareText, request: job.request }
     const onText = (soFar: string) => {
@@ -245,6 +268,19 @@ const STEPS: Record<StepId, (job: Job, ctx: RunContext, step: StepState) => Prom
     for (let attempt = 0; ; attempt++) {
       try {
         const parsed = await askOnce(job, ctx, step, kind, system, user, onText)
+        if (images && job.mode === '提取内容') {
+          const imageTexts = parsed.draft.image_texts?.length ? parsed.draft.image_texts : [parsed.draft.body]
+          const body = buildImageExtractionBody(imageTexts)
+          if (!body.trim()) throw new AppError('no_text', '这些图片里没有识别到文字，请换更清晰的截图。')
+          // 提取内容采用用户选区作为初始裁剪。
+          for (const img of images) {
+            img.autoCrop = null
+            img.crop = img.region ?? null
+          }
+          job.draft = { ...parsed.draft, summary: '', body, image_texts: imageTexts }
+          job.domainFallback = parsed.domainFallback
+          return
+        }
         job.draft = parsed.draft
         job.domainFallback = parsed.domainFallback
         if (images) await cropAll(images, parsed.imageRegions, ctx)
@@ -273,29 +309,34 @@ async function askOnce(
   user: string | unknown[],
   onText?: (soFar: string) => void,
 ) {
+  return requireDraft(await askJson(job, ctx, step, kind, system, user, onText), ctx)
+}
+
+function requireDraft(raw: unknown, ctx: RunContext) {
+  const parsed = parseAiResult(raw, ctx.config.domains)
+  if (!parsed) throw new AppError('format', '整理结果缺少标题或正文，请重试。')
+  return parsed
+}
+
+async function askJson(
+  job: Job,
+  ctx: RunContext,
+  step: StepState,
+  kind: 'text' | 'vision',
+  system: string,
+  user: string | unknown[],
+  onText?: (soFar: string) => void,
+) {
   let used: Usage | undefined
   let answered = false
   try {
-    const parsed = parseAiResult(
-      await call(
-        () =>
-          chatJson(
-            kind,
-            ctx.config.services[kind],
-            system,
-            user,
-            ctx.fetch,
-            ctx.cancel,
-            onText,
-            (u) => (used = u),
-          ).then((v) => ((answered = true), v)),
-        ctx,
-        step,
-      ),
-      ctx.config.domains,
+    const raw = await call(
+      () => chatJson(kind, ctx.config.services[kind], system, user, ctx.fetch, ctx.cancel, onText, (u) => (used = u)),
+      ctx,
+      step,
     )
-    if (!parsed) throw new AppError('format', '整理结果缺少标题或正文，请重试。')
-    return parsed
+    answered = true
+    return raw
   } finally {
     if (used || answered) await recordUsage(job, ctx, kind, used)
   }
@@ -320,6 +361,11 @@ async function organizeInChunks(
     job.chunkTotal = chunks.length
   }
   const results = job.chunkResults!
+  const request = extra.request?.trim()
+  const chunkSystem = request
+    ? system +
+      '\n\n分段规则：若用户明确限定保留范围，逐条判断句子、列表项和表格行。仅保留直接回答要求的内容，以及影响其含义的适用对象、条件和例外；同段有一条命中也要逐条筛选。整段无相关内容时，只返回 JSON {"skip":true}。若用户只要求调整措辞、术语或格式，保留原文全部信息。'
+    : system
   let done = Object.keys(results).length
   await mapPool(chunks, CONCURRENCY, async (chunk, i) => {
     if (results[i]) return
@@ -331,9 +377,14 @@ async function organizeInChunks(
     for (let attempt = 0; ; attempt++) {
       try {
         // 打字机预览只跟第一块
-        const parsed = await askOnce(job, ctx, step, 'text', system, user, i === 0 ? onText : undefined)
-        if (attempt === 0 && isCondensed(chunk.length, parsed.draft.body.length)) continue
-        results[i] = { draft: parsed.draft, domainFallback: parsed.domainFallback }
+        const raw = await askJson(job, ctx, step, 'text', chunkSystem, user, i === 0 ? onText : undefined)
+        if (request && raw && typeof raw === 'object' && 'skip' in raw && raw.skip === true) {
+          results[i] = 'skip'
+        } else {
+          const parsed = requireDraft(raw, ctx)
+          if (attempt === 0 && !request && isCondensed(chunk.length, parsed.draft.body.length)) continue
+          results[i] = { draft: parsed.draft, domainFallback: parsed.domainFallback }
+        }
         step.note = `已完成 ${++done}/${chunks.length} 段`
         ctx.onUpdate()
         return
@@ -342,13 +393,41 @@ async function organizeInChunks(
       }
     }
   })
-  const parts = chunks.map((_, i) => results[i])
+  const parts = chunks.map((_, i) => results[i]).filter((part) => part !== 'skip')
   const first = parts[0]
+  if (!first) throw new AppError('no_text', '未找到符合本次要求的内容，请调整要求后重试。')
+  const body = parts.map((part) => part.draft.body).join('\n\n')
+  let { title, summary } = first.draft
+  if (request && parts.length > 1) {
+    const raw = await askJson(
+      job,
+      ctx,
+      step,
+      'text',
+      '依据材料中的已整理正文，按用户要求生成覆盖保留内容的标题和简短摘要（最多两句）。只返回含 title 和 summary 的 JSON，不改写正文，不提省略了什么。各条结论保留适用对象和必要条件，不能把不同对象的要求合成一条。',
+      buildUserMessage('保留的分段正文', body, { request }),
+    )
+    if (
+      !raw ||
+      typeof raw !== 'object' ||
+      !('title' in raw) ||
+      typeof raw.title !== 'string' ||
+      !raw.title.trim() ||
+      !('summary' in raw) ||
+      typeof raw.summary !== 'string' ||
+      !raw.summary.trim()
+    )
+      throw new AppError('format', '未能生成长文标题和摘要，请重试。')
+    title = raw.title.trim()
+    summary = raw.summary.trim()
+  }
   job.draft = {
     ...first.draft,
     tags: [...new Set(parts.flatMap((p) => p.draft.tags))].slice(0, 8),
     keywords: [...new Set(parts.flatMap((p) => p.draft.keywords))].slice(0, 12),
-    body: parts.map((p) => p.draft.body).join('\n\n'),
+    title,
+    summary,
+    body,
   }
   job.domainFallback = first.domainFallback
   job.chunkResults = undefined
@@ -358,6 +437,10 @@ async function organizeInChunks(
 /** 自动裁剪（F29）：读不出像素时那张图就不裁，不让整条失败 */
 async function cropAll(images: JobImage[], regions: unknown[], ctx: RunContext) {
   for (const [i, img] of images.entries()) {
+    if (img.region) {
+      img.crop = img.region
+      continue
+    }
     try {
       img.autoCrop = autoCrop(await ctx.readPixels(img.file), regions[i])
     } catch {

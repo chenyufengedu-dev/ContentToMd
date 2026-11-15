@@ -20,6 +20,7 @@ vi.mock('../shell/tauri', () => ({
   writeClipboard: vi.fn().mockResolvedValue(undefined),
   httpFetch: vi.fn(),
   destroyWindow: vi.fn(),
+  writeAttachment: vi.fn().mockResolvedValue('附件/2026-11/测试-原文.txt'),
   writeNote: vi.fn().mockResolvedValue('为人处世/测试.md'),
 }))
 vi.mock('../core/docText', async (original) => ({
@@ -35,6 +36,7 @@ vi.mock('../core/pipeline', async (original) => ({
 let app: App | undefined
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({ close: vi.fn() }))
   vi.stubGlobal('matchMedia', () => ({ matches: true }))
   vi.stubGlobal('URL', { createObjectURL: vi.fn(() => 'blob:test'), revokeObjectURL: vi.fn() })
 })
@@ -76,15 +78,18 @@ async function mount(active = true) {
   })
   app.mount(root)
   await flush()
-  function pick(name: string, promise = Promise.resolve(bytes('测试正文'))) {
+  function pickFiles(files: File[]) {
     const input = root.querySelector<HTMLInputElement>('input[type="file"]')
     if (!input) throw new Error('缺少文件输入框')
-    const file = new File([], name, { type: name.endsWith('.png') ? 'image/png' : '' })
-    Object.defineProperty(file, 'arrayBuffer', { value: () => promise })
-    Object.defineProperty(input, 'files', { configurable: true, value: [file] })
+    Object.defineProperty(input, 'files', { configurable: true, value: files })
     input.dispatchEvent(new Event('change', { bubbles: true }))
   }
-  return { root, state, pick, config, goSettings, revealForClose }
+  function pick(name: string, promise = Promise.resolve(bytes('测试正文'))) {
+    const file = new File([], name, { type: name.endsWith('.png') ? 'image/png' : '' })
+    Object.defineProperty(file, 'arrayBuffer', { value: () => promise })
+    pickFiles([file])
+  }
+  return { root, state, pick, pickFiles, config, goSettings, revealForClose }
 }
 it('隐藏页有未处理内容时，先请求App显示新增页，再显示关闭询问', async () => {
   const { root, pick, state, revealForClose } = await mount(false)
@@ -310,4 +315,76 @@ it('旧音视频的检测错误不能取消新文件的读取', async () => {
   await flush()
   expect(root.querySelector('.item-name')?.textContent).toBe('新.txt')
   expect(root.querySelector('.notice')).toBeNull()
+})
+
+it('图片导入先解码，坏图提示文件名，后续正常图仍可导入', async () => {
+  const bitmap = { width: 1, height: 1, close: vi.fn() }
+  const decode = vi.mocked(createImageBitmap)
+  decode.mockRejectedValueOnce(new Error('The source image could not be decoded.'))
+  decode.mockResolvedValueOnce(bitmap)
+  const { root, pickFiles } = await mount()
+  pickFiles(['坏图.png', '好图.png'].map((name) => new File([], name, { type: 'image/png' })))
+  await flush()
+  expect(root.querySelector('img[alt="坏图.png"]')).toBeNull()
+  expect(root.textContent).toContain('坏图.png')
+  expect(root.textContent).toContain('图片无法读取')
+  expect(root.querySelector('img[alt="好图.png"]')).not.toBeNull()
+  expect(bitmap.close).toHaveBeenCalledOnce()
+})
+
+it('图片的提取内容可框选识别范围，开始处理时随任务带上选区', async () => {
+  const { root, pickFiles, config } = await mount()
+  config.services.vision.apiKey = 'isolated-vision'
+  pickFiles([new File([], '聊天.png', { type: 'image/png' }), new File([], '白板.png', { type: 'image/png' })])
+  await flush()
+  const extractMode = [...root.querySelectorAll<HTMLButtonElement>('.mode')].find(
+    (button) => button.textContent?.trim() === '提取内容',
+  )
+  if (!extractMode) throw new Error('图片缺少提取内容模式')
+  extractMode.click()
+  await flush()
+  const regions = root.querySelectorAll<HTMLButtonElement>('.thumb-region')
+  expect(regions).toHaveLength(2)
+  regions[0].click()
+  await flush()
+  const img = document.querySelector<HTMLImageElement>('.dialog .frame img')
+  const stage = document.querySelector<HTMLElement>('.dialog .stage')
+  if (!img || !stage) throw new Error('框选浮层没有打开')
+  Object.defineProperties(stage, { clientWidth: { value: 600 }, clientHeight: { value: 500 } })
+  Object.defineProperties(img, { naturalWidth: { value: 400 }, naturalHeight: { value: 300 } })
+  img.dispatchEvent(new Event('load'))
+  await flush()
+  const left = document.querySelector<HTMLButtonElement>('.dialog .handle.w')
+  const done = document.querySelector<HTMLButtonElement>('.dialog .buttons button.primary')
+  if (!left || !done) throw new Error('缺少框选控件')
+  left.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', shiftKey: true, bubbles: true }))
+  done.click()
+  await flush()
+  expect(root.querySelector('.thumb-region .region-mark')?.textContent).toBe('已框选')
+  window.dispatchEvent(new KeyboardEvent('keydown', { ctrlKey: true, key: 'Enter' }))
+  await flush()
+  const job = vi.mocked(runJob).mock.calls[0]?.[0]
+  if (!job) throw new Error('没有开始处理')
+  expect(job.mode).toBe('提取内容')
+  expect(job.images?.[0].region).toEqual({ x: 10, y: 0, w: 390, h: 300 })
+  expect(job.images?.[1].region).toBeNull()
+})
+
+it('连续导入按批次保序，坏图不占九张额度', async () => {
+  const pending = deferred<ImageBitmap>()
+  const decode = vi.mocked(createImageBitmap)
+  decode.mockReturnValueOnce(pending.promise)
+  const { root, pickFiles } = await mount()
+  const files = (names: string[]) => names.map((name) => new File([], name, { type: 'image/png' }))
+  pickFiles(files(['坏图.png', '首图.png']))
+  pickFiles(files(Array.from({ length: 9 }, (_, i) => `追加-${i + 1}.png`)))
+  expect(decode).toHaveBeenCalledTimes(1)
+  pending.reject(new Error('无法解码'))
+  await vi.waitFor(() => expect(root.querySelectorAll('.thumb img')).toHaveLength(9))
+  expect([...root.querySelectorAll<HTMLImageElement>('.thumb img')].map((image) => image.alt)).toEqual([
+    '首图.png',
+    ...Array.from({ length: 8 }, (_, i) => `追加-${i + 1}.png`),
+  ])
+  expect(root.textContent).toContain('坏图.png')
+  expect(root.textContent).toContain('追加-9.png')
 })

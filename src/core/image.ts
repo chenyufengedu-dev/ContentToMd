@@ -108,9 +108,9 @@ export async function readPixels(blob: Blob): Promise<Pixels> {
   return { data, width: canvas.width, height: canvas.height }
 }
 
-/** 发给看图服务的版本：长边不超过 1568，JPEG，返回 data URL */
-export async function toAiDataUrl(blob: Blob): Promise<string> {
-  const bmp = await createImageBitmap(blob)
+/** 发给看图服务的版本：长边不超过 1568，JPEG，返回 data URL；crop 只用于识别范围，不影响原图 */
+export async function toAiDataUrl(blob: Blob, crop?: Rect | null): Promise<string> {
+  const bmp = crop ? await createImageBitmap(blob, crop.x, crop.y, crop.w, crop.h) : await createImageBitmap(blob)
   const scale = Math.min(1, AI_LONG_EDGE / Math.max(bmp.width, bmp.height))
   const canvas = new OffscreenCanvas(Math.round(bmp.width * scale), Math.round(bmp.height * scale))
   const g = canvas.getContext('2d')!

@@ -197,6 +197,24 @@ button.primary:disabled {
   color: var(--faint);
   opacity: 1;
 }
+.chip-add {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-chip);
+  background: none;
+  color: var(--muted);
+}
+.chip-add:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--fg-strong);
+}
+.chip-add {
+  height: var(--h-sm);
+  padding: 0 var(--px-sm);
+  font-size: var(--fs-sm);
+}
 button.link {
   height: auto;
   border: 0;

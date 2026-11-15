@@ -66,14 +66,36 @@ fn ensure_prompts(defaults: HashMap<String, String>) -> Result<HashMap<String, S
     let mut out = HashMap::new();
     for (name, text) in defaults {
         let path = dir.join(format!("{name}.md"));
-        if !path.exists() {
-            fs::write(&path, &text).map_err(|e| format!("无法写入指令文件：{e}"))?;
-        }
-        let current =
-            fs::read_to_string(&path).map_err(|e| format!("无法读取指令文件 {name}.md：{e}"))?;
+        let current = match fs::read_to_string(&path) {
+            Ok(current) if !is_legacy_default_prompt(&name, &current) => current,
+            Ok(_) => {
+                let pending = path.with_extension("md.upgrade");
+                fs::write(&pending, &text).map_err(|e| format!("无法更新默认指令：{e}"))?;
+                fs::rename(&pending, &path).map_err(|e| format!("无法替换默认指令：{e}"))?;
+                text
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                fs::write(&path, &text).map_err(|e| format!("无法写入指令文件：{e}"))?;
+                text
+            }
+            Err(e) => return Err(format!("无法读取指令文件 {name}.md：{e}")),
+        };
         out.insert(name, current);
     }
     Ok(out)
+}
+
+fn is_legacy_default_prompt(name: &str, current: &str) -> bool {
+    let current = current.replace("\r\n", "\n");
+    match name {
+        "_通用" => {
+            let old = include_str!("legacy-_通用.md").replace("\r\n", "\n");
+            let domain = include_str!("../../src/prompts/_领域建议.md").replace("\r\n", "\n");
+            current == old || current == old.replace("{{领域建议}}", domain.trim())
+        }
+        "要点提炼" => current == include_str!("legacy-要点提炼.md").replace("\r\n", "\n"),
+        _ => false,
+    }
 }
 
 #[derive(serde::Serialize)]
@@ -400,6 +422,66 @@ fn save_attachment(vault: &str, month: &str, name: &str, bytes: &[u8]) -> Result
     Ok(format!("附件/{month}/{file}"))
 }
 
+/// 大附件逐块写入同一临时文件，最后一块才发布。
+fn write_attachment_chunk(
+    vault: &str,
+    month: &str,
+    name: &str,
+    upload: &str,
+    offset: u64,
+    last: bool,
+    bytes: &[u8],
+) -> Result<String, String> {
+    use std::io::Write;
+    check_segment(month)?;
+    check_segment(name)?;
+    if upload.len() != 32 || !upload.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return Err("附件上传编号无效".into());
+    }
+    let root = PathBuf::from(vault);
+    if !root.is_dir() {
+        return Err("收藏库文件夹找不到了".into());
+    }
+    let dir = root.join("附件").join(month);
+    ensure_inside(&root, &dir)?;
+    fs::create_dir_all(&dir).map_err(|e| io_msg(&dir, e))?;
+    let tmp = dir.join(format!(".{upload}.part"));
+    ensure_inside(&root, &tmp)?;
+    let mut file = fs::OpenOptions::new()
+        .append(true)
+        .create_new(offset == 0)
+        .open(&tmp)
+        .map_err(|e| io_msg(&tmp, e))?;
+    if file.metadata().map_err(|e| io_msg(&tmp, e))?.len() != offset {
+        return Err("附件分块顺序不正确".into());
+    }
+    if let Err(e) = file.write_all(bytes) {
+        drop(file);
+        let _ = fs::remove_file(&tmp);
+        return Err(io_msg(&tmp, e));
+    }
+    drop(file);
+    if !last {
+        return Ok(String::new());
+    }
+    let (stem, ext) = name
+        .rsplit_once('.')
+        .map_or((name, String::new()), |(s, e)| (s, format!(".{e}")));
+    let mut filename = name.to_string();
+    let mut n = 2;
+    while dir.join(&filename).exists() {
+        filename = format!("{stem}-{n}{ext}");
+        n += 1;
+    }
+    let target = dir.join(&filename);
+    ensure_inside(&root, &target)?;
+    if let Err(e) = fs::rename(&tmp, &target) {
+        let _ = fs::remove_file(&tmp);
+        return Err(io_msg(&target, e));
+    }
+    Ok(format!("附件/{month}/{filename}"))
+}
+
 /// 图片内容直接放在请求体里（不转成 JSON 数组，几 MB 的图也快），其余参数放在请求头里，经过 encodeURIComponent
 #[tauri::command]
 fn write_attachment(request: tauri::ipc::Request<'_>) -> Result<String, String> {
@@ -414,6 +496,17 @@ fn write_attachment(request: tauri::ipc::Request<'_>) -> Result<String, String> 
             .ok_or(format!("缺少参数 {k}"))?;
         percent_decode(v)
     };
+    if request.headers().contains_key("upload") {
+        return write_attachment_chunk(
+            &header("vault")?,
+            &header("month")?,
+            &header("name")?,
+            &header("upload")?,
+            header("offset")?.parse().map_err(|_| "附件偏移无效")?,
+            header("last")? == "1",
+            bytes,
+        );
+    }
     save_attachment(
         &header("vault")?,
         &header("month")?,
@@ -532,6 +625,7 @@ struct NoteEntry {
     title: String,
     domain: String,
     created: String,
+    collected_at: String,
     tags: Vec<String>,
     keywords: Vec<String>,
     cover: String,
@@ -551,6 +645,8 @@ struct NoteMeta {
     title: String,
     #[serde(default)]
     created: String,
+    #[serde(default)]
+    collected_at: String,
     #[serde(default)]
     tags: Vec<String>,
     #[serde(default)]
@@ -618,6 +714,7 @@ fn list_notes(root: String) -> Result<NoteList, String> {
                 title,
                 domain: domain.clone(),
                 created: meta.created,
+                collected_at: meta.collected_at,
                 tags: clean(meta.tags),
                 keywords: clean(meta.keywords),
                 cover: meta.cover,
@@ -629,7 +726,7 @@ fn list_notes(root: String) -> Result<NoteList, String> {
 }
 
 /// 封面图只能从存放文件夹的“附件”里读，路径里不能有“..”
-fn cover_bytes(root: &str, rel_path: &str) -> Result<Vec<u8>, String> {
+fn attachment_path(root: &str, rel_path: &str) -> Result<PathBuf, String> {
     let rel = std::path::Path::new(rel_path);
     if !rel.starts_with("附件")
         || rel
@@ -638,12 +735,32 @@ fn cover_bytes(root: &str, rel_path: &str) -> Result<Vec<u8>, String> {
     {
         return Err("只能读附件文件夹里的图片".into());
     }
-    let path = inside_root(std::path::Path::new(root), rel_path)?;
+    inside_root(std::path::Path::new(root), rel_path)
+}
+
+fn cover_bytes(root: &str, rel_path: &str) -> Result<Vec<u8>, String> {
+    let path = attachment_path(root, rel_path)?;
     fs::read(&path).map_err(|e| io_msg(&path, e))
 }
 
 #[tauri::command]
-fn read_cover(root: String, rel_path: String) -> Result<tauri::ipc::Response, String> {
+fn read_cover(
+    root: String,
+    rel_path: String,
+    offset: Option<u64>,
+) -> Result<tauri::ipc::Response, String> {
+    use std::io::{Read, Seek, SeekFrom};
+    if let Some(offset) = offset {
+        let path = attachment_path(&root, &rel_path)?;
+        let mut file = fs::File::open(&path).map_err(|e| io_msg(&path, e))?;
+        file.seek(SeekFrom::Start(offset))
+            .map_err(|e| io_msg(&path, e))?;
+        let mut bytes = Vec::new();
+        file.take(4 * 1024 * 1024)
+            .read_to_end(&mut bytes)
+            .map_err(|e| io_msg(&path, e))?;
+        return Ok(tauri::ipc::Response::new(bytes));
+    }
     Ok(tauri::ipc::Response::new(cover_bytes(&root, &rel_path)?))
 }
 
@@ -665,6 +782,8 @@ struct NoteFile {
     author: String,
     created: String,
     cover: String,
+    transcript: String,
+    video: String,
     extra: String,
     content: String,
     original_text: String,
@@ -692,11 +811,27 @@ struct NoteHead {
     created: String,
     #[serde(default)]
     cover: String,
+    #[serde(default)]
+    video: String,
+    #[serde(default)]
+    transcript: String,
 }
 
-const KNOWN_KEYS: [&str; 12] = [
-    "title", "domain", "type", "mode", "tags", "keywords", "source", "platform", "author",
-    "created", "cover", "schema",
+const KNOWN_KEYS: [&str; 14] = [
+    "transcript",
+    "video",
+    "title",
+    "domain",
+    "type",
+    "mode",
+    "tags",
+    "keywords",
+    "source",
+    "platform",
+    "author",
+    "created",
+    "cover",
+    "schema",
 ];
 
 /// 笔记开头 `---` 之间的属性原文。没有属性时返回 None
@@ -791,6 +926,8 @@ fn read_note_at(root: &std::path::Path, rel: &str) -> Result<NoteFile, String> {
         author: head.author,
         created: head.created,
         cover: head.cover,
+        video: head.video,
+        transcript: head.transcript,
         extra: split_frontmatter(&text)
             .map(extra_frontmatter)
             .unwrap_or_default(),
@@ -899,13 +1036,21 @@ fn attachment_refs(text: &str) -> Vec<String> {
     let mut rest = text;
     while let Some(i) = rest.find("](") {
         rest = &rest[i + 2..];
-        if let Some(j) = rest.find(')') {
-            add(&rest[..j]);
+        if let Some(wrapped) = rest.strip_prefix('<') {
+            if let Some((path, _)) = wrapped.split_once(">)") {
+                add(path);
+            }
+        } else if let Some((path, _)) = rest.split_once(')') {
+            add(path);
         }
     }
     if let Some(fm) = split_frontmatter(text) {
         for l in fm.lines() {
-            if let Some(v) = l.strip_prefix("cover:") {
+            if let Some(v) = l
+                .strip_prefix("cover:")
+                .or_else(|| l.strip_prefix("video:"))
+                .or_else(|| l.strip_prefix("transcript:"))
+            {
                 add(v);
             }
         }
@@ -1415,6 +1560,24 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn legacy_prompt_matches_only_unedited_defaults() {
+        let points = include_str!("legacy-要点提炼.md");
+        assert!(is_legacy_default_prompt("要点提炼", points));
+        assert!(!is_legacy_default_prompt(
+            "要点提炼",
+            &format!("{points}\n自定义要求")
+        ));
+        let common = include_str!("legacy-_通用.md");
+        let domain = include_str!("../../src/prompts/_领域建议.md");
+        assert!(is_legacy_default_prompt("_通用", common));
+        assert!(is_legacy_default_prompt(
+            "_通用",
+            &common.replace("{{领域建议}}", domain.trim())
+        ));
+    }
+
     use super::*;
 
     #[test]
@@ -1448,6 +1611,22 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    #[ignore = "大附件手工检查，需要约 500 MiB 临时磁盘空间"]
+    fn near_limit_attachment_round_trip() {
+        let vault = TempVault::new("large-attachment");
+        let bytes = vec![0x5au8; 499 * 1024 * 1024];
+        let started = std::time::Instant::now();
+        let path = save_attachment(&vault.path(), "2026-11", "大附件.mp4", &bytes).unwrap();
+        eprintln!("写入 {:?}", started.elapsed());
+        drop(bytes);
+        let started = std::time::Instant::now();
+        let saved = cover_bytes(&vault.path(), &path).unwrap();
+        eprintln!("读取 {:?}", started.elapsed());
+        assert_eq!(saved.len(), 499 * 1024 * 1024);
+        assert!(saved.iter().all(|&byte| byte == 0x5a));
     }
 
     fn write(v: &TempVault, domain: &str, title: &str, content: &str) -> Result<String, String> {
@@ -1780,6 +1959,21 @@ aliases:
         save_note_at(&v.0, &rel, "其他", "甲", "新正文", old).unwrap();
         assert!(v.0.join("附件/旧图.png").exists());
         assert_eq!(fs::read_to_string(v.0.join(rel)).unwrap(), "新正文");
+    }
+
+    #[test]
+    fn 带括号的共享附件不会列入回收() {
+        let v = TempVault::new("shared-parenthesized-attachment");
+        fs::create_dir_all(v.0.join("附件")).unwrap();
+        fs::write(v.0.join("附件/共享 (原图).png"), b"shared").unwrap();
+        let link = "![原图](<../附件/共享 (原图).png>)";
+        let target = write(&v, "其他", "甲", link).unwrap();
+        assert_eq!(
+            unused_attachments(&v.0, &target).unwrap(),
+            vec!["附件/共享 (原图).png"]
+        );
+        write(&v, "设计UI", "乙", link).unwrap();
+        assert!(unused_attachments(&v.0, &target).unwrap().is_empty());
     }
 
     #[test]

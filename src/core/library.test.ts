@@ -56,6 +56,21 @@ describe('收藏库筛选', () => {
     ])
   })
 
+  it('同日按收藏时间倒序，旧笔记按路径稳定排序', () => {
+    const notes = [
+      note({ path: '其他/A.md', created: '2026-11-14', collectedAt: '2026-11-14T09:00:00.000Z' }),
+      note({ path: '其他/B.md', created: '2026-11-14', collectedAt: '2026-11-14T10:00:00.000Z' }),
+      note({ path: '其他/D.md', created: '2026-11-14' }),
+      note({ path: '其他/C.md', created: '2026-11-14' }),
+    ]
+    expect(filterNotes(notes, { domain: null, tags: [], query: '' }).map((n) => n.path)).toEqual([
+      '其他/B.md',
+      '其他/A.md',
+      '其他/C.md',
+      '其他/D.md',
+    ])
+  })
+
   it('领域一次一个，标签多选要同时带有', () => {
     expect(filterNotes(NOTES, { domain: 'AI与Agent', tags: [], query: '' })).toHaveLength(2)
     expect(filterNotes(NOTES, { domain: null, tags: ['提示词', 'Claude'], query: '' }).map((n) => n.path)).toEqual([

@@ -55,6 +55,9 @@
   transform-box: fill-box;
   transform-origin: left center;
 }
+.ai :is(.extract-l1, .extract-l2) {
+  stroke-dasharray: 1;
+}
 .ai .undo-shaft {
   transform-origin: 10.5px 7.5px;
   transform-box: view-box;
@@ -74,9 +77,6 @@
   }
   :is(button, a, [data-ai-hover]):hover .ai .extract-scan {
     animation: ai-extract-scan 0.9s cubic-bezier(0.3, 0.9, 0.3, 1) both;
-  }
-  :is(button, a, [data-ai-hover]):hover .ai .play-tri {
-    animation: ai-play-tri 0.5s var(--ai-spring) both;
   }
   :is(button, a, [data-ai-hover]):hover .ai :is(.pause-1, .pause-2) {
     animation: ai-pause-bar 0.5s var(--ai-spring) both;
@@ -132,11 +132,6 @@
     to {
       transform: translateY(4px);
       opacity: 0;
-    }
-  }
-  @keyframes ai-play-tri {
-    35% {
-      transform: scale(0.8);
     }
   }
   @keyframes ai-pause-bar {
@@ -253,6 +248,11 @@
   }
   :is(button, a, [data-ai-hover]):hover .ai .txt-line3 {
     animation-delay: 0.16s;
+  }
+  /* 提取内容的两行字在扫描之后描出来；用描线而不是横向缩放，等待期间不会在左侧留下一截竖线 */
+  :is(button, a, [data-ai-hover]):hover .ai :is(.extract-l1, .extract-l2) {
+    animation-name: ai-draw;
+    animation-timing-function: cubic-bezier(0.3, 0.8, 0.3, 1);
   }
   :is(button, a, [data-ai-hover]):hover .ai .extract-l1 {
     animation-delay: 0.35s;

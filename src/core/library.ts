@@ -6,6 +6,7 @@ const NoteSchema = z.object({
   title: z.string(),
   domain: z.string(),
   created: z.string().catch(''),
+  collectedAt: z.string().optional(),
   tags: z.array(z.string()).catch([]),
   keywords: z.array(z.string()).catch([]),
   cover: z.string().catch(''), // 相对存放文件夹：附件/年-月/图.png；没有图片时为空
@@ -44,7 +45,12 @@ export function filterNotes(notes: LibraryNote[], f: LibraryFilter): LibraryNote
       const text = [n.title, ...n.keywords, n.body].join('\n').toLowerCase()
       return words.every((w) => text.includes(w))
     })
-    .sort((a, b) => b.created.localeCompare(a.created) || a.path.localeCompare(b.path))
+    .sort(
+      (a, b) =>
+        b.created.localeCompare(a.created) ||
+        (b.collectedAt ?? '').localeCompare(a.collectedAt ?? '') ||
+        a.path.localeCompare(b.path),
+    )
 }
 
 export interface Count {

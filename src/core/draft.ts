@@ -11,7 +11,7 @@ export interface DraftData {
   savedAt: number
   job: Omit<Job, 'steps' | 'wavChunks' | 'images' | 'preview'> & {
     steps: Pick<StepState, 'id' | 'status'>[]
-    images?: ({ name: string; type: string } & Pick<JobImage, 'autoCrop' | 'crop' | 'width'>)[]
+    images?: ({ name: string; type: string } & Pick<JobImage, 'autoCrop' | 'crop' | 'width' | 'region'>)[]
   }
 }
 
@@ -33,6 +33,7 @@ export function toDraft(job: Job): { data: DraftData; files: { name: string; blo
           autoCrop: i.autoCrop,
           crop: i.crop,
           width: i.width,
+          region: i.region,
         })),
       },
     },
@@ -57,6 +58,7 @@ export function fromDraft(
       autoCrop: i.autoCrop,
       crop: i.crop,
       width: i.width,
+      region: i.region,
     })),
   }
   const organized = !!job.draft && job.steps.every((s) => s.status === 'done')

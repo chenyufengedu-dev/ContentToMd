@@ -24,7 +24,7 @@ import { estimateWait, lengthProblem, MAX_CHARS } from '../core/longText'
 import { importFailed } from '../core/importMessages'
 import pdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
 import { describeError, isAppError, type ErrorCode } from '../core/errors'
-import { checkImages, MAX_IMAGES, readPixels, toAiDataUrl } from '../core/image'
+import { checkImages, MAX_IMAGES, readPixels, toAiDataUrl, type Rect } from '../core/image'
 import {
   appendUsage,
   clearDraft,
@@ -52,6 +52,7 @@ import {
   Plus,
   X,
 } from '../components/icons'
+import CropDialog from '../components/CropDialog.vue'
 
 const props = withDefaults(defineProps<{ config: Config; prompts: Prompts; active?: boolean }>(), { active: true })
 const emit = defineEmits<{
@@ -79,7 +80,8 @@ const SUPPORTED: { kind: FileKind; label: string }[] = [
   { kind: 'pdf', label: 'pdf' },
   { kind: 'docx', label: 'docx' },
 ]
-const MAX_BYTES = 1024 ** 3 // 音视频 ≤ 1GB（方案第 11 节）
+const MAX_AUDIO_BYTES = 1024 ** 3
+const MAX_VIDEO_BYTES = 500 * 1024 ** 2
 const MAX_TEXT_BYTES = 10 * 1024 ** 2
 const MODE_ICONS = { 要点提炼: ModeKeyPoints, 原文精修: ModeRefine, 视觉收藏: ModeVisual, 提取内容: ModeExtract }
 /** 缩略图下面的时长：5:12 */
@@ -98,8 +100,8 @@ const textFile = shallowRef<{
   encoding?: string
   pages?: number
 } | null>(null)
-/** 放入的图片；url 是缩略图用的本地地址，移除时释放 */
-const images = ref<{ file: File; url: string }[]>([])
+/** 放入的图片；url 是缩略图用的本地地址，移除时释放；region 是提取内容时的识别范围 */
+const images = ref<{ file: File; url: string; region?: Rect | null }[]>([])
 /** 来源框里显示的文字；粘贴分享文字后换成认出的链接（F02） */
 const source = ref('')
 /** 认出的分享文字：原文、平台、作者。“改回原文”时清掉 */
@@ -118,16 +120,18 @@ const hasContent = computed(() => !!kind.value)
 
 // 文件读取和文档解析不能中途停止，用同一取消信号丢弃被替换、移除或卸载后的结果。
 let importController: AbortController | null = null
+const checkingImages = ref(false)
+const imageQueue: File[] = []
 function cancelImport() {
   importController?.abort()
   importController = null
+  imageQueue.length = 0
+  checkingImages.value = false
 }
 
 function accept(files: File[]) {
   if (!files.length) return
-  cancelImport()
-  importController = new AbortController()
-  errors.value = []
+  if (!checkingImages.value) errors.value = []
   const media = files.filter((f) => !f.type.startsWith('image/'))
   const pics = files.filter((f) => f.type.startsWith('image/'))
   if (media.length) {
@@ -135,6 +139,9 @@ function accept(files: File[]) {
       errors.value.push('每次可导入一个文件或一组图片，不能混合导入。')
       return
     }
+    cancelImport()
+    errors.value = []
+    importController = new AbortController()
     acceptFile(media[0], importController.signal)
     return
   }
@@ -142,11 +149,39 @@ function accept(files: File[]) {
     errors.value.push('已有文件，请先移除再添加图片。')
     return
   }
-  const { accepted, rejected } = checkImages(images.value.length, pics)
-  for (const r of rejected) errors.value.push(importFailed(r.name, r.reason))
-  if (!accepted.length) return
-  images.value.push(...accepted.map((f) => ({ file: f, url: URL.createObjectURL(f) })))
-  mode.value = preselectMode('图片')
+  if (checkingImages.value) {
+    imageQueue.push(...pics)
+    return
+  }
+  cancelImport()
+  importController = new AbortController()
+  imageQueue.push(...pics)
+  void acceptImages(importController.signal)
+}
+
+async function acceptImages(signal: AbortSignal) {
+  checkingImages.value = true
+  let file = imageQueue.shift()
+  while (file) {
+    const { rejected } = checkImages(images.value.length, [file])
+    if (rejected.length) {
+      errors.value.push(importFailed(file.name, rejected[0].reason))
+    } else {
+      try {
+        const bitmap = await createImageBitmap(file)
+        bitmap.close()
+        if (signal.aborted) return
+        images.value.push({ file, url: URL.createObjectURL(file) })
+        job.value = null
+        mode.value = preselectMode('图片')
+      } catch {
+        if (signal.aborted) return
+        errors.value.push(importFailed(file.name, '图片无法读取。如果来自压缩包，请先解压再导入。'))
+      }
+    }
+    file = imageQueue.shift()
+  }
+  checkingImages.value = false
 }
 
 function acceptFile(f: File, signal: AbortSignal) {
@@ -166,8 +201,13 @@ function acceptFile(f: File, signal: AbortSignal) {
     )
     return
   }
-  if (f.size > MAX_BYTES) {
-    errors.value.push(importFailed(f.name, '文件超过 1GB，请压缩或截取后导入。'))
+  if (f.size > (type === '视频' ? MAX_VIDEO_BYTES : MAX_AUDIO_BYTES)) {
+    errors.value.push(
+      importFailed(
+        f.name,
+        type === '视频' ? '视频超过 500 MB，请截取需要整理的片段后再导入。' : '文件超过 1GB，请压缩或截取后导入。',
+      ),
+    )
     return
   }
   clearFile()
@@ -320,6 +360,14 @@ function removeImage(i: number) {
   images.value.splice(i, 1)
   job.value = null
 }
+
+// 提取内容：每张图可以用现有裁剪浮层框一个矩形，只当作发给看图服务的识别范围
+const regionEditing = ref<number | null>(null)
+function onRegionDone(regions: (Rect | null)[]) {
+  regions.forEach((region, i) => (images.value[i].region = region))
+  regionEditing.value = null
+  job.value = null
+}
 function clearFile() {
   if (fileUrl.value) URL.revokeObjectURL(fileUrl.value)
   fileUrl.value = ''
@@ -348,6 +396,10 @@ const keepDraft = (withFiles = false) => job.value && void saveDraft(job.value, 
 const dropDraft = () => void clearDraft().catch(() => {})
 
 const autoPicked = computed(() => kind.value && mode.value === preselectMode(kind.value))
+/** 提取内容只对截图/照片和视频有意义 */
+const visibleModes = computed(() =>
+  MODES.filter((m) => m !== '提取内容' || kind.value === '图片' || kind.value === '视频'),
+)
 
 /** 文件那一行的灰字：时长 · 大小，或者 字数 · 编码 */
 const itemInfo = computed(() =>
@@ -406,7 +458,8 @@ const waitNotice = computed(() => (textFile.value ? estimateWait(mode.value, tex
 const askLong = ref(false)
 let longOk = false
 async function start() {
-  if (!hasContent.value || missingService.value || lengthNotice.value || phase.value !== 'drop') return
+  if (checkingImages.value || !hasContent.value || missingService.value || lengthNotice.value || phase.value !== 'drop')
+    return
   cancelImport()
   if (textFile.value && textFile.value.text.length > LONG_TEXT_CHARS && !longOk) {
     askLong.value = true
@@ -418,7 +471,7 @@ async function start() {
     job.value = reactive(
       images.value.length
         ? newImageJob(
-            images.value.map((x) => x.file),
+            images.value.map((x) => ({ file: x.file, region: x.region ?? null })),
             mode.value,
           )
         : textFile.value
@@ -614,6 +667,7 @@ onBeforeUnmount(() => {
       :active="active"
       :config="config"
       :job="job"
+      :video-file="job.type === '视频' ? (file ?? undefined) : undefined"
       :existing-tags="existingTags"
       @saved="onSaved"
       @edited="onEdited"
@@ -666,8 +720,16 @@ onBeforeUnmount(() => {
         <div v-import-size="`${kind}:${images.length}`">
           <template v-if="images.length">
             <div class="thumbs">
-              <figure v-for="(img, i) in images" :key="img.url" class="thumb">
-                <img :src="img.url" :alt="img.file.name" />
+              <figure v-for="(img, i) in images" :key="img.url" class="thumb-item">
+                <button
+                  type="button"
+                  class="thumb thumb-region"
+                  :aria-label="`框选第 ${i + 1} 张的识别范围`"
+                  @click="regionEditing = i"
+                >
+                  <img :src="img.url" :alt="img.file.name" />
+                  <span v-if="img.region" class="region-mark">已框选</span>
+                </button>
                 <button v-press="'icon'" class="thumb-x" :aria-label="`移除 ${img.file.name}`" @click="removeImage(i)">
                   <X :size="12" />
                 </button>
@@ -683,7 +745,7 @@ onBeforeUnmount(() => {
                 <Plus :size="20" />
               </button>
             </div>
-            <p class="hint">最多 {{ MAX_IMAGES }} 张，每张不超过 20MB。可继续拖入或粘贴。</p>
+            <p class="hint">点击图片可框选处理范围。</p>
           </template>
 
           <div v-else-if="file || textFile" class="item">
@@ -761,7 +823,7 @@ onBeforeUnmount(() => {
           <span class="field-label">整理方式</span>
           <div class="modes">
             <button
-              v-for="m in MODES"
+              v-for="m in visibleModes"
               :key="m"
               v-press
               class="mode"
@@ -769,7 +831,7 @@ onBeforeUnmount(() => {
               :aria-pressed="mode === m"
               @click="mode = m"
             >
-              <component :is="MODE_ICONS[m]" :size="16" aria-hidden="true" />{{ m }}
+              <component :is="MODE_ICONS[m]" :size="17" aria-hidden="true" />{{ m }}
             </button>
             <span v-if="autoPicked" class="hint">已按文件类型选择</span>
           </div>
@@ -801,7 +863,7 @@ onBeforeUnmount(() => {
           <button
             v-press="'tactile'"
             class="primary start"
-            :disabled="!hasContent || (!missingService && !!lengthNotice)"
+            :disabled="checkingImages || !hasContent || (!missingService && !!lengthNotice)"
             @click="missingService ? emit('goSettings') : start()"
           >
             <template v-if="missingService && hasContent">去配置服务</template>
@@ -821,6 +883,13 @@ onBeforeUnmount(() => {
   >
     <p>共 {{ textFile?.text.length.toLocaleString() }} 字，整理耗时和费用可能增加。{{ waitNotice }}</p>
   </NoticeDialog>
+  <CropDialog
+    v-if="regionEditing !== null"
+    :images="images.map((i) => ({ url: i.url, crop: i.region ?? null }))"
+    :start="regionEditing"
+    @done="onRegionDone"
+    @cancel="regionEditing = null"
+  />
   <NoticeDialog
     v-if="askClose"
     title="关闭软件？"
@@ -1042,6 +1111,32 @@ onBeforeUnmount(() => {
   box-shadow: var(--shadow-card);
   display: grid;
   place-items: center;
+}
+.thumb-item {
+  position: relative;
+  margin: 0;
+}
+button.thumb-region {
+  display: block;
+  padding: 0;
+  border: 0;
+}
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .thumb-region img {
+    transition: transform var(--ease);
+  }
+  .thumb-region:hover img {
+    transform: scale(1.04);
+  }
+}
+.region-mark {
+  position: absolute;
+  inset: auto auto var(--sp-1) var(--sp-1);
+  padding-inline: var(--sp-1);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  color: var(--accent);
+  font-size: var(--fs-xs);
 }
 .thumb-add {
   padding: 0;

@@ -4,6 +4,7 @@ import domainSuggestion from '../prompts/_领域建议.md?raw'
 import faithful from '../prompts/原文精修.md?raw'
 import points from '../prompts/要点提炼.md?raw'
 import visual from '../prompts/视觉收藏.md?raw'
+import extract from '../prompts/提取内容.md?raw'
 import type { Prompts } from './note'
 
 export const DEFAULT_PROMPTS: Prompts = {
@@ -11,4 +12,5 @@ export const DEFAULT_PROMPTS: Prompts = {
   原文精修: faithful,
   要点提炼: points,
   视觉收藏: visual,
+  提取内容: extract,
 }

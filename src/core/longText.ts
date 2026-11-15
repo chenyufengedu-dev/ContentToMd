@@ -3,7 +3,12 @@
 // 所以分成每块约 3000 字、同时最多 3 块并行精修，最多 5 万字（更长的要等太久）
 import type { Mode } from './note'
 
-export const MAX_CHARS: Record<Mode, number> = { 要点提炼: 100000, 原文精修: 50000, 视觉收藏: 100000 }
+export const MAX_CHARS: Record<Mode, number> = {
+  要点提炼: 100000,
+  原文精修: 50000,
+  视觉收藏: 100000,
+  提取内容: 100000,
+}
 
 /** 原文精修：不超过这个字数就一次整理，超过了才分块 */
 export const REFINE_SINGLE_MAX = 4000

@@ -78,8 +78,8 @@ const visibleSteps = computed(() => {
   return props.failed && at >= 0 ? props.job.steps.slice(0, at + 1) : props.job.steps
 })
 const isAuthError = computed(() => props.error?.code === 'auth')
-/** 文件本身的问题（读不出声音、没有语音），重试多少次都一样，只给“返回修改” */
-const canRetry = computed(() => !['decode', 'no_speech', 'too_long'].includes(props.error?.code ?? ''))
+/** 文件本身的问题（读不出声音、没有语音、图片里没有文字），重试多少次都一样，只给“返回修改” */
+const canRetry = computed(() => !['decode', 'no_speech', 'no_text', 'too_long'].includes(props.error?.code ?? ''))
 function elapsed(s: { startedAt?: number; endedAt?: number }) {
   if (!s.startedAt) return ''
   return `${Math.round(((s.endedAt ?? props.now) - s.startedAt) / 1000)} 秒`

@@ -131,7 +131,7 @@ onMounted(async () => {
     if (loading.signal.aborted) return
     const f = await readNote(root.value, path.value)
     if (loading.signal.aborted) return
-    const { summary, images, body } = parseNoteBody(f.content)
+    const { summary, images, body, attachments } = parseNoteBody(f.content)
     let domain = props.config.domains.find((d) => d.name === f.domain)
     if (!domain) {
       domain = { id: nextDomainId(props.config.domains), name: f.domain } as Domain
@@ -150,13 +150,37 @@ onMounted(async () => {
         const blob = await readCover(root.value, rel)
         if (loading.signal.aborted) return
         const name = rel.split('/').pop() ?? 'image'
-        files.push({ file: new File([blob], name, { type: imageType(name) }), noteImageIndex, width: img.width })
+        let original: Blob | undefined
+        if (img.original && img.crop) {
+          try {
+            original = await readCover(root.value, resolveAttachment(path.value, img.original))
+          } catch {
+            // 原图缺失时使用已保存的裁剪图。
+          }
+          if (loading.signal.aborted) return
+        }
+        files.push({
+          file: new File([original ?? blob], name, { type: original?.type || imageType(name) }),
+          noteImageIndex,
+          width: img.width,
+          crop: original ? img.crop : undefined,
+        })
       } catch {
         if (loading.signal.aborted) return
         missing++
       }
     }
+    let transcript = ''
+    if (f.transcript) {
+      try {
+        transcript = await (await readCover(root.value, resolveAttachment(path.value, f.transcript))).text()
+      } catch {
+        // 原文附件缺失时仍可打开笔记。
+      }
+      if (loading.signal.aborted) return
+    }
     job.value = {
+      transcript,
       fileName: f.stem,
       type: f.kind,
       mode: f.mode,
@@ -185,9 +209,12 @@ onMounted(async () => {
         author: f.author,
         created: f.created,
         cover: f.cover,
+        video: f.video,
+        transcript: f.transcript,
         extra: f.extra,
       },
       images,
+      attachments,
       missing,
       canOpen: props.config.vault.kind === 'obsidian',
     }

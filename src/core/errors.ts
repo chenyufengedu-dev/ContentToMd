@@ -15,6 +15,7 @@ export type ErrorCode =
   | 'cancelled' // 用户点了取消
   | 'decode' // 音视频解不出声音
   | 'no_speech' // 没有识别到语音
+  | 'no_text' // 提取内容时图片里没有识别到文字
   | 'too_long' // 文字太长，这种整理方式装不下
 
 /** message 是给用户看的大白话，detail 可通过“复制错误信息”提供给作者。 */

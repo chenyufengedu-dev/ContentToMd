@@ -271,4 +271,46 @@ describe('runJob：图片', () => {
     expect(user).toContain('文档（合同.pdf）')
     expect(user).not.toContain('语音转写')
   })
+
+  it('提取内容：图片按导入顺序写入正文，没有文字的那张留空；选区只影响识别范围', async () => {
+    const result = {
+      ...AI_RESULT,
+      summary: '',
+      body: '这段是整理结果，不应该出现在提取正文里',
+      image_captions: ['聊天截图', '白板'],
+      image_texts: ['第一条消息\n第二条消息', ''],
+      image_regions: [],
+    }
+    const { fetch, calls } = fakeServices([chatOk(result)])
+    const area = { x: 10, y: 20, w: 60, h: 30 }
+    const job = newImageJob(
+      [
+        { file: new File(['1'], '聊天.png', { type: 'image/png' }), region: area },
+        { file: new File(['2'], '白板.png', { type: 'image/png' }) },
+      ],
+      '提取内容',
+    )
+    const seen: unknown[] = []
+    await runJob(job, {
+      ...ctx(fetch),
+      toAiUrl: async (b, crop) => {
+        seen.push(crop ?? null)
+        return `data:fake,${(b as File).name}`
+      },
+    })
+    expect(seen).toEqual([area, null])
+    expect(job.draft?.body).toBe('### 第 1 张\n\n第一条消息\n第二条消息')
+    expect(job.draft?.summary).toBe('')
+    expect(job.images?.map((i) => i.crop)).toEqual(job.images?.map((i) => i.region ?? null))
+    expect(calls.chat).toBe(1)
+  })
+
+  it('提取内容：视频把转写直接放进草稿，不再调用文字整理', async () => {
+    const { fetch, calls } = fakeServices([chatOk(AI_RESULT)])
+    const job = jobAfterExtract()
+    job.mode = '提取内容'
+    await runJob(job, ctx(fetch))
+    expect(calls.chat).toBe(0)
+    expect(job.draft).toMatchObject({ body: `${CLEANED}\n${CLEANED}`, summary: '', tags: [], keywords: [] })
+  })
 })

@@ -76,6 +76,40 @@ describe('长文的整理', () => {
     expect(job.draft?.body).not.toContain('只有摘要')
   })
 
+  it('限定范围时跳过无关段，按顺序保留正文并基于保留内容生成标题摘要', async () => {
+    const job = newTextJob('长文.pdf', LONG, '原文精修', '文档')
+    job.request = '只保留用法，历史不用写。'
+    const seen: string[] = []
+    const fetch: Fetch = async (_url, init) => {
+      const [, user] = JSON.parse(String(init?.body)).messages
+      seen.push(user.content)
+      const section = /第 (\d+)\/\d+ 段/.exec(user.content)?.[1]
+      if (!section) {
+        expect(user.content).toContain('用法 2\n\n用法 3')
+        expect(user.content).not.toContain('甲')
+        return reply({ title: '操作用法', summary: '包含两项操作。' })
+      }
+      return reply(section === '1' ? { skip: true } : { ...AI_RESULT, body: `用法 ${section}` })
+    }
+    await runJob(job, ctx(fetch))
+    expect(seen).toHaveLength(4)
+    expect(seen.every((message) => message.includes(`本次要求：${job.request}`))).toBe(true)
+    expect(job.draft).toMatchObject({ title: '操作用法', summary: '包含两项操作。', body: '用法 2\n\n用法 3' })
+  })
+
+  it('各段均与本次要求无关时提示没有符合要求的内容', async () => {
+    const job = newTextJob('长文.pdf', LONG, '原文精修', '文档')
+    job.request = '只保留用法。'
+    await expect(
+      runJob(
+        job,
+        ctx(async () => reply({ skip: true })),
+      ),
+    ).rejects.toMatchObject({
+      code: 'no_text',
+    })
+  })
+
   it('原文精修 4000 字以内一次整理，不分块', async () => {
     let calls = 0
     const fetch: Fetch = async () => (calls++, reply(AI_RESULT))

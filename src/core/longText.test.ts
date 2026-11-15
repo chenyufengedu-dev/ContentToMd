@@ -5,7 +5,7 @@ const para = (n: number, c = '字') => c.repeat(n - 1) + '。'
 
 describe('lengthProblem', () => {
   it('要点提炼最多 10 万字，原文精修最多 5 万字，超过时说清楚怎么办，句子带句号', () => {
-    expect(MAX_CHARS).toEqual({ 要点提炼: 100000, 原文精修: 50000, 视觉收藏: 100000 })
+    expect(MAX_CHARS).toEqual({ 要点提炼: 100000, 原文精修: 50000, 视觉收藏: 100000, 提取内容: 100000 })
     expect(lengthProblem('要点提炼', 100000)).toBeNull()
     expect(lengthProblem('要点提炼', 100001)).toBe('内容超过 10 万字（当前 100,001 字），请拆分后导入。')
     expect(lengthProblem('原文精修', 50000)).toBeNull()

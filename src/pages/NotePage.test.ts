@@ -40,6 +40,10 @@ vi.mock('./ConfirmPage.vue', () => {
               'data-recovered-body': props.recovery?.draft.body,
               'data-recovered-crop': JSON.stringify(props.recovery?.images[0]?.crop),
               'data-image-name': props.job.images?.[0]?.file.name,
+              'data-image-count': props.job.images?.length,
+              'data-image-texts': JSON.stringify(props.job.draft?.image_texts ?? null),
+              'data-body': props.job.draft?.body,
+              'data-mode': props.job.mode,
               onClick: () =>
                 emit('configChanged', {
                   ...props.config,
@@ -90,6 +94,47 @@ async function mountNote(path: string, onConfigChanged: (c: Config) => void = vi
   for (let i = 0; i < 8; i++) await nextTick()
   return root
 }
+it('重开提取内容笔记：左侧正文保持原样，两张原图仍可查看，不再恢复识别初稿', async () => {
+  vi.mocked(readCover).mockResolvedValue(new Blob(['image'], { type: 'image/png' }))
+  const mountWith = async (content: string) => {
+    vi.mocked(readNote).mockResolvedValue(
+      parseNoteFile({
+        originalText: '打开时完整文件',
+        title: '提取',
+        stem: '提取',
+        domain: '其他',
+        kind: '图片',
+        mode: '提取内容',
+        content,
+        extra: '',
+      }),
+    )
+    const root = await mountNote('其他/提取.md')
+    const button = root.querySelector('button')
+    return {
+      body: button?.getAttribute('data-body'),
+      count: button?.getAttribute('data-image-count'),
+      texts: button?.getAttribute('data-image-texts'),
+      mode: button?.getAttribute('data-mode'),
+    }
+  }
+  const head = '![聊天](../附件/聊天.png)\n\n![白板](../附件/白板.png)\n\n'
+  expect(await mountWith(`${head}改好的第一段\n\n改好的第二段`)).toEqual({
+    body: '改好的第一段\n\n改好的第二段',
+    count: '2',
+    texts: 'null',
+    mode: '提取内容',
+  })
+  app?.unmount()
+  app = undefined
+  expect(await mountWith(`${head}### 第 1 张\n\n旧笔记的正文`)).toEqual({
+    body: '### 第 1 张\n\n旧笔记的正文',
+    count: '2',
+    texts: 'null',
+    mode: '提取内容',
+  })
+})
+
 it('笔记编辑页更新领域时同时更新当前编辑器并通知应用层', async () => {
   vi.mocked(readNote).mockResolvedValue(
     parseNoteFile({

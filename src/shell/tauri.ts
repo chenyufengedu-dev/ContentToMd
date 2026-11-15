@@ -116,10 +116,45 @@ export const ensureSubfolder = (vault: string, sub: string) => invoke<void>('ens
 export const writeNote = (vault: string, domain: string, title: string, date: string, content: string) =>
   invoke<string>('write_note', { vault, domain, title, date, content })
 /** 图片写进 收藏库/附件/年-月/；图片内容直接放在请求体里，参数放请求头（见 main.rs 的 write_attachment） */
-export const writeAttachment = async (vault: string, month: string, name: string, data: Blob) =>
-  invoke<string>('write_attachment', new Uint8Array(await data.arrayBuffer()), {
-    headers: { vault: encodeURIComponent(vault), month: encodeURIComponent(month), name: encodeURIComponent(name) },
-  })
+const ATTACHMENT_CHUNK = 4 * 1024 ** 2
+
+export async function readVideoAttachment(root: string, relPath: string, signal?: AbortSignal): Promise<Blob> {
+  const parts: ArrayBuffer[] = []
+  for (let offset = 0; ; offset += ATTACHMENT_CHUNK) {
+    signal?.throwIfAborted()
+    const bytes = await invoke<ArrayBuffer>('read_cover', { root, relPath, offset })
+    parts.push(bytes)
+    if (bytes.byteLength < ATTACHMENT_CHUNK) break
+  }
+  return new Blob(parts, { type: /\.mov$/i.test(relPath) ? 'video/quicktime' : 'video/mp4' })
+}
+
+export async function writeAttachment(vault: string, month: string, name: string, data: Blob): Promise<string> {
+  const headers = { vault: encodeURIComponent(vault), month: encodeURIComponent(month), name: encodeURIComponent(name) }
+  if (data.size <= ATTACHMENT_CHUNK) {
+    return invoke('write_attachment', new Uint8Array(await data.arrayBuffer()), { headers })
+  }
+
+  const upload = crypto.randomUUID().replaceAll('-', '')
+  try {
+    for (let offset = 0; offset < data.size; offset += ATTACHMENT_CHUNK) {
+      const end = Math.min(offset + ATTACHMENT_CHUNK, data.size)
+      const last = end === data.size
+      const path = await invoke<string>(
+        'write_attachment',
+        new Uint8Array(await data.slice(offset, end).arrayBuffer()),
+        {
+          headers: { ...headers, upload, offset: String(offset), last: last ? '1' : '0' },
+        },
+      )
+      if (last) return path
+    }
+    throw new Error('附件写入未完成。')
+  } catch (error) {
+    await removeAttachment(vault, `附件/${month}/.${upload}.part`).catch(() => {})
+    throw error
+  }
+}
 export const removeAttachment = (vault: string, relPath: string) =>
   invoke<void>('remove_attachment', { vault, relPath })
 

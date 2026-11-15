@@ -37,7 +37,12 @@ vi.mock('./pages/LibraryPage.vue', () => ({ default: { template: '<div />' } }))
 vi.mock('./pages/NotePage.vue', () => ({
   default: { props: ['path'], template: '<div data-test="note">{{ path }}</div>' },
 }))
-vi.mock('./components/TitleBar.vue', () => ({ default: { template: '<header />' } }))
+vi.mock('./components/TitleBar.vue', () => ({
+  default: {
+    emits: ['navigate'],
+    template: `<button data-test="library-link" @click="$emit('navigate', 'library')">收藏库</button>`,
+  },
+}))
 vi.mock('./components/WelcomeCelebration.vue', async () => {
   const { defineComponent } = await import('vue')
   return {
@@ -79,7 +84,9 @@ afterEach(() => {
 it('首次进入引导，跳过后挂载真实首页并记录礼花', async () => {
   await mount()
   expect(document.querySelector('[data-test="home"]')).toBeNull()
-  document.querySelector('button')?.click()
+  Array.from(document.querySelectorAll('button'))
+    .find((b) => b.textContent === '跳过引导测试')
+    ?.click()
   await settle()
   expect(document.querySelector('[data-test="home"]')).not.toBeNull()
   expect(saveOnboarding).toHaveBeenCalledWith({ finished: true, celebrated: true })
@@ -138,5 +145,27 @@ it('已有领域无变化时启动不重复保存配置', async () => {
   vi.mocked(loadConfigJson).mockResolvedValueOnce(JSON.stringify(config))
   await mount()
   expect(inspectCollection).toHaveBeenCalledTimes(1)
+  expect(saveConfig).not.toHaveBeenCalled()
+})
+
+it('进入收藏库和窗口重新聚焦时补入新领域', async () => {
+  const config = defaultConfig()
+  config.vaultPath = 'test-vault'
+  vi.mocked(loadConfigJson).mockResolvedValueOnce(JSON.stringify(config))
+  await mount()
+  vi.mocked(inspectCollection).mockImplementationOnce(async (c) => ({
+    config: { ...c, domains: [...c.domains, { id: 1, name: '首次新增' }] },
+    hasNotes: false,
+  }))
+  document.querySelector<HTMLButtonElement>('[data-test="library-link"]')?.click()
+  await settle()
+  expect(document.querySelector('[data-test="home"]')?.textContent).toContain('首次新增')
+  vi.mocked(inspectCollection).mockImplementationOnce(async (c) => ({
+    config: { ...c, domains: [...c.domains, { id: 2, name: '再次新增' }] },
+    hasNotes: false,
+  }))
+  window.dispatchEvent(new Event('focus'))
+  await settle()
+  expect(document.querySelector('[data-test="home"]')?.textContent).toContain('首次新增、再次新增')
   expect(saveConfig).not.toHaveBeenCalled()
 })

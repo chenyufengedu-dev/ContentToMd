@@ -194,19 +194,6 @@ const TIPS = {
   background: var(--new);
   box-shadow: 0 0 0 2px var(--card);
 }
-.chip-add {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp-1);
-  border: 1px dashed var(--line-strong);
-  border-radius: var(--radius-chip);
-  background: none;
-  color: var(--muted);
-}
-.chip-add:hover:not(:disabled) {
-  background: var(--hover);
-  color: var(--fg-strong);
-}
 .chip-input {
   box-sizing: border-box;
   padding: 0 var(--px-sm);
@@ -232,11 +219,6 @@ const TIPS = {
 .chip {
   height: var(--h-sm);
   padding: 0 calc(var(--px-sm) / 2) 0 var(--px-sm);
-  font-size: var(--fs-sm);
-}
-.chip-add {
-  height: var(--h-sm);
-  padding: 0 var(--px-sm);
   font-size: var(--fs-sm);
 }
 .chip-input {

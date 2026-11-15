@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { defaultConfig, OTHER_DOMAIN_ID } from './config'
 import {
+  buildImageExtractionBody,
   buildMarkdown,
   buildSystemPrompt,
   buildUserMessage,
@@ -10,6 +11,7 @@ import {
   preselectMode,
   previewText,
   safeFileTitle,
+  titleFromText,
 } from './note'
 import { DEFAULT_PROMPTS } from './defaultPrompts'
 
@@ -51,6 +53,7 @@ describe('parseAiResult', () => {
       summary: aiResult.summary,
       body: aiResult.body,
       image_captions: [],
+      image_texts: [],
     })
     expect(r?.imageRegions).toEqual([])
   })
@@ -87,8 +90,9 @@ describe('parseAiResult', () => {
     expect(r?.draft.summary).toBe('')
   })
 
-  it('标题超过 30 字时截断', () => {
-    expect(parseAiResult({ ...aiResult, title: '长'.repeat(40) }, domains)?.draft.title).toBe('长'.repeat(30))
+  it('保留超过 30 字的完整标题', () => {
+    const title = 'Python 软件历史、GPL 兼容性与 Python 软件基金会许可证第 2 版的分发条件'
+    expect(parseAiResult({ ...aiResult, title }, domains)?.draft.title).toBe(title)
   })
 })
 
@@ -133,6 +137,14 @@ describe('指令拼装', () => {
   })
 })
 
+describe('提取内容', () => {
+  it('标题取第一行，去掉 Markdown 标记但不删掉开头的年份；没有正文时用文件名', () => {
+    expect(titleFromText('2026年计划\n第二行', '录音.mp3')).toBe('2026年计划')
+    expect(titleFromText('### 第一条\n正文', '录音.mp3')).toBe('第一条')
+    expect(titleFromText('', '录音.mp3')).toBe('录音')
+  })
+})
+
 describe('buildMarkdown', () => {
   const draft = parseAiResult(aiResult, domains)!.draft
   const meta = {
@@ -173,6 +185,32 @@ describe('buildMarkdown', () => {
         '',
       ].join('\n'),
     )
+  })
+
+  it('提取内容：多图正文保留导入序号，跳过无文字的图片', () => {
+    const texts = ['第一条消息\n第二条消息', '', '第三张文字']
+    const body = buildImageExtractionBody(texts)
+    expect(body).toBe('### 第 1 张\n\n第一条消息\n第二条消息\n\n### 第 3 张\n\n第三张文字')
+    expect(buildImageExtractionBody(['单图文字'])).toBe('单图文字')
+    const md = buildMarkdown(
+      { ...draft, summary: '', body },
+      {
+        ...meta,
+        type: '图片',
+        mode: '提取内容',
+        cover: '../附件/2026-10/a-1.png',
+        extra: 'aliases: [聊天]\nextract_texts: ["上一版的识别初稿"]',
+      },
+      [{ path: '../附件/2026-10/a-1.png', caption: '聊天截图' }],
+    )
+    expect(md).toContain('mode: 提取内容')
+    expect(md).toContain('aliases: [聊天]')
+    expect(md).not.toContain('extract_texts')
+    expect(md).not.toContain('### 第 2 张')
+    expect(md).not.toContain('仅根据图片整理')
+    const parsed = parseNoteBody(md.slice(md.indexOf('\n---\n') + 5))
+    expect(parsed.images).toHaveLength(1)
+    expect(parsed.body).toBe(body)
   })
 
   it('标题里的引号、冒号不会弄坏 frontmatter', () => {
@@ -262,7 +300,12 @@ describe('parseNoteBody', () => {
   })
 
   it('没有摘要和图片的笔记：全部是正文', () => {
-    expect(parseNoteBody('随手写的一段\n\n第二段')).toEqual({ summary: '', images: [], body: '随手写的一段\n\n第二段' })
+    expect(parseNoteBody('随手写的一段\n\n第二段')).toEqual({
+      summary: '',
+      images: [],
+      attachments: [],
+      body: '随手写的一段\n\n第二段',
+    })
   })
 
   it('正文中间的图片留在正文里', () => {
@@ -343,6 +386,7 @@ it('图片显示宽度能从 Markdown 读回，说明和附件路径保持独立
   expect(parseNoteBody('![说明|330](<../附件/a (1).png>)\n\n正文')).toEqual({
     summary: '',
     images: [{ caption: '说明', path: '../附件/a (1).png', width: 330 }],
+    attachments: [],
     body: '正文',
   })
   expect(parseNoteBody('![说明|abc](a.png)').images).toEqual([{ caption: '说明|abc', path: 'a.png' }])

@@ -1,4 +1,4 @@
-import { defineComponent, h } from 'vue'
+import { defineComponent, h, useId } from 'vue'
 import type { Component } from 'vue'
 import './icons.css'
 
@@ -16,6 +16,7 @@ function icon(name: string, inner: string): Component {
     // outline：只要线条、不要浅色填充（一排图标里有的有面、有的没有时，统一成纯线条）
     props: { size: { type: [Number, String], default: 16 }, duotone: Boolean, outline: Boolean },
     setup(props) {
+      const markup = inner.includes('{uid}') ? inner.replaceAll('{uid}', useId()) : inner
       return () =>
         h('svg', {
           class: [
@@ -28,7 +29,7 @@ function icon(name: string, inner: string): Component {
           width: props.size,
           height: props.size,
           'aria-hidden': 'true',
-          innerHTML: inner,
+          innerHTML: markup,
         })
     },
   })
@@ -144,25 +145,38 @@ export const Hash = icon(
   'Hash',
   '<path d="M6.75 3.5L5.75 14.5M12.5 3.5l-1 11"/><path class="l2" d="M3.5 6.75h11.5M3 11.25h11.5"/>',
 )
+function cutout(base: string, cut: string): string {
+  return `<mask id="{uid}" maskUnits="userSpaceOnUse" x="-2" y="-2" width="22" height="22"><rect x="-2" y="-2" width="22" height="22" fill="#fff" stroke="none"/><g stroke="#000">${cut}</g></mask><g mask="url(#{uid})">${base}</g>`
+}
 export const ModeKeyPoints = icon(
   'ModeKeyPoints',
-  '<rect class="soft l2" x="3" y="2.5" width="12" height="13" rx="2.5"/><path d="M6.25 6.5h0M6.25 9.25h0M6.25 12h0" style="stroke-width:2"/><path class="a txt-line" d="M8.75 6.5h3.25"/><path class="l2 a txt-line txt-line2" d="M8.75 9.25h3.25"/><path class="l2 a txt-line txt-line3" d="M8.75 12h2"/>',
+  cutout(
+    '<rect x="2" y="2" width="14" height="14" rx="3" fill="currentColor" stroke="none"/>',
+    '<path d="M5.75 5.75h0M5.75 9h0M5.75 12.25h0" style="stroke-width:1.9"/><path class="a txt-line" d="M8.5 5.75h4.5" style="stroke-width:1.3"/><path class="a txt-line txt-line2" d="M8.5 9h4.5" style="stroke-width:1.3"/><path class="a txt-line txt-line3" d="M8.5 12.25h2.75" style="stroke-width:1.3"/>',
+  ),
 )
 export const ModeRefine = icon(
   'ModeRefine',
-  '<path class="l2" d="M10.5 2.5H5.5A2.5 2.5 0 0 0 3 5v8a2.5 2.5 0 0 0 2.5 2.5h7A2.5 2.5 0 0 0 15 13V8.25"/><path class="l2" d="M6 7h3M6 9.75h6M6 12.5h4.5"/><path class="soft a part plus-s" d="M13.75 1.75l.75 1.75 1.75.75-1.75.75-.75 1.75-.75-1.75-1.75-.75 1.75-.75z"/>',
+  cutout(
+    '<path fill="currentColor" stroke="none" d="M11.5 2H5a3 3 0 0 0-3 3v8a3 3 0 0 0 3 3h8a3 3 0 0 0 3-3V6.5a3.5 3.5 0 0 1-4.5-4.5z"/>',
+    '<path class="a txt-line" d="M5.5 9.5h4"/><path class="a txt-line txt-line2" d="M5.5 12.5h6.5"/>',
+  ) +
+    '<path class="a part plus-s" fill="currentColor" stroke="none" d="M14.75.7l.68 1.87 1.87.68-1.87.68-.68 1.87-.68-1.87-1.87-.68 1.87-.68z"/>',
 )
 export const ModeVisual = icon(
   'ModeVisual',
-  '<rect class="soft l2" x="3" y="2.5" width="12" height="13" rx="2.5"/><circle class="a part img-sun" cx="7" cy="6.75" r="1.25"/><path class="a img-hills" d="M3.25 12.5l3-2.6a1.5 1.5 0 0 1 2 0l1.6 1.4 1-.85a1.5 1.5 0 0 1 1.95 0l2 1.75"/>',
+  cutout(
+    '<rect x="2.5" y="2.5" width="13" height="13" rx="3" fill="currentColor" stroke="none"/>',
+    '<circle class="a part img-sun" cx="6.75" cy="6.75" r="1.3" fill="#000" stroke="none"/><path class="a img-hills" d="M2.5 13.5l3.65-3.2a1.25 1.25 0 0 1 1.65 0L9.75 12l1.2-1a1.25 1.25 0 0 1 1.6 0l3 2.6"/>',
+  ),
 )
 export const ModeExtract = icon(
   'ModeExtract',
-  '<g class="a part extract-frame"><path d="M3 6V5a2 2 0 0 1 2-2h1M12 3h1a2 2 0 0 1 2 2v1M15 12v1a2 2 0 0 1-2 2h-1M6 15H5a2 2 0 0 1-2-2v-1"/></g><path class="a txt-line extract-l1" d="M6.25 7.5h5.5"/><path class="l2 a txt-line extract-l2" d="M6.25 10.5h3.5"/><path class="part extract-scan" d="M4.5 9h9"/>',
+  '<g class="a part extract-frame" style="stroke-width:1.75"><path d="M3 6V5a2 2 0 0 1 2-2h1M12 3h1a2 2 0 0 1 2 2v1M15 12v1a2 2 0 0 1-2 2h-1M6 15H5a2 2 0 0 1-2-2v-1"/></g><path class="a txt-line extract-l1" pathLength="1" style="stroke-width:1.75" d="M6.25 7.5h5.5"/><path class="l2 a txt-line extract-l2" pathLength="1" style="stroke-width:1.75" d="M6.25 10.5h3.5"/><path class="part extract-scan" d="M4.5 9h9"/>',
 )
 export const Play = icon(
   'Play',
-  '<path class="soft a part play-tri" d="M6 4.6a1 1 0 0 1 1.52-.85l6.6 4.4a1 1 0 0 1 0 1.7l-6.6 4.4A1 1 0 0 1 6 13.4z"/>',
+  '<path class="soft" d="M6 4.6a1 1 0 0 1 1.52-.85l6.6 4.4a1 1 0 0 1 0 1.7l-6.6 4.4A1 1 0 0 1 6 13.4z"/>',
 )
 export const Pause = icon(
   'Pause',

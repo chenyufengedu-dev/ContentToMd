@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { UNSAVED_CHANGES, LEAVE_CHANGES_WARNING } from './core/editMessages'
-import { onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { vPageFade } from './components/pageFade'
 import { type Config, parseConfig, notesRoot } from './core/config'
 import {
@@ -52,6 +52,29 @@ const notePath = ref<string | null>(null)
 const noteDirty = ref(false)
 const library = ref<InstanceType<typeof LibraryPage>>()
 const notePage = ref<InstanceType<typeof NotePage>>()
+let scanningConfig: Config | null = null
+
+/** 外部新增目录同步到当前会话。正常保存设置或重启时再走既有配置写入。 */
+async function syncLibraryDomains() {
+  const current = config.value
+  if (page.value !== 'library' || !current?.vaultPath || scanningConfig === current) return
+  scanningConfig = current
+  try {
+    const result = await inspectCollection(current)
+    // 扫描期间可能已切换库或在别处改了配置。
+    if (page.value === 'library' && config.value === current && result.config !== current) {
+      config.value = result.config
+    }
+  } catch {
+    // 目录暂时无法访问时保留当前领域，下一次进入或聚焦时重试。
+  } finally {
+    if (scanningConfig === current) scanningConfig = null
+  }
+}
+watch(page, () => void syncLibraryDomains())
+onMounted(() => window.addEventListener('focus', syncLibraryDomains))
+onBeforeUnmount(() => window.removeEventListener('focus', syncLibraryDomains))
+
 function closeNote(changed: boolean) {
   notePath.value = null
   noteDirty.value = false

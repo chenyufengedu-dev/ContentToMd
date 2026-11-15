@@ -11,6 +11,7 @@ import { fromDraft, toDraft } from '../core/draft'
 import type * as ImageTools from '../core/image'
 import { cropForSave } from '../core/image'
 import {
+  openLink,
   saveEditRecovery,
   clearEditRecovery,
   saveNote,
@@ -40,6 +41,7 @@ vi.mock('@tiptap/vue-3', async (importOriginal) => {
   }
 })
 vi.mock('../shell/tauri', () => ({
+  openLink: vi.fn(),
   saveEditRecovery: vi.fn().mockResolvedValue(undefined),
   clearEditRecovery: vi.fn().mockResolvedValue(undefined),
   saveNote: vi.fn(),
@@ -77,13 +79,19 @@ async function mount(
   pictures?: { files: JobImage[]; saved: NoteImage[] },
   recovery?: NoteRecovery,
   suggestion?: string,
+  source = '',
+  mode: Job['mode'] = '原文精修',
+  type: Job['type'] = '文字',
+  transcript?: string,
+  imageTexts?: string[],
 ) {
   const config = reactive(defaultConfig())
   config.domains.unshift({ id: 1, name: '为人处世' })
   const job: Job = {
     fileName: '旧标题.md',
-    type: '文字',
-    mode: '原文精修',
+    type,
+    mode,
+    transcript,
     steps: [],
     images: pictures?.files,
     draft: {
@@ -95,6 +103,7 @@ async function mount(
       summary: '',
       body,
       image_captions: [],
+      image_texts: imageTexts,
     },
   }
   const edit: EditInfo = {
@@ -105,7 +114,7 @@ async function mount(
       domain: '为人处世',
       type: '文字',
       mode: '原文精修',
-      source: '',
+      source,
       platform: '',
       author: '',
       created: '2026-10-23',
@@ -321,7 +330,7 @@ it('恢复上次已保存裁剪后的“恢复原图”操作仍是待保存，�
   expect(vi.mocked(saveNote).mock.calls[0][4]).toContain('新裁剪.png')
 })
 async function cropFirst(root: HTMLElement) {
-  const button = root.querySelector<HTMLButtonElement>('.pic-tools button')
+  const button = root.querySelector<HTMLButtonElement>('.pic-tools button[aria-label="调整裁剪"]')
   if (!button) throw new Error('编辑页没有裁剪入口')
   button.click()
   await nextTick()
@@ -345,6 +354,148 @@ function picture() {
     saved: [{ path: '../附件/原图.png', caption: '原始说明' }],
   }
 }
+
+it('提取内容的图片显示原图对照：完整原图、选区、按序文字和没有文字的那张；不显示摘要', async () => {
+  const pictures = {
+    files: [
+      {
+        file: new File(['chat'], '聊天.png', { type: 'image/png' }),
+        noteImageIndex: 0,
+        region: { x: 10, y: 20, w: 50, h: 40 },
+      },
+      { file: new File(['board'], '白板.png', { type: 'image/png' }), noteImageIndex: 1 },
+    ],
+    saved: [
+      { path: '../附件/聊天.png', caption: '聊天截图' },
+      { path: '../附件/白板.png', caption: '白板' },
+    ],
+  }
+  const view = await mount(
+    '### 第 1 张\n\n第一条消息\n第二条消息\n\n### 第 2 张',
+    false,
+    pictures,
+    undefined,
+    undefined,
+    '',
+    '提取内容',
+    '图片',
+    undefined,
+    ['第一条消息\n第二条消息', ''],
+  )
+  expect(view.root.querySelector('label.summary')).toBeNull()
+  const tab = [...view.root.querySelectorAll<HTMLButtonElement>('.tab')].find(
+    (button) => button.textContent?.trim() === '原图对照',
+  )
+  if (!tab) throw new Error('缺少原图对照标签')
+  tab.click()
+  await view.flush()
+  const panel = view.root.querySelector<HTMLElement>('[aria-label="原图对照"]')
+  if (!panel) throw new Error('缺少原图对照面板')
+  expect(panel.textContent).toContain('第 1 张 / 共 2 张')
+  expect(panel.textContent).toContain('识别文字')
+  expect(panel.textContent).toContain('第一条消息')
+  const images = panel.querySelectorAll('img')
+  expect(images).toHaveLength(1)
+  Object.defineProperties(images[0], { naturalWidth: { value: 200 }, naturalHeight: { value: 100 } })
+  images[0].dispatchEvent(new Event('load'))
+  await nextTick()
+  expect(panel.querySelector('.region')).not.toBeNull()
+  const next = [...panel.querySelectorAll('button')].find((button) => button.textContent?.trim() === '下一张')
+  expect(next).toBeDefined()
+  next?.click()
+  await nextTick()
+  expect(panel.textContent).toContain('第 2 张 / 共 2 张')
+  expect(panel.textContent).toContain('这张图没有识别到文字。')
+  expect(panel.textContent).not.toContain('第一条消息')
+})
+
+it('提取内容多图正文可自由编辑，保存只写确认过的正文和两张原图', async () => {
+  const pictures = {
+    files: [
+      { file: new File(['chat'], '聊天.png', { type: 'image/png' }), noteImageIndex: 0 },
+      { file: new File(['board'], '白板.png', { type: 'image/png' }), noteImageIndex: 1 },
+    ],
+    saved: [
+      { path: '../附件/聊天.png', caption: '聊天截图' },
+      { path: '../附件/白板.png', caption: '白板' },
+    ],
+  }
+  const texts = ['第一条消息\n第二条消息', '白板上的三条结论']
+  const view = await mount(
+    '第一条消息\n\n第二条消息\n\n白板上的三条结论',
+    false,
+    pictures,
+    undefined,
+    undefined,
+    '',
+    '提取内容',
+    '图片',
+    undefined,
+    texts,
+  )
+  view.editor.commands.insertContent('编辑补充')
+  await nextTick()
+  vi.mocked(writeAttachment).mockImplementation(async (_root, _month, name) => `附件/2026-10/${name}`)
+  vi.mocked(writeNote).mockResolvedValue('其他/提取.md')
+  view.save.click()
+  await view.flush()
+  const md = vi.mocked(writeNote).mock.calls[0][4]
+  expect(md).not.toContain('extract_texts')
+  expect(md).not.toContain('第 1 张')
+  expect(md).not.toContain('第 2 张')
+  expect(md).toContain('编辑补充')
+  expect(writeAttachment).toHaveBeenCalledTimes(2)
+  const parsed = parseNoteBody(md.slice(md.indexOf('\n---\n') + 5))
+  expect(parsed.images).toHaveLength(2)
+  expect(parsed.body).toContain('编辑补充')
+  expect(parsed.body).not.toContain('第 1 张')
+})
+
+it('重开提取内容笔记时右侧仍显示两张原图，没有识别初稿也不误报缺字', async () => {
+  const pictures = {
+    files: [
+      { file: new File(['chat'], '聊天.png', { type: 'image/png' }), noteImageIndex: 0 },
+      { file: new File(['board'], '白板.png', { type: 'image/png' }), noteImageIndex: 1 },
+    ],
+    saved: [
+      { path: '../附件/聊天.png', caption: '聊天截图' },
+      { path: '../附件/白板.png', caption: '白板' },
+    ],
+  }
+  const view = await mount('改好的第一段\n\n改好的第二段', true, pictures, undefined, undefined, '', '提取内容', '图片')
+  expect(view.root.textContent).toContain('改好的第一段')
+  const tab = [...view.root.querySelectorAll<HTMLButtonElement>('.tab')].find(
+    (button) => button.textContent?.trim() === '原图对照',
+  )
+  if (!tab) throw new Error('缺少原图对照标签')
+  tab.click()
+  await view.flush()
+  const panel = view.root.querySelector<HTMLElement>('[aria-label="原图对照"]')
+  if (!panel) throw new Error('缺少原图对照面板')
+  expect(panel.querySelectorAll('img')).toHaveLength(1)
+  expect(panel.textContent).toContain('识别文字以左侧正文为准')
+  expect(panel.textContent).not.toContain('没有识别到文字')
+})
+
+it('提取内容的视频确认页只显示口播稿和属性信息，不再显示原文对照', async () => {
+  const view = await mount(
+    '大家好，今天讲三个重点。',
+    false,
+    undefined,
+    undefined,
+    undefined,
+    '',
+    '提取内容',
+    '视频',
+    '大家好，今天讲三个重点。',
+  )
+  expect(view.root.querySelector('label.summary')).toBeNull()
+  const tabs = [...view.root.querySelectorAll<HTMLButtonElement>('.tab')].map((button) => button.textContent?.trim())
+  expect(tabs).toEqual(['属性信息'])
+  expect(view.root.textContent).not.toContain('原文对照')
+  expect(view.root.textContent).not.toContain('原图对照')
+  expect(view.editor.getText()).toContain('大家好，今天讲三个重点。')
+})
 it('编辑页仅裁剪图片也触发待保存，另存附件并同步正文与封面，旧附件由保存入口清理', async () => {
   const pictures = picture()
   const view = await mount('正文不变', true, pictures)
@@ -415,7 +566,7 @@ it('本次编辑中裁剪保存后恢复原图，再保存使用原始文件而�
   vi.mocked(saveNote).mockResolvedValue('为人处世/旧标题.md')
   view.save.click()
   await view.flush()
-  const restore = view.root.querySelector<HTMLButtonElement>('.pic-tools button:nth-child(2)')
+  const restore = view.root.querySelector<HTMLButtonElement>('.pic-tools button[title="恢复原图"]')
   if (!restore) throw new Error('缺少恢复原图按钮')
   restore.click()
   await nextTick()
@@ -883,4 +1034,14 @@ it('导入页调整尺寸后草稿恢复、笔记保存并重新打开均保留�
   expect(vi.mocked(saveNote).mock.calls[0][4]).toContain('![|330](../附件/2026-10/新裁剪.png)')
   expect(vi.mocked(saveNote).mock.calls[0][4]).toContain('cover: "../附件/2026-10/新裁剪.png"')
   expect(writeAttachment).toHaveBeenCalledTimes(1)
+})
+
+it('已保存笔记的来源链接用完整地址打开', async () => {
+  const url = 'https://example.com/source?chapter=12&view=full'
+  const view = await mount(undefined, true, undefined, undefined, undefined, url)
+  const link = view.root.querySelector<HTMLAnchorElement>('a[href]')
+  expect(link?.getAttribute('href')).toBe(url)
+  expect(link?.textContent?.trim()).toBe(url)
+  link?.click()
+  expect(openLink).toHaveBeenCalledExactlyOnceWith(url)
 })

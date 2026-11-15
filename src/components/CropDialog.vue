@@ -20,6 +20,8 @@ const moveEl = ref<HTMLButtonElement>()
 let initialFocus = true
 const natural = ref({ w: 0, h: 0 })
 const shown = ref({ w: 0, h: 0 }) // 图片在屏幕上显示的大小
+const zoom = ref(1)
+const preview = ref(false)
 const MIN = 24 // 裁剪框最小边长（原图像素）
 
 /** 图片按比例缩到刚好放进中间的区域（四周留出拖动手柄的位置） */
@@ -34,10 +36,75 @@ function measure() {
     (stage.clientWidth - pad * 2) / el.naturalWidth,
     (stage.clientHeight - pad * 2) / el.naturalHeight,
   )
-  shown.value = { w: Math.round(el.naturalWidth * k), h: Math.round(el.naturalHeight * k) }
+  shown.value = { w: Math.round(el.naturalWidth * k * zoom.value), h: Math.round(el.naturalHeight * k * zoom.value) }
+}
+
+function changeZoom(value: number) {
+  zoom.value = value
+  measure()
+}
+
+async function zoomAtPointer(event: WheelEvent) {
+  if (!event.ctrlKey) return
+  event.preventDefault()
+  const stage = stageEl.value
+  const image = imgEl.value
+  if (!stage || !image || preview.value || !scale.value || !event.deltaY) return
+
+  const before = image.getBoundingClientRect()
+  const x = (event.clientX - before.left) / before.width
+  const y = (event.clientY - before.top) / before.height
+  changeZoom(Math.min(4, Math.max(1, zoom.value + (event.deltaY < 0 ? 0.5 : -0.5))))
+  await nextTick()
+  const after = image.getBoundingClientRect()
+  stage.scrollLeft += after.left + x * after.width - event.clientX
+  stage.scrollTop += after.top + y * after.height - event.clientY
+}
+
+const pan = ref<{ id: number; x: number; y: number; left: number; top: number } | null>(null)
+const spaceHeld = ref(false)
+
+function startPan(event: PointerEvent) {
+  const stage = stageEl.value
+  if (!stage || preview.value || zoom.value <= 1 || event.button !== 0) return
+  if (!spaceHeld.value && (event.target as HTMLElement).closest('.box')) return
+  event.preventDefault()
+  event.stopPropagation()
+  stage.focus({ preventScroll: true })
+  stage.setPointerCapture(event.pointerId)
+  pan.value = {
+    id: event.pointerId,
+    x: event.clientX,
+    y: event.clientY,
+    left: stage.scrollLeft,
+    top: stage.scrollTop,
+  }
+}
+
+function movePan(event: PointerEvent) {
+  const stage = stageEl.value
+  const start = pan.value
+  if (!stage || start?.id !== event.pointerId) return
+  stage.scrollLeft = start.left + start.x - event.clientX
+  stage.scrollTop = start.top + start.y - event.clientY
+}
+
+function endPan(event: PointerEvent) {
+  if (pan.value?.id === event.pointerId) pan.value = null
+}
+
+function holdSpace(event: KeyboardEvent) {
+  if (preview.value || zoom.value <= 1 || !(event.target as HTMLElement).closest('.stage')) return
+  event.preventDefault()
+  spaceHeld.value = true
+}
+
+function releaseSpace() {
+  spaceHeld.value = false
 }
 
 async function onImageLoad() {
+  zoom.value = 1
   measure()
   // 首次加载后框才会渲染；窗口重测和切换图片不抢走用户后续选择的焦点。
   if (!initialFocus) return
@@ -54,6 +121,9 @@ const boxStyle = computed(() => ({
   top: `${box.value.y * scale.value}px`,
   width: `${box.value.w * scale.value}px`,
   height: `${box.value.h * scale.value}px`,
+}))
+const previewStyle = computed(() => ({
+  viewBox: `${box.value.x} ${box.value.y} ${box.value.w} ${box.value.h}`,
 }))
 const cropped = computed(() => !!crops.value[index.value])
 
@@ -143,57 +213,109 @@ function onAdjustKey(e: KeyboardEvent, dir: Dir) {
 }
 onMounted(() => {
   window.addEventListener('resize', measure)
+  window.addEventListener('blur', releaseSpace)
 })
 onBeforeUnmount(() => {
   window.removeEventListener('resize', measure)
+  window.removeEventListener('blur', releaseSpace)
 })
 </script>
 
 <template>
   <div class="mask" @click.self="emit('cancel')">
-    <section ref="dialog" class="dialog" role="dialog" aria-modal="true" aria-label="裁剪图片" tabindex="-1">
+    <section
+      ref="dialog"
+      class="dialog"
+      role="dialog"
+      aria-modal="true"
+      aria-label="裁剪图片"
+      tabindex="-1"
+      @keydown.space="holdSpace"
+      @keyup.space="releaseSpace"
+    >
       <header class="head">
         <h2>裁剪图片</h2>
         <button v-press="'icon'" class="close" aria-label="关闭" @click="emit('cancel')"><X :size="18" /></button>
       </header>
 
-      <div ref="stageEl" class="stage">
-        <div class="frame" @pointermove="onMove" @pointerup="onUp" @pointercancel="onUp">
-          <img
-            ref="imgEl"
-            :src="images[index].url"
-            alt=""
-            draggable="false"
-            :style="shown.w ? { width: `${shown.w}px`, height: `${shown.h}px` } : { visibility: 'hidden' }"
-            @load="onImageLoad"
-          />
-          <div v-if="scale" class="box" :style="boxStyle">
-            <button
-              ref="moveEl"
-              type="button"
-              class="move"
-              :aria-label="HANDLE_LABELS.move"
-              title="方向键微调，按住 Shift 加速"
-              @pointerdown="onDown($event, 'move')"
-              @keydown="onAdjustKey($event, 'move')"
+      <div
+        ref="stageEl"
+        class="stage"
+        :class="{ pannable: zoom > 1 && !preview, panning: pan, 'space-held': spaceHeld }"
+        :tabindex="zoom > 1 && !preview ? 0 : undefined"
+        aria-label="裁剪画布，按住空格拖动查看"
+        @wheel="zoomAtPointer"
+        @pointerdown.capture="startPan"
+        @pointermove="movePan"
+        @pointerup="endPan"
+        @pointercancel="endPan"
+        @lostpointercapture="endPan"
+      >
+        <svg v-if="preview && scale" class="crop-preview" v-bind="previewStyle" aria-label="裁剪结果预览" role="img">
+          <svg :x="box.x" :y="box.y" :width="box.w" :height="box.h" :viewBox="previewStyle.viewBox" overflow="hidden">
+            <image :href="images[index].url" :width="natural.w" :height="natural.h" />
+          </svg>
+        </svg>
+        <div v-show="!preview" class="stage-content">
+          <div class="frame" @pointermove="onMove" @pointerup="onUp" @pointercancel="onUp">
+            <img
+              ref="imgEl"
+              :src="images[index].url"
+              alt=""
+              draggable="false"
+              :style="shown.w ? { width: `${shown.w}px`, height: `${shown.h}px` } : { visibility: 'hidden' }"
+              @load="onImageLoad"
             />
-            <span class="grid" aria-hidden="true" />
-            <button
-              v-for="h in HANDLES"
-              :key="h"
-              type="button"
-              class="handle"
-              :class="h"
-              :aria-label="HANDLE_LABELS[h]"
-              title="方向键微调，按住 Shift 加速"
-              @pointerdown.stop="onDown($event, h)"
-              @keydown="onAdjustKey($event, h)"
-            />
+            <div v-if="scale" class="box" :style="boxStyle">
+              <button
+                ref="moveEl"
+                type="button"
+                class="move"
+                :aria-label="HANDLE_LABELS.move"
+                title="方向键微调，按住 Shift 加速"
+                @pointerdown="onDown($event, 'move')"
+                @keydown="onAdjustKey($event, 'move')"
+              />
+              <span class="grid" aria-hidden="true" />
+              <button
+                v-for="h in HANDLES"
+                :key="h"
+                type="button"
+                class="handle"
+                :class="h"
+                :aria-label="HANDLE_LABELS[h]"
+                title="方向键微调，按住 Shift 加速"
+                @pointerdown.stop="onDown($event, h)"
+                @keydown="onAdjustKey($event, h)"
+              />
+            </div>
           </div>
         </div>
       </div>
 
       <footer class="foot">
+        <div class="zoom-controls">
+          <button v-press class="link" @click="preview = !preview">{{ preview ? '继续裁剪' : '预览裁剪' }}</button>
+          <button
+            v-press
+            class="link"
+            aria-label="缩小图片"
+            :disabled="preview || zoom <= 1"
+            @click="changeZoom(zoom - 0.5)"
+          >
+            −
+          </button>
+          <button v-press class="link" :disabled="preview" @click="changeZoom(1)">{{ Math.round(zoom * 100) }}%</button>
+          <button
+            v-press
+            class="link"
+            aria-label="放大图片"
+            :disabled="preview || zoom >= 4"
+            @click="changeZoom(zoom + 0.5)"
+          >
+            +
+          </button>
+        </div>
         <div v-if="images.length > 1" class="thumbs">
           <button
             v-for="(img, i) in images"
@@ -263,11 +385,37 @@ onBeforeUnmount(() => {
   flex: 1;
   min-height: 0;
   margin: 0 var(--sp-5);
-  display: grid;
-  place-items: center;
   border-radius: var(--radius-md);
   background: var(--card-muted);
+  overflow: auto;
+}
+.crop-preview {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.stage.pannable .stage-content {
+  cursor: grab;
+}
+.stage.space-held .box button {
+  cursor: grab;
+}
+.stage.panning .stage-content {
+  cursor: grabbing;
+}
+.stage-content {
+  box-sizing: border-box;
+  width: max-content;
+  min-width: 100%;
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 24px;
   overflow: hidden;
+}
+.zoom-controls {
+  display: flex;
+  align-items: center;
 }
 .frame {
   position: relative;
