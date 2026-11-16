@@ -4,14 +4,12 @@
 
 **Stop letting saved content scatter. Turn what's worth keeping into your own knowledge base.**
 
-ContentToMd is a Windows desktop tool that turns videos, audio, screenshots, and documents into Markdown notes, saved to Obsidian or a local folder.
+Turn local videos, audio, screenshots, and documents into Markdown notes on Windows. Review the source alongside your note, then save it to Obsidian or a local folder.
 
-Videos saved locally from Xiaohongshu or Douyin, screenshots, photos, downloaded documents: they end up scattered across apps and folders. You save a lot, but can't find it when you need it.
-
-ContentToMd organizes all of it into Markdown notes. You review each note, file it under a domain, and save it to Obsidian or a folder of your choice. Saved content stops being something you "once kept" and becomes knowledge you can search, revisit, and build on.
+[Download for Windows](https://github.com/chenyufengedu-dev/ContentToMd/releases/latest) · [Release notes](https://github.com/chenyufengedu-dev/ContentToMd/releases)
 
 ![Windows](https://img.shields.io/badge/Windows-10%2F11%20x64-0078D4)
-![Version](https://img.shields.io/badge/version-0.1.0-5b5bd6)
+[![Version](https://img.shields.io/github/v/release/chenyufengedu-dev/ContentToMd?color=5b5bd6)](https://github.com/chenyufengedu-dev/ContentToMd/releases/latest)
 [![License](https://img.shields.io/badge/license-MIT-1f2937)](LICENSE)
 
 ![ContentToMd demo](assets/screenshots/demo.gif)
@@ -33,14 +31,18 @@ ContentToMd shortens that distance: **drop scattered content in, let AI organize
 - **Review before saving.** The source and the note sit side by side. Edit, then save, so everything in your library is something you've checked.
 - **Works directly with Obsidian.** Notes are plain Markdown plus attachments. Save them into an Obsidian vault and keep linking, searching, and organizing. No ContentToMd account, no server of ours; your files stay yours.
 - **Your own API keys, pay as you go.** The app is free. A short text note costs roughly one fen (about 0.1 US cent).
+- **Extract text from images.** Select the part you want and compare the extracted text with the original image.
+- **Capture key frames from video.** Save frames with your note. Keep the original video if you want to capture more later.
 
 ![ContentToMd note editor](assets/screenshots/note.png)
 
 ## How to use
 
-1. **Install.** Download `ContentToMd_x.y.z_x64-setup.exe` from [Releases](https://github.com/chenyufengedu-dev/ContentToMd/releases) and run it (Windows 10/11 x64). This is an early test version.
+1. **Install.** Download `ContentToMd_x.y.z_x64-setup.exe` from [Releases](https://github.com/chenyufengedu-dev/ContentToMd/releases/latest) and run it (Windows 10/11 x64).
 2. **Set up.** Follow the onboarding to choose a library folder and enter AI keys. [DeepSeek](https://platform.deepseek.com/api_keys) handles text and images; [SiliconFlow](https://cloud.siliconflow.cn/account/ak) handles audio and video transcription: sign up → top up as needed → create and copy a key. Other compatible services can be configured in Settings.
-3. **Organize.** Drag in, paste, or choose content; pick Key Points, Refined Transcript, or Visual Collection; review and save. Supports images, audio and video, MD/TXT, text-based PDFs, and DOCX.
+3. **Organize.** Drag in, paste, or choose content; pick Key Points, Refine Original, Visual Collection, or Extract Content; review and save. Supports images, audio and video, MD/TXT, text-based PDFs, and DOCX.
+**Upgrading.** If you have v0.1.0, install the current release once from GitHub. Starting with v1.0.0, you can download and install future updates from inside the app.
+
 
 ## Data and privacy
 
