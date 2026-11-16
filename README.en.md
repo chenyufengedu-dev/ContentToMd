@@ -16,6 +16,12 @@ Turn local videos, audio, screenshots, and documents into Markdown notes on Wind
 
 > The app interface is currently in Simplified Chinese only.
 
+## What you can do
+
+- Turn local tutorial videos or recordings into Markdown notes, review the transcript, and manually capture key frames from video.
+- Extract text from a selected area of a screenshot, review it against the original image, and save it.
+- Turn text-based PDFs or Word documents into notes and save them to Obsidian or a local folder.
+
 ## Why
 
 People who like saving things rarely lack saved content. What's missing is the step that turns it into a knowledge base.
