@@ -36,7 +36,7 @@ ContentToMd shortens that distance: **drop scattered content in, let AI organize
 - **A knowledge base that grows its own structure.** Notes are filed by domain and can carry tags. When no domain fits, AI suggests a new one; it's created only if you approve.
 - **Review before saving.** The source and the note sit side by side. Edit, then save, so everything in your library is something you've checked.
 - **Works directly with Obsidian.** Notes are plain Markdown plus attachments. Save them into an Obsidian vault and keep linking, searching, and organizing. No ContentToMd account, no server of ours; your files stay yours.
-- **Your own API keys, pay as you go.** The app is free. A short text note costs roughly one fen (about 0.1 US cent).
+- **Your own API keys, pay as you go.** The app is free. AI service costs depend on the model you choose and the amount of content you process.
 - **Extract text from images.** Select the part you want and compare the extracted text with the original image.
 - **Capture key frames from video.** Save frames with your note. Keep the original video if you want to capture more later.
 
@@ -62,7 +62,7 @@ Notes and attachments live in the library you choose; app settings are in `%APPD
 
 **Is there a Mac version?** Windows only for now.
 
-**Windows says "Windows protected your PC" during install.** The app isn't code-signed yet. After checking where the installer came from, click "More info → Run anyway".
+**Windows says "Windows protected your PC" during install.** The installer does not have a Windows code signature. After checking where the installer came from, click "More info → Run anyway".
 
 ## Feedback
 
