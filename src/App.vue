@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { UNSAVED_CHANGES, LEAVE_CHANGES_WARNING } from './core/editMessages'
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
 import { vPageFade } from './components/pageFade'
 import { type Config, parseConfig, notesRoot } from './core/config'
 import {
@@ -25,6 +25,9 @@ import TitleBar, { type Page } from './components/TitleBar.vue'
 import LibraryPage from './pages/LibraryPage.vue'
 import NotePage from './pages/NotePage.vue'
 import NoticeDialog from './components/NoticeDialog.vue'
+import { GITHUB_URL } from './core/projectInfo'
+import { createUpdateCheck, updateKey } from './components/useUpdate'
+import { openLink as openUpdateLink } from './shell/tauri'
 import UnsavedDialog from './components/UnsavedDialog.vue'
 import ToastHost from './components/ToastHost.vue'
 import { toast } from './components/useToast'
@@ -72,6 +75,71 @@ async function syncLibraryDomains() {
   }
 }
 watch(page, () => void syncLibraryDomains())
+const { update, visible: updateVisible, open: showUpdate, check: checkUpdate } = createUpdateCheck()
+provide(updateKey, {
+  update,
+  open: () => {
+    if (!downloadingUpdate.value) updateDownloadFailed.value = false
+    showUpdate()
+  },
+})
+onMounted(() => void checkUpdate())
+
+const collect = ref<InstanceType<typeof CollectPage>>()
+const downloadingUpdate = ref(false)
+const updateDownloaded = ref(false)
+const downloadedBytes = ref(0)
+const downloadTotal = ref<number>()
+const updatePercent = computed(() =>
+  downloadTotal.value ? Math.min(100, (downloadedBytes.value / downloadTotal.value) * 100) : 0,
+)
+const updateDownloadFailed = ref(false)
+
+async function downloadUpdate() {
+  if (!update.value || downloadingUpdate.value) return
+  if (updateDownloadFailed.value) {
+    try {
+      await openUpdateLink(GITHUB_URL + '/releases')
+    } catch {
+      toast('无法打开 GitHub，请稍后重试。', { kind: 'error' })
+    }
+    return
+  }
+  downloadedBytes.value = 0
+  downloadTotal.value = undefined
+  downloadingUpdate.value = true
+  try {
+    if (import.meta.env.DEV && import.meta.env.VITE_UPDATE_PREVIEW === '1') {
+      downloadTotal.value = 100
+      for (let step = 1; step <= 20; step++) {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 80))
+        downloadedBytes.value = step * 5
+      }
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 200))
+      toast('模拟更新完成。')
+      updateVisible.value = false
+      return
+    }
+    if (!updateDownloaded.value) {
+      await update.value.download?.((event) => {
+        if (event.event === 'Started') downloadTotal.value = event.data.contentLength
+        if (event.event === 'Progress') downloadedBytes.value += event.data.chunkLength
+      })
+      updateDownloaded.value = true
+    }
+    if (noteDirty.value || settingsPending.value || settingsDomainBusy.value || collect.value?.hasUnsaved()) {
+      toast('请先保存或放弃当前内容，再安装更新。')
+      return
+    }
+    await update.value.install?.()
+    updateVisible.value = false
+  } catch {
+    updateDownloadFailed.value = true
+  } finally {
+    downloadingUpdate.value = false
+  }
+}
+
 onMounted(() => window.addEventListener('focus', syncLibraryDomains))
 onBeforeUnmount(() => window.removeEventListener('focus', syncLibraryDomains))
 
@@ -264,6 +332,7 @@ async function markCelebrated() {
         <p v-if="vaultMissing" class="fatal">找不到收藏库：{{ notesRoot(config) }}。请到设置中重新选择。</p>
         <CollectPage
           v-if="prompts"
+          ref="collect"
           :active="page === 'home'"
           :config="config"
           :prompts="prompts"
@@ -290,6 +359,45 @@ async function markCelebrated() {
       @stay="askSettings = null"
     />
     <NoticeDialog
+      v-if="updateVisible && update"
+      title="发现新版本"
+      cancel-text="稍后"
+      :ok-text="
+        downloadingUpdate
+          ? undefined
+          : updateDownloadFailed
+            ? '前往 GitHub 下载'
+            : updateDownloaded
+              ? '安装更新'
+              : '下载并安装'
+      "
+      @cancel="updateVisible = false"
+      @ok="downloadUpdate"
+    >
+      <p>当前版本 v{{ update.current }}，最新版本 v{{ update.version }}。</p>
+      <template v-if="downloadingUpdate">
+        <p role="status">
+          {{ updateDownloaded ? '正在安装更新…' : downloadedBytes ? '正在下载安装包…' : '正在连接下载服务器…' }}
+          {{
+            downloadTotal
+              ? Math.min(100, Math.floor((downloadedBytes / downloadTotal) * 100)) + '%'
+              : (downloadedBytes / 1048576).toFixed(1) + ' MB'
+          }}
+        </p>
+        <div
+          v-if="downloadTotal"
+          class="update-progress"
+          role="progressbar"
+          aria-label="安装包下载进度"
+          :aria-valuenow="updatePercent"
+        >
+          <div class="update-progress-fill" :style="{ width: updatePercent + '%' }" />
+        </div>
+      </template>
+      <p v-if="updateDownloadFailed" role="status">更新失败，可前往 GitHub 手动下载安装。</p>
+      <p v-if="update.notes" class="update-notes">{{ update.notes }}</p>
+    </NoticeDialog>
+    <NoticeDialog
       v-if="pendingPage"
       :title="UNSAVED_CHANGES"
       cancel-text="继续编辑"
@@ -310,5 +418,28 @@ async function markCelebrated() {
 .fatal {
   color: var(--err);
   padding: var(--sp-5);
+}
+.update-progress {
+  height: 5px;
+  margin-block: var(--sp-2);
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--hover);
+}
+.update-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .update-progress-fill {
+    transition: width 180ms linear;
+  }
+}
+.update-notes {
+  max-height: 12rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 </style>

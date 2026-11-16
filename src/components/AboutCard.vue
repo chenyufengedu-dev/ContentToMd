@@ -7,6 +7,7 @@
 import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import art from '../assets/about-art.json'
 import { appVersion, openLink } from '../shell/tauri'
+import { useUpdate } from './useUpdate'
 import { toast } from './useToast'
 import { ChevronRight, Github, Link2, MessageCircleMore, User } from './icons'
 import FeedbackDialog from './FeedbackDialog.vue'
@@ -50,6 +51,7 @@ const LINKS = [
 ]
 
 const version = ref('')
+const updates = useUpdate()
 const showFeedback = ref(false)
 const showCredits = ref(false)
 const creditsMounted = ref(false)
@@ -290,7 +292,14 @@ onBeforeUnmount(() => {
         <path v-for="(L, i) in art.letters" :key="i" :d="L.outline" />
       </svg>
     </span>
-    <span v-if="version" class="ver">v{{ version }}</span>
+    <button
+      v-if="version && updates?.update.value"
+      class="ver update-entry"
+      aria-label="查看新版本"
+      @click.stop="updates.open()"
+    >
+      v{{ version }}</button
+    ><span v-else-if="version" class="ver">v{{ version }}</span>
     <ul class="links" aria-label="作者与链接">
       <li v-for="l in LINKS" :key="l.key" class="link">
         <component :is="l.icon" :size="16" outline aria-hidden="true" />
@@ -356,7 +365,14 @@ onBeforeUnmount(() => {
         </li>
       </ul>
       <p class="meta" data-fade>
-        <span v-if="version">版本 {{ version }}</span>
+        <button
+          v-if="version && updates?.update.value"
+          class="ver update-entry"
+          aria-label="查看新版本"
+          @click.stop="updates.open()"
+        >
+          v{{ version }}</button
+        ><span v-else-if="version">版本 {{ version }}</span>
         <button type="button" class="credits-btn" :aria-expanded="showCredits" @click.stop="toggleCredits">
           开源致谢<ChevronRight class="chev" :class="{ on: showCredits }" :size="14" aria-hidden="true" />
         </button>
@@ -422,6 +438,21 @@ onBeforeUnmount(() => {
   background: var(--hover);
   border-radius: var(--radius-pill);
   white-space: nowrap;
+}
+button.ver.update-entry {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  line-height: 1.4;
+}
+.ver.update-entry::after {
+  position: static;
+  align-self: center;
+  flex: none;
+  transform: translateY(-1px);
 }
 .brief .links {
   margin-left: auto;

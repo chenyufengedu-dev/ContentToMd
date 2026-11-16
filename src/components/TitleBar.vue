@@ -4,6 +4,7 @@ export type Page = 'home' | 'library' | 'settings'
 
 <script setup lang="ts">
 // 自绘标题栏：软件名、正中间的页面切换（胶囊形分段）、窗口按钮。空白处可以拖动窗口、双击最大化
+import { useUpdate } from './useUpdate'
 import { vPress } from './pressFeedback'
 import { Minus, Square, X } from './icons'
 import { minimizeWindow, toggleMaximizeWindow, closeWindow } from '../shell/tauri'
@@ -11,6 +12,7 @@ import { minimizeWindow, toggleMaximizeWindow, closeWindow } from '../shell/taur
 /** onlySettings：第一次使用、还没配置完时只能停在设置页 */
 const props = defineProps<{ page: Page; onlySettings: boolean; hideNavigation?: boolean }>()
 const emit = defineEmits<{ navigate: [Page] }>()
+const updates = useUpdate()
 const PAGES: { id: Page; label: string }[] = [
   { id: 'home', label: '新增' },
   { id: 'library', label: '收藏库' },
@@ -20,9 +22,21 @@ const PAGES: { id: Page; label: string }[] = [
 
 <template>
   <header class="titlebar" data-tauri-drag-region>
-    <div class="brand" data-tauri-drag-region>
-      <img class="logo" src="../assets/app-mark.svg" alt="" />
-      <span class="brand-name" data-tauri-drag-region>ContentToMd</span>
+    <div class="brand" :data-tauri-drag-region="updates?.update.value ? undefined : true">
+      <button
+        v-if="updates?.update.value"
+        class="update-entry brand-update"
+        type="button"
+        aria-label="查看新版本"
+        @click="updates.open()"
+      >
+        <img class="logo" src="../assets/app-mark.svg" alt="" />
+        <span class="brand-name">ContentToMd</span>
+      </button>
+      <template v-else>
+        <img class="logo" src="../assets/app-mark.svg" alt="" />
+        <span class="brand-name" data-tauri-drag-region>ContentToMd</span>
+      </template>
     </div>
     <nav v-if="!hideNavigation" class="nav" aria-label="页面">
       <!-- 当前页下面的白色底块，切换时滑过去 -->
@@ -68,6 +82,18 @@ const PAGES: { id: Page; label: string }[] = [
 .logo {
   height: var(--brand-logo-size);
   width: auto;
+}
+.brand-update {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.brand-update > * {
+  pointer-events: none;
+}
+.brand-update.update-entry::after {
+  inset: 1px 0 auto auto;
+  transform: translateX(100%);
 }
 .brand-name {
   /* 艺术体：Gabriola（Windows 自带，装饰书法、基本直立），不用斜体字，免得和向右斜的羽毛方向叠在一起 */

@@ -75,6 +75,8 @@ export const httpFetch: Fetch = async (url, init) => {
   }
 }
 
+export { check as checkAppUpdate, type DownloadEvent } from '@tauri-apps/plugin-updater'
+
 export const ensurePrompts = (defaults: Record<string, string>) =>
   invoke<Record<string, string>>('ensure_prompts', { defaults })
 export const listVaultTags = (vault: string) => invoke<string[]>('list_vault_tags', { vault })

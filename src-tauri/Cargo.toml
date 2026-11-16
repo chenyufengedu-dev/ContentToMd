@@ -1,6 +1,6 @@
 [package]
 name = "content-to-md"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 
 [build-dependencies]
@@ -16,6 +16,7 @@ tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-http = "2"
 tauri-plugin-single-instance = "2"
+tauri-plugin-updater = "2.14.1"
 tauri-plugin-window-state = "2"
 trash = "5"
 

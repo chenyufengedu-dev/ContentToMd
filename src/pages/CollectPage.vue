@@ -603,6 +603,7 @@ function cancelClose() {
 const hasUnsaved = () =>
   (phase.value === 'drop' && hasContent.value) ||
   (!!job.value && ['processing', 'failed', 'confirm'].includes(phase.value))
+defineExpose({ hasUnsaved })
 let unguard: (() => void) | undefined
 let disposed = false
 

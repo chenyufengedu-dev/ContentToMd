@@ -312,3 +312,25 @@ button.link.danger {
   background: var(--card);
   overflow: hidden;
 }
+
+button.update-entry {
+  position: relative;
+  height: auto;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  line-height: inherit;
+}
+.update-entry::after {
+  position: absolute;
+  inset: 0 0 auto auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--err);
+  transform: translate(50%, -20%);
+  pointer-events: none;
+  content: '';
+}
