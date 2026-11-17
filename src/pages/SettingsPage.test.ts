@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { createApp, nextTick, type App } from 'vue'
 import SettingsPage from './SettingsPage.vue'
 import { defaultConfig, type Config } from '../core/config'
+import { DEFAULT_PROMPTS, editablePromptText } from '../core/defaultPrompts'
 import {
   saveConfig,
   countDomainNotes,
@@ -56,7 +57,14 @@ async function mount(price?: number, setup?: (config: Config) => void) {
   const busy = vi.fn()
   const root = document.createElement('div')
   document.body.append(root)
-  app = createApp(SettingsPage, { config, firstRun: false, onPending: pending, onSaved: saved, onDomainBusy: busy })
+  app = createApp(SettingsPage, {
+    config,
+    firstRun: false,
+    prompts: { ...DEFAULT_PROMPTS, 要点提炼: '整理方式：要点提炼\n本机默认指令。' },
+    onPending: pending,
+    onSaved: saved,
+    onDomainBusy: busy,
+  })
   // Vue 的组件实例暴露了 defineExpose({ save })。
   const vm = app.mount(root) as InstanceType<typeof SettingsPage>
   const toggle = root.querySelector<HTMLButtonElement>('.price-toggle')
@@ -325,4 +333,169 @@ it('保存只确认提交快照，保存期间的新输入仍待保存且不能�
   expect(root.textContent).toContain('修改尚未保存')
   expect(await vm.save()).toBe(true)
   expect(vi.mocked(saveConfig).mock.calls[1][0].services.text.baseUrl).toBe('https://example.invalid/b')
+})
+
+it('保存自定义指令和字体，并可将单项指令恢复到软件默认值', async () => {
+  const { root, vm, saved } = await mount(undefined, (config) => {
+    config.promptOverrides = { 要点提炼: '原有的自定义指令' }
+  })
+  const click = async (scope: ParentNode, text: string) => {
+    const button = [...scope.querySelectorAll('button')].find((item) => item.textContent?.trim().startsWith(text))
+    if (!button) throw new Error('缺少按钮 ' + text)
+    button.click()
+    await nextTick()
+  }
+  root.querySelector<HTMLElement>('[data-card=prompts]')!.click()
+  await nextTick()
+  await click(root.querySelector('[data-card=prompts]')!, '要点提炼')
+  const prompt = root.querySelector<HTMLTextAreaElement>('textarea[aria-label="整理指令"]')!
+  expect(prompt.readOnly).toBe(false)
+  prompt.value = '保留定义和使用步骤。'
+  prompt.dispatchEvent(new Event('input', { bubbles: true }))
+  await click(root.querySelector('.prompt-editor')!, '完成')
+  root.querySelector<HTMLElement>('[data-card=appearance]')!.click()
+  await nextTick()
+  await click(root.querySelector('[data-card=appearance]')!, '界面字体')
+  const font = root.querySelector<HTMLInputElement>('[aria-label=字体名称]')!
+  font.value = 'PingFang SC'
+  font.dispatchEvent(new Event('input', { bubbles: true }))
+  await nextTick()
+  await click(font.closest('[role=alertdialog]')!, '完成')
+  expect(await vm.save()).toBe(true)
+  expect(saved.mock.lastCall?.[0]).toMatchObject({
+    interfaceFont: 'PingFang SC',
+    promptOverrides: { 要点提炼: '保留定义和使用步骤。' },
+  })
+  root.querySelector<HTMLElement>('[data-card=prompts]')!.click()
+  await nextTick()
+  await click(root.querySelector('[data-card=prompts]')!, '要点提炼')
+  Object.defineProperty(Element.prototype, 'scrollIntoView', { value: vi.fn(), configurable: true })
+  root.querySelector<HTMLButtonElement>('[role=combobox][aria-label=指令来源]')!.click()
+  await nextTick()
+  const defaultOption = [...document.querySelectorAll<HTMLElement>('[role=option]')].find(
+    (option) => option.textContent?.trim() === '系统默认',
+  )
+  if (!defaultOption) throw new Error('缺少系统默认指令选项')
+  defaultOption.click()
+  await nextTick()
+  Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
+  const restored = root.querySelector<HTMLTextAreaElement>('textarea[aria-label=整理指令]')!
+  expect(restored.readOnly).toBe(true)
+  expect(restored.value).toContain('整理方式：要点提炼')
+  expect(restored.value).toContain('本机默认指令。')
+  expect(restored.value).not.toContain('只返回一个 JSON 对象')
+  await click(root.querySelector('.prompt-editor')!, '完成')
+  expect(await vm.save()).toBe(true)
+  expect(saved.mock.lastCall?.[0].promptOverrides?.要点提炼).toBeUndefined()
+})
+
+it('直接新建指令后可以撤销，再新建并保存为当前模式的指令', async () => {
+  const { root, vm, pending, saved } = await mount(undefined, (config) => {
+    config.promptFiles = [{ id: 'existing', mode: '要点提炼', name: '原有指令', text: '原正文' }]
+    config.promptOverrides = { 要点提炼: '原正文' }
+  })
+  const click = async (scope: ParentNode, label: string) => {
+    const button = [...scope.querySelectorAll('button')].find((item) => item.textContent?.trim() === label)
+    expect(button).toBeDefined()
+    button!.click()
+    await nextTick()
+  }
+  const create = async () => {
+    vm.openPromptEditor('要点提炼')
+    await nextTick()
+    const existing = root.querySelector<HTMLTextAreaElement>('[aria-label=整理指令]')!
+    expect(existing.value).toBe('原正文')
+    existing.value = '修改后的原正文'
+    existing.dispatchEvent(new Event('input', { bubbles: true }))
+    await click(root, '新建指令')
+    const dialogs = root.querySelectorAll('[role=alertdialog]')
+    const dialog = dialogs[dialogs.length - 1]
+    const name = dialog.querySelector('input')!
+    const text = dialog.querySelector('textarea')!
+    name.value = '我的指令'
+    text.value = '## 先列出步骤'
+    for (const field of [name, text]) field.dispatchEvent(new Event('input', { bubbles: true }))
+    await click(dialog, '完成')
+    expect(root.querySelector('[aria-label=指令来源]')?.textContent).toContain('我的指令')
+    await click(root.querySelector('.prompt-editor')!, '完成')
+  }
+  await create()
+  await click(root.querySelector('.save-bar')!, '撤销')
+  expect(pending).toHaveBeenLastCalledWith(false)
+  await create()
+  expect(await vm.save()).toBe(true)
+  const config = saved.mock.lastCall?.[0] as Config
+  expect(config.promptFiles).toMatchObject([
+    { id: 'existing', text: '修改后的原正文' },
+    { name: '我的指令', mode: '要点提炼', text: '## 先列出步骤' },
+  ])
+  expect(config.promptFileSelections?.要点提炼).toBe(config.promptFiles?.[1].id)
+  expect(config.promptOverrides?.要点提炼).toBe('## 先列出步骤')
+})
+
+it('撤销整批设置后，旧的删除撤销不能重新加入指令', async () => {
+  const { root, vm, pending } = await mount()
+  const click = async (scope: ParentNode, label: string) => {
+    const button = [...scope.querySelectorAll('button')].find((item) => item.textContent?.trim() === label)!
+    button.click()
+    await nextTick()
+  }
+  vm.openPromptEditor('要点提炼')
+  await nextTick()
+  await click(root, '新建指令')
+  const form = Array.from(root.querySelectorAll('[role=alertdialog]')).at(-1)!
+  const name = form.querySelector('input')!
+  const text = form.querySelector('textarea')!
+  name.value = '测试指令'
+  text.value = '测试正文'
+  for (const field of [name, text]) field.dispatchEvent(new Event('input', { bubbles: true }))
+  await click(form, '完成')
+  Object.defineProperty(Element.prototype, 'scrollIntoView', { value: vi.fn(), configurable: true })
+  root.querySelector<HTMLButtonElement>('[aria-label=指令来源]')!.click()
+  await nextTick()
+  document.querySelector<HTMLButtonElement>('[aria-label=删除指令]')!.click()
+  await nextTick()
+  const dialogs = root.querySelectorAll('[role=alertdialog]')
+  await click(dialogs[dialogs.length - 1], '删除')
+  const undo = vi.mocked(toast).mock.lastCall?.[1]?.action?.run
+  expect(undo).toBeDefined()
+  await click(root.querySelector('.prompt-editor')!, '完成')
+  await click(root.querySelector('.save-bar')!, '撤销')
+  undo!()
+  await nextTick()
+  expect(pending).toHaveBeenLastCalledWith(false)
+  Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
+})
+
+it('旧配置里保存的默认正文显示为系统默认', async () => {
+  const { root, vm } = await mount(undefined, (config) => {
+    config.promptOverrides = { 要点提炼: editablePromptText('要点提炼', DEFAULT_PROMPTS.要点提炼) }
+  })
+  vm.openPromptEditor('要点提炼')
+  await nextTick()
+  expect(root.querySelector('[aria-label=指令来源]')?.textContent).toContain('系统默认')
+  expect(root.querySelector<HTMLTextAreaElement>('[aria-label=整理指令]')?.readOnly).toBe(true)
+})
+
+it.each([undefined, 'Arial'])('撤销字体修改后恢复已保存的字体 %s', async (original) => {
+  const { root, pending } = await mount(undefined, (config) => {
+    if (original) config.interfaceFont = original
+  })
+  root.querySelector<HTMLElement>('[data-card=appearance]')!.click()
+  await nextTick()
+  root.querySelector<HTMLButtonElement>('[data-card=appearance] .settings-entry')!.click()
+  await nextTick()
+  const font = root.querySelector<HTMLInputElement>('[aria-label=字体名称]')!
+  font.value = 'PingFang SC'
+  font.dispatchEvent(new Event('input', { bubbles: true }))
+  await nextTick()
+  const clickButton = (scope: ParentNode, label: string) =>
+    [...scope.querySelectorAll('button')].find((button) => button.textContent?.trim() === label)!.click()
+  clickButton(font.closest('[role=alertdialog]')!, '完成')
+  await nextTick()
+  expect(pending).toHaveBeenLastCalledWith(true)
+  clickButton(root.querySelector('.save-bar')!, '撤销')
+  await nextTick()
+  expect(pending).toHaveBeenLastCalledWith(false)
+  expect(root.querySelector('[data-card=appearance] .entry-value')?.textContent).toBe(original ?? '思源黑体（默认）')
 })

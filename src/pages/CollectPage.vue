@@ -14,6 +14,7 @@ import {
   type ServiceKind,
 } from '../core/config'
 import { type Mode, MODES, type NoteDraft, type Prompts, type SourceType, preselectMode } from '../core/note'
+import { resolvePrompts } from '../core/defaultPrompts'
 import { type Job, newImageJob, newJob, newTextJob, runJob } from '../core/pipeline'
 import { parseShareText, type ShareInfo } from '../core/shareText'
 import { decodeText } from '../core/textFile'
@@ -57,6 +58,7 @@ import CropDialog from '../components/CropDialog.vue'
 const props = withDefaults(defineProps<{ config: Config; prompts: Prompts; active?: boolean }>(), { active: true })
 const emit = defineEmits<{
   goSettings: []
+  editPrompt: [Mode]
   configChanged: [Config]
   openNote: [path: string]
   revealForClose: []
@@ -110,6 +112,15 @@ const request = ref('')
 const REQUEST_MAX = 500
 const errors = ref<string[]>([])
 const mode = ref<Mode>('要点提炼')
+const manualMode = ref<Mode>()
+function chooseMode(m: Mode) {
+  manualMode.value = m
+  mode.value = m
+}
+function chooseImportMode(type: SourceType, suggested = preselectMode(type)) {
+  const preferred = manualMode.value
+  mode.value = preferred && (preferred !== '提取内容' || type === '图片' || type === '视频') ? preferred : suggested
+}
 const dragging = ref(false)
 const fileInput = ref<HTMLInputElement>()
 
@@ -173,7 +184,7 @@ async function acceptImages(signal: AbortSignal) {
         if (signal.aborted) return
         images.value.push({ file, url: URL.createObjectURL(file) })
         job.value = null
-        mode.value = preselectMode('图片')
+        chooseImportMode('图片')
       } catch {
         if (signal.aborted) return
         errors.value.push(importFailed(file.name, '图片无法读取。如果来自压缩包，请先解压再导入。'))
@@ -215,7 +226,7 @@ function acceptFile(f: File, signal: AbortSignal) {
   fileType.value = type
   fileUrl.value = URL.createObjectURL(f)
   duration.value = null
-  mode.value = preselectMode(type)
+  chooseImportMode(type)
   probeMedia(f, type, signal)
 }
 
@@ -259,7 +270,7 @@ async function acceptText(f: File, signal: AbortSignal) {
   if (tooLongToAccept(f.name, decoded.text)) return
   clearFile()
   textFile.value = { name: f.name, text: decoded.text, type: '文字', encoding: decoded.encoding }
-  mode.value = defaultMode('文字', decoded.text.length)
+  chooseImportMode('文字', defaultMode('文字', decoded.text.length))
 }
 
 /** 超过要点提炼的上限（8 万字）的内容哪种方式都装不下，不加入 */
@@ -296,7 +307,7 @@ async function acceptDoc(f: File, ext: string, signal: AbortSignal) {
     if (tooLongToAccept(f.name, doc.text)) return
     clearFile()
     textFile.value = { name: f.name, text: doc.text, type: '文档', pages: doc.pages }
-    mode.value = defaultMode('文档', doc.text.length)
+    chooseImportMode('文档', defaultMode('文档', doc.text.length))
   } catch (e) {
     if (signal.aborted) return
     const locked = e instanceof Error && e.name === 'PasswordException'
@@ -359,6 +370,12 @@ function removeImage(i: number) {
   URL.revokeObjectURL(images.value[i].url)
   images.value.splice(i, 1)
   job.value = null
+  if (!images.value.length) resetModeChoice()
+}
+
+function resetModeChoice() {
+  manualMode.value = undefined
+  mode.value = '要点提炼'
 }
 
 // 提取内容：每张图可以用现有裁剪浮层框一个矩形，只当作发给看图服务的识别范围
@@ -388,14 +405,19 @@ function clearContent(keepDraftFile = false) {
   share.value = null
   request.value = ''
   errors.value = []
-  if (!keepDraftFile) dropDraft()
+  if (!keepDraftFile) {
+    resetModeChoice()
+    dropDraft()
+  }
 }
 
 // 草稿（F10）：任务开始、每一步做完、停下来时存；保存成功、放弃、移除内容时删。存不了不打断处理
 const keepDraft = (withFiles = false) => job.value && void saveDraft(job.value, withFiles).catch(() => {})
 const dropDraft = () => void clearDraft().catch(() => {})
 
-const autoPicked = computed(() => kind.value && mode.value === preselectMode(kind.value))
+const autoPicked = computed(
+  () => kind.value && mode.value !== manualMode.value && mode.value === preselectMode(kind.value),
+)
 /** 提取内容只对截图/照片和视频有意义 */
 const visibleModes = computed(() =>
   MODES.filter((m) => m !== '提取内容' || kind.value === '图片' || kind.value === '视频'),
@@ -457,8 +479,16 @@ const waitNotice = computed(() => (textFile.value ? estimateWait(mode.value, tex
 /** 文字超过 8000 字时先问一句（方案 US7），确认过就不再问 */
 const askLong = ref(false)
 let longOk = false
+const starting = ref(false)
 async function start() {
-  if (checkingImages.value || !hasContent.value || missingService.value || lengthNotice.value || phase.value !== 'drop')
+  if (
+    starting.value ||
+    checkingImages.value ||
+    !hasContent.value ||
+    missingService.value ||
+    lengthNotice.value ||
+    phase.value !== 'drop'
+  )
     return
   cancelImport()
   if (textFile.value && textFile.value.text.length > LONG_TEXT_CHARS && !longOk) {
@@ -488,12 +518,24 @@ async function start() {
   })
   pendingDraft.value = null
   keepDraft(true)
-  existingTags.value = await listVaultTags(notesRoot(props.config)).catch(() => [])
-  await run()
+  starting.value = true
+  const startedJob = job.value
+  try {
+    existingTags.value = await listVaultTags(notesRoot(props.config)).catch(() => [])
+    if (job.value === startedJob && phase.value === 'drop') await run()
+  } finally {
+    starting.value = false
+  }
 }
 
-async function run() {
-  if (!job.value) return
+const customPromptFailed = ref(false)
+
+async function run(useDefault = false) {
+  if (!job.value || phase.value === 'processing') return
+  const mode = job.value.mode
+  const prompts = useDefault ? props.prompts : resolvePrompts(props.prompts, props.config)
+  const custom = prompts[mode] !== props.prompts[mode]
+  customPromptFailed.value = false
   const f = file.value
   phase.value = 'processing'
   error.value = null
@@ -504,7 +546,7 @@ async function run() {
   try {
     await runJob(job.value, {
       config: props.config,
-      prompts: props.prompts,
+      prompts,
       existingTags: existingTags.value,
       fetch: httpFetch,
       readFile: () => f!.arrayBuffer(),
@@ -527,6 +569,7 @@ async function run() {
       phase.value = 'drop'
     } else {
       error.value = describeError(e)
+      customPromptFailed.value = custom && isAppError(e, 'format')
       phase.value = 'failed'
     }
   } finally {
@@ -564,7 +607,7 @@ async function resumeDraft() {
   pendingDraft.value = null
   const { job: j, needsFile, atConfirm } = fromDraft(d.data, d.files)
   clearContent(true)
-  mode.value = j.mode
+  chooseMode(j.mode)
   source.value = j.source ?? ''
   share.value =
     j.platform || j.author
@@ -692,11 +735,14 @@ onBeforeUnmount(() => {
       <ProcessingView
         :job="job"
         :failed="phase === 'failed'"
+        :custom-prompt-failed="customPromptFailed"
         :summary="summary"
         :error="error"
         :now="now"
         @cancel="cancel"
-        @retry="run"
+        @retry="run()"
+        @retry-default="run(true)"
+        @edit-prompt="emit('editPrompt', job.mode)"
         @back="backToEdit"
         @go-settings="emit('goSettings')"
       />
@@ -830,7 +876,7 @@ onBeforeUnmount(() => {
               class="mode"
               :class="{ on: mode === m }"
               :aria-pressed="mode === m"
-              @click="mode = m"
+              @click="chooseMode(m)"
             >
               <component :is="MODE_ICONS[m]" :size="17" aria-hidden="true" />{{ m }}
             </button>
@@ -864,7 +910,7 @@ onBeforeUnmount(() => {
           <button
             v-press="'tactile'"
             class="primary start"
-            :disabled="checkingImages || !hasContent || (!missingService && !!lengthNotice)"
+            :disabled="starting || checkingImages || !hasContent || (!missingService && !!lengthNotice)"
             @click="missingService ? emit('goSettings') : start()"
           >
             <template v-if="missingService && hasContent">去配置服务</template>

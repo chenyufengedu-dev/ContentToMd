@@ -18,21 +18,26 @@ const notes = ref<LibraryNote[]>([])
 const failed = ref<string[]>([])
 const loading = ref(true)
 const loadError = ref('')
+let loadRequest = 0
 
 async function load() {
+  const request = ++loadRequest
+  const location = root.value
   loading.value = true
   loadError.value = ''
   try {
-    const r = await listNotes(root.value)
+    const r = await listNotes(location)
+    if (request !== loadRequest) return
     notes.value = r.notes
     failed.value = r.failed
   } catch {
-    loadError.value = `找不到收藏库：${root.value}。`
+    if (request === loadRequest) loadError.value = `找不到收藏库：${location}。`
   } finally {
-    loading.value = false
+    if (request === loadRequest) loading.value = false
   }
 }
 onMounted(load)
+watch(root, load)
 
 // ---- 筛选 ----
 const domain = ref<string | null>(null)

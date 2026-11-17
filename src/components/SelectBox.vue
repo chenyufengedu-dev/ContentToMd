@@ -145,6 +145,7 @@ onBeforeUnmount(close)
           @click="choose(i)"
         >
           <span :title="o.label">{{ o.label }}</span>
+          <slot name="option-action" :value="o.value" :close="close" />
           <Check v-if="o.value === model" :size="16" aria-hidden="true" />
         </li>
       </ul>
@@ -231,12 +232,14 @@ onBeforeUnmount(close)
   white-space: nowrap;
 }
 .menu li > span {
+  flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .menu li > svg {
   flex: none;
+  margin-inline-start: auto;
 }
 .menu li.highlighted {
   background: var(--hover);

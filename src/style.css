@@ -127,7 +127,8 @@
   --ease: 180ms cubic-bezier(0.2, 0, 0, 1);
 
   /* 内置子集之外的生僻字交给微软雅黑。 */
-  font-family: 'Noto Sans SC', 'Microsoft YaHei UI', 'Microsoft YaHei', system-ui, sans-serif;
+  --default-interface-font: 'Noto Sans SC', 'Microsoft YaHei UI', 'Microsoft YaHei', system-ui, sans-serif;
+  font-family: var(--interface-font, 'Noto Sans SC'), var(--default-interface-font);
   font-size: var(--fs-md);
   color: var(--fg);
   background: var(--bg);

@@ -53,6 +53,30 @@ const DomainSchema = z.object({
  */
 const ConfigSchema = z.object({
   schema: z.literal(1).catch(1),
+  interfaceFont: z.string().trim().max(128).optional().catch(undefined),
+  promptFiles: z
+    .array(
+      z.object({
+        id: z.string(),
+        mode: z.enum(['要点提炼', '原文精修', '视觉收藏', '提取内容']),
+        name: z.string(),
+        text: z.string(),
+      }),
+    )
+    .optional()
+    .catch(undefined),
+  importedFonts: z
+    .array(z.object({ family: z.string(), name: z.string(), data: z.string() }))
+    .optional()
+    .catch(undefined),
+  promptOverrides: z
+    .partialRecord(z.enum(['_通用', '要点提炼', '原文精修', '视觉收藏', '提取内容']), z.string())
+    .optional()
+    .catch(undefined),
+  promptFileSelections: z
+    .partialRecord(z.enum(['要点提炼', '原文精修', '视觉收藏', '提取内容']), z.string())
+    .optional()
+    .catch(undefined),
   vaultPath: z.string().catch(''),
   // F31：obsidian 时笔记存到仓库里的 subfolder，“打开笔记”用 Obsidian；folder 时直接存在 vaultPath。
   // otherPath 是另一种方式上次用的文件夹，切回去时还原（见 switchVaultKind）

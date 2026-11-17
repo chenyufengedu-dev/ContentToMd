@@ -1,6 +1,7 @@
 <script setup lang="ts">
+import type { Mode } from './core/note'
 import { UNSAVED_CHANGES, LEAVE_CHANGES_WARNING } from './core/editMessages'
-import { computed, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
 import { vPageFade } from './components/pageFade'
 import { type Config, parseConfig, notesRoot } from './core/config'
 import {
@@ -15,6 +16,7 @@ import {
   saveConfig,
 } from './shell/tauri'
 import type { Prompts } from './core/note'
+import { loadImportedFont } from './core/importedFont'
 import { DEFAULT_PROMPTS } from './core/defaultPrompts'
 import { RECOVERY_CLEAR_ERROR } from './core/noteRecovery'
 import OnboardingPage from './pages/OnboardingPage.vue'
@@ -34,6 +36,26 @@ import { toast } from './components/useToast'
 
 const config = ref<Config | null>(null)
 const prompts = ref<Prompts | null>(null)
+watch(
+  () => [config.value?.interfaceFont, config.value?.importedFonts] as const,
+  async ([font, imported], _, onCleanup) => {
+    let cancelled = false
+    onCleanup(() => {
+      cancelled = true
+    })
+    const file = imported?.find((entry) => entry.family === font)
+    if (file) {
+      try {
+        await loadImportedFont(file)
+      } catch {
+        font = undefined
+      }
+    }
+    if (cancelled) return
+    if (font) document.documentElement.style.setProperty('--interface-font', JSON.stringify(font))
+    else document.documentElement.style.removeProperty('--interface-font')
+  },
+)
 const page = ref<Page>('home')
 const closeOrigin = ref<Page | null>(null)
 function revealCollectForClose() {
@@ -149,7 +171,7 @@ function closeNote(changed: boolean) {
   if (changed) void library.value?.load()
 }
 /** 笔记删除了：回到收藏库，提示条上给「撤销」（从回收站还原笔记和图片） */
-function onNoteDeleted(info: { path: string; images: string[] }) {
+function onNoteDeleted(info: { root: string; path: string; images: string[] }) {
   closeNote(true)
   const n = info.images.length
   toast(`已移入回收站：笔记${n ? `及 ${n} 张图片` : ''}。`, {
@@ -157,7 +179,7 @@ function onNoteDeleted(info: { path: string; images: string[] }) {
       label: '撤销',
       run: async () => {
         try {
-          await restoreNote(notesRoot(config.value!), info.path, info.images)
+          await restoreNote(info.root, info.path, info.images)
           toast('笔记已恢复。')
           void library.value?.load()
         } catch (e) {
@@ -199,6 +221,7 @@ function discardSettingsAndGo() {
   if (to) navigate(to)
 }
 function navigate(p: Page) {
+  if (notePage.value?.busy) return
   if (page.value === 'settings' && p !== 'settings' && settingsDomainBusy.value) {
     toast('领域操作尚未完成，请稍后切换。', { kind: 'error' })
     return
@@ -263,6 +286,12 @@ onMounted(async () => {
   }
 })
 
+async function editFailedPrompt(mode: Mode) {
+  page.value = 'settings'
+  await nextTick()
+  settings.value?.openPromptEditor(mode)
+}
+
 async function onSaved(c: Config) {
   config.value = c
   vaultMissing.value = !!c.vaultPath && !(await dirExists(notesRoot(c)))
@@ -321,6 +350,7 @@ async function markCelebrated() {
       <div v-if="page === 'settings' || closeOrigin === 'settings'" v-show="page === 'settings'">
         <SettingsPage
           ref="settings"
+          :prompts="prompts ?? DEFAULT_PROMPTS"
           :config="config"
           :first-run="false"
           @saved="onSaved"
@@ -337,6 +367,7 @@ async function markCelebrated() {
           :config="config"
           :prompts="prompts"
           @go-settings="page = 'settings'"
+          @edit-prompt="editFailedPrompt"
           @config-changed="(c) => (config = c)"
           @open-note="openSavedNote"
           @reveal-for-close="revealCollectForClose"

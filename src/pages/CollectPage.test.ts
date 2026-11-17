@@ -8,7 +8,7 @@ import { defaultConfig } from '../core/config'
 import { DEFAULT_PROMPTS } from '../core/defaultPrompts'
 import { readDocx, readPdf } from '../core/docText'
 import { runJob } from '../core/pipeline'
-import { writeNote, guardClose, writeClipboard } from '../shell/tauri'
+import { writeNote, guardClose, listVaultTags, writeClipboard } from '../shell/tauri'
 
 vi.mock('../shell/tauri', () => ({
   loadDraft: vi.fn().mockResolvedValue(null),
@@ -275,6 +275,24 @@ it.each(['新.mp3', '新.png'])('选择%s后，旧文字读取不能混入当前
   if (name.endsWith('.png')) expect(root.querySelector('img')?.alt).toBe(name)
   else expect(root.querySelector('.item-name')?.textContent).toBe(name)
 })
+it('导入 Markdown 保留本次手动选择，移除后下一份文件恢复推荐', async () => {
+  const { root, pick } = await mount()
+  const points = [...root.querySelectorAll<HTMLButtonElement>('button.mode')].find(
+    (button) => button.textContent?.trim() === '要点提炼',
+  )!
+  points.click()
+  pick('测试.md', Promise.resolve(bytes('用于整理的测试正文')))
+  await flush()
+  expect(root.querySelector('.item-name')?.textContent).toBe('测试.md')
+  expect(points.getAttribute('aria-pressed')).toBe('true')
+  expect(root.textContent).not.toContain('已按文件类型选择')
+  root.querySelector<HTMLButtonElement>('[aria-label=移除文件]')!.click()
+  pick('下一份.md', Promise.resolve(bytes('下一份测试正文')))
+  await flush()
+  expect(root.querySelector('button.mode[aria-pressed=true]')?.textContent?.trim()).toBe('原文精修')
+  expect(root.textContent).toContain('已按文件类型选择')
+})
+
 it('开始处理后丢弃尚未完成的导入，不替换正在处理的内容', async () => {
   const { root, pick } = await mount()
   pick('当前.txt')
@@ -287,6 +305,21 @@ it('开始处理后丢弃尚未完成的导入，不替换正在处理的内容'
   await flush()
   expect(root.textContent).not.toContain('待完成.txt')
   expect(vi.mocked(runJob).mock.calls[0][0].fileName).toBe('当前.txt')
+})
+it('读取收藏库标签期间连续开始只运行一次', async () => {
+  const { pick } = await mount()
+  pick('当前.txt')
+  await flush()
+  const tags = deferred<string[]>()
+  vi.mocked(listVaultTags).mockReturnValueOnce(tags.promise)
+  for (let i = 0; i < 2; i++) {
+    window.dispatchEvent(new KeyboardEvent('keydown', { ctrlKey: true, key: 'Enter' }))
+  }
+  expect(listVaultTags).toHaveBeenCalledTimes(1)
+  expect(runJob).not.toHaveBeenCalled()
+  tags.resolve([])
+  await flush()
+  expect(runJob).toHaveBeenCalledTimes(1)
 })
 it('卸载后未完成的文档读取不再启动解析', async () => {
   const { pick } = await mount()

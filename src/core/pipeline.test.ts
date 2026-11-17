@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { defaultConfig } from './config'
-import { DEFAULT_PROMPTS } from './defaultPrompts'
+import { defaultConfig, parseConfig } from './config'
+import { DEFAULT_PROMPTS, resolvePrompts } from './defaultPrompts'
 import { AppError } from './errors'
 import { newImageJob, newJob, newTextJob, runJob, type Job, type RunContext } from './pipeline'
 import type { Fetch } from './services'
@@ -61,6 +61,31 @@ function ctx(fetch: Fetch): RunContext {
 }
 
 describe('runJob', () => {
+  it('重读保存配置后使用所选指令，保留通用格式和导入字体配置', async () => {
+    const { fetch, calls } = fakeServices([chatOk(AI_RESULT)])
+    const context = ctx(fetch)
+    const instruction = '优先列出可操作的步骤。'
+    const font = { family: 'ctmd-font-test', name: 'Example.ttf', data: 'AA==' }
+    context.config = parseConfig(
+      JSON.stringify({
+        ...context.config,
+        interfaceFont: font.family,
+        importedFonts: [font],
+        promptFiles: [{ id: 'second', mode: '要点提炼', name: 'example.md', text: instruction }],
+        promptFileSelections: { 要点提炼: 'second' },
+        promptOverrides: { 要点提炼: instruction },
+      }),
+    )
+    expect(context.config.interfaceFont).toBe(font.family)
+    expect(context.config.importedFonts).toEqual([font])
+    expect(context.config.promptFileSelections?.要点提炼).toBe('second')
+    context.prompts = resolvePrompts(DEFAULT_PROMPTS, context.config)
+    await runJob(jobAfterExtract(), context)
+    const request = calls.bodies[0] as { messages: { content: string }[] }
+    expect(request.messages[0].content).toContain(instruction)
+    expect(request.messages[0].content).toContain('JSON')
+  })
+
   it('逐段转写、去掉标记，再整理成草稿；音频用完就丢掉', async () => {
     const { fetch, calls } = fakeServices([chatOk(AI_RESULT)])
     const job = jobAfterExtract()

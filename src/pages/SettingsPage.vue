@@ -41,16 +41,19 @@ import {
   destroyWindow,
 } from '../shell/tauri'
 import { formatYuan, keyId, summarize, type Price, type UsageRecord } from '../core/cost'
+import { DEFAULT_PROMPTS, editablePromptText, promptOverride, requiredPromptText } from '../core/defaultPrompts'
+import { loadImportedFont } from '../core/importedFont'
+import { MODES, type Mode, type Prompts } from '../core/note'
 import SettingCard from '../components/SettingCard.vue'
 // 关于卡片带书写动画的数据（约 110KB），用到才加载，不拖慢启动
 const AboutCard = defineAsyncComponent(() => import('../components/AboutCard.vue'))
 import SelectBox from '../components/SelectBox.vue'
 import NoticeDialog from '../components/NoticeDialog.vue'
 import UnsavedDialog from '../components/UnsavedDialog.vue'
-import { toast } from '../components/useToast'
+import { dismiss, toast } from '../components/useToast'
 import { Check, ChevronRight, Circle, CircleCheck, Plus, X } from '../components/icons'
 
-const props = defineProps<{ config: Config; firstRun: boolean }>()
+const props = defineProps<{ config: Config; firstRun: boolean; prompts?: Prompts }>()
 const emit = defineEmits<{ saved: [Config]; pending: [boolean]; domainBusy: [boolean] }>()
 
 // 在副本上编辑，点“保存设置”才写入
@@ -60,6 +63,255 @@ const dirty = computed(() => {
   const services = { ...draft.services }
   for (const k of KINDS) services[k] = { ...services[k], apiKey: newKey[k].trim() || services[k].apiKey }
   return JSON.stringify({ ...draft, services }) !== saved.value
+})
+
+const promptKey = ref<Mode>('要点提炼')
+const editingPrompts = ref(false)
+const editingFont = ref(false)
+type PromptFile = NonNullable<Config['promptFiles']>[number]
+const pendingImport = ref<PromptFile>()
+const promptWarning = '这段内容可能缺少具体的整理要求。例如：保留关键数字和结论。'
+function lacksPromptInstruction(text: string) {
+  return !!text.trim() && /^[\s\p{N}\p{P}]+$/u.test(text)
+}
+const newPrompt = ref({ open: false, name: '', text: '', error: '' })
+const duplicateImport = computed(() => {
+  const file = pendingImport.value
+  return file && draft.promptFiles?.find((entry) => entry.mode === file.mode && entry.text === file.text)
+})
+const pendingDelete = ref<PromptFile>()
+let promptSession = 0
+let promptUndoToast: number | undefined
+function invalidatePromptUndo() {
+  promptSession++
+  if (promptUndoToast !== undefined) dismiss(promptUndoToast)
+  promptUndoToast = undefined
+}
+
+let promptSnapshot: Pick<Config, 'promptOverrides' | 'promptFiles' | 'promptFileSelections'>
+let fontSnapshot: Pick<Config, 'interfaceFont' | 'importedFonts'>
+let fontSession = 0
+function openFontEditor() {
+  fontSession++
+  fontSnapshot = { interfaceFont: draft.interfaceFont, importedFonts: draft.importedFonts }
+  fontSearch.value = ''
+  fontImportError.value = ''
+  editingFont.value = true
+  void listFonts().then(async () => {
+    await nextTick()
+    const results = fontResults.value
+    const selected = results?.querySelector<HTMLElement>('[aria-pressed=true]')
+    if (results && selected && !fontSearch.value) {
+      results.scrollTop = selected.offsetTop - parseFloat(getComputedStyle(results).paddingTop)
+    }
+  })
+}
+function cancelFontEditor() {
+  Object.assign(draft, fontSnapshot)
+  editingFont.value = false
+}
+function cancelPromptEditor() {
+  invalidatePromptUndo()
+  Object.assign(draft, promptSnapshot)
+  editingPrompts.value = false
+}
+const promptText = ref('')
+const importError = ref('')
+const promptUpload = ref<HTMLInputElement>()
+const fontUpload = ref<HTMLInputElement>()
+const fontResults = ref<HTMLElement>()
+const promptOptions = computed(() => [
+  { label: '系统默认', value: '' },
+  ...(promptSource(promptKey.value) === 'custom' ? [{ label: '自定义指令', value: 'custom' }] : []),
+  ...(draft.promptFiles ?? [])
+    .filter((file) => file.mode === promptKey.value)
+    .map((file) => ({ label: file.name, value: file.id })),
+])
+const displayedFont = computed(
+  () =>
+    draft.importedFonts?.find((font) => font.family === fontName.value)?.name || fontName.value || '思源黑体（默认）',
+)
+function openPromptEditor(mode: Mode) {
+  invalidatePromptUndo()
+  promptSnapshot = {
+    promptOverrides: draft.promptOverrides,
+    promptFiles: draft.promptFiles,
+    promptFileSelections: draft.promptFileSelections,
+  }
+  importError.value = ''
+  promptKey.value = mode
+  const defaultText = editablePromptText(mode, (props.prompts ?? DEFAULT_PROMPTS)[mode])
+  promptText.value = promptSource(mode) ? (draft.promptOverrides?.[mode] ?? defaultText) : defaultText
+  editingPrompts.value = true
+}
+function selectPrompt(mode: Mode, id: string) {
+  if (id === 'custom') return
+  const file = draft.promptFiles?.find((entry) => entry.id === id && entry.mode === mode)
+  if (file || draft.promptFileSelections?.[mode]) {
+    draft.promptFileSelections = { ...draft.promptFileSelections, [mode]: file?.id }
+  }
+  promptText.value = file?.text ?? editablePromptText(mode, (props.prompts ?? DEFAULT_PROMPTS)[mode])
+  const overrides = { ...draft.promptOverrides }
+  if (file) overrides[mode] = file.text
+  else delete overrides[mode]
+  draft.promptOverrides = Object.keys(overrides).length ? overrides : undefined
+}
+function promptSource(mode: Mode) {
+  const selected = draft.promptFileSelections?.[mode]
+  if (selected && draft.promptFiles?.some((file) => file.mode === mode && file.id === selected)) return selected
+  const text = promptOverride(props.prompts ?? DEFAULT_PROMPTS, draft, mode)
+  if (text === undefined) return ''
+  return draft.promptFiles?.find((entry) => entry.mode === mode && entry.text === text)?.id ?? 'custom'
+}
+async function importPrompt(mode: Mode, event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  importError.value = ''
+  const session = promptSession
+  try {
+    if (!/\.md$/i.test(file.name) || file.size > 256 * 1024) throw new Error()
+    const decoded = new TextDecoder('utf-8', { fatal: true }).decode(await file.arrayBuffer())
+    if (decoded.includes('\0')) throw new Error()
+    const declaredMode = MODES.find((name) =>
+      new RegExp('^#{1,6}\\s*整理方式[：:]\\s*' + name + '\\s*$', 'm').test(decoded),
+    )
+    if (declaredMode && declaredMode !== mode) {
+      importError.value = '文件标注为「' + declaredMode + '」，请核对对应的整理方式。'
+      return
+    }
+    const text = editablePromptText(mode, decoded)
+    if (!text) throw new Error()
+    if (session !== promptSession || !editingPrompts.value) return
+    pendingImport.value = { id: crypto.randomUUID(), mode, name: file.name, text }
+  } catch {
+    importError.value = '请选择非空且不超过 256 KB 的 UTF-8 Markdown 指令文件。'
+  }
+}
+function confirmPromptImport() {
+  const file = pendingImport.value
+  if (!file) return
+  addPrompt(file)
+  pendingImport.value = undefined
+}
+function addPrompt(file: PromptFile) {
+  const editedLegacy = promptSource(file.mode) === 'custom' && promptText.value !== draft.promptOverrides?.[file.mode]
+  if (!keepPromptEdits()) return false
+  const files = [...(draft.promptFiles ?? [])]
+  if (editedLegacy) {
+    files.push({ id: crypto.randomUUID(), mode: file.mode, name: '自定义指令', text: promptText.value })
+  }
+  draft.promptFiles = [...files, file]
+  selectPrompt(file.mode, file.id)
+  return true
+}
+function createPrompt() {
+  const mode = promptKey.value
+  const name = newPrompt.value.name.trim()
+  const text = editablePromptText(mode, newPrompt.value.text)
+  if (!name || !text) {
+    newPrompt.value.error = '请填写指令名称和正文。'
+    return
+  }
+  if (!addPrompt({ id: crypto.randomUUID(), mode, name, text })) {
+    newPrompt.value.error = '请先取消新建，补全当前指令的正文。'
+    return
+  }
+  importError.value = ''
+  newPrompt.value.open = false
+}
+function requestPromptDelete(id: string, close: () => void) {
+  pendingDelete.value = draft.promptFiles?.find((file) => file.id === id)
+  close()
+}
+function confirmPromptDelete() {
+  const file = pendingDelete.value
+  if (!file) return
+  pendingDelete.value = undefined
+  const wasSelected = promptSource(file.mode) === file.id
+  const session = promptSession
+  draft.promptFiles = draft.promptFiles?.filter((entry) => entry.id !== file.id)
+  if (wasSelected) selectPrompt(file.mode, '')
+  promptUndoToast = toast('已删除指令「' + file.name + '」。', {
+    action: {
+      label: '撤销',
+      run: () => {
+        if (saving.value || session !== promptSession || draft.promptFiles?.some((entry) => entry.id === file.id))
+          return
+        draft.promptFiles = [...(draft.promptFiles ?? []), file]
+        if (wasSelected && !promptSource(file.mode)) {
+          selectPrompt(file.mode, file.id)
+        }
+      },
+    },
+  })
+}
+function keepPromptEdits() {
+  const mode = promptKey.value
+  if (promptSource(mode)) {
+    if (!promptText.value.trim()) {
+      importError.value = '整理指令不能为空。'
+      return false
+    }
+    const id = promptSource(mode)
+    if (id && id !== 'custom')
+      draft.promptFiles = draft.promptFiles?.map((file) =>
+        file.id === id ? { ...file, text: promptText.value } : file,
+      )
+    draft.promptOverrides = { ...draft.promptOverrides, [mode]: promptText.value }
+  }
+  return true
+}
+function finishPromptEditor() {
+  if (keepPromptEdits()) editingPrompts.value = false
+}
+
+const fontSearch = ref('')
+const fontImportError = ref('')
+async function importFont(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  fontImportError.value = ''
+  const session = fontSession
+  try {
+    if (!/\.(ttf|otf)$/i.test(file.name) || file.size > 25 * 1024 * 1024) throw new Error()
+    const bytes = new Uint8Array(await file.arrayBuffer())
+    let binary = ''
+    for (let offset = 0; offset < bytes.length; offset += 8192)
+      binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192))
+    const entry = { family: 'ctmd-font-' + crypto.randomUUID(), name: file.name, data: btoa(binary) }
+    await loadImportedFont(entry)
+    if (session !== fontSession || !editingFont.value) return
+    draft.importedFonts = [...(draft.importedFonts ?? []), entry]
+    fontName.value = entry.family
+  } catch {
+    if (session !== fontSession || !editingFont.value) return
+    fontImportError.value = '无法导入字体。请选择有效且不超过 25 MB 的 TTF 或 OTF 文件。'
+  }
+}
+const fontNames = ref<string[]>([])
+const filteredFonts = computed(() =>
+  fontNames.value.filter((name) => name.toLowerCase().includes(fontSearch.value.trim().toLowerCase())),
+)
+const fontListUnavailable = ref(false)
+async function listFonts() {
+  const browser = window as Window & { queryLocalFonts?: () => Promise<{ family: string }[]> }
+  try {
+    const fonts = await browser.queryLocalFonts?.()
+    fontNames.value = [...new Set(fonts?.map((font) => font.family))].sort((a, b) => a.localeCompare(b))
+    fontListUnavailable.value = fontNames.value.length === 0
+  } catch {
+    fontListUnavailable.value = true
+  }
+}
+const fontName = computed({
+  get: () => draft.interfaceFont ?? '',
+  set: (value: string) => {
+    draft.interfaceFont = value || undefined
+  },
 })
 
 const KINDS = SERVICE_KINDS
@@ -414,18 +666,26 @@ function applyKey(k: ServiceKind) {
 
 async function runTest(k: ServiceKind) {
   applyKey(k)
-  const s = draft.services[k]
+  const s = { ...draft.services[k] }
   if (!isServiceConfigured(s)) {
     test[k] = { status: 'fail', message: checkBaseUrl(s.baseUrl) ?? '请填写接口地址、模型名和密钥后再测试。' }
     return
   }
   test[k] = { status: 'testing' }
+  const request = test[k]
   try {
     await testService(k, s, httpFetch)
-    test[k] = { status: 'ok', message: '连接成功' }
+    if (test[k] === request) test[k] = { status: 'ok', message: '连接成功' }
   } catch (e) {
-    test[k] = { status: 'fail', ...describeError(e) }
+    if (test[k] === request) test[k] = { status: 'fail', ...describeError(e) }
   }
+}
+for (const k of KINDS) {
+  watch(
+    () => [draft.services[k].baseUrl, draft.services[k].model, draft.services[k].apiKey, newKey[k]],
+    () => (test[k] = { status: 'idle' }),
+    { flush: 'sync' },
+  )
 }
 
 // ---- 领域 ----
@@ -434,6 +694,7 @@ async function runTest(k: ServiceKind) {
 /** 上次保存的配置里的收藏库位置（领域的文件夹操作都按它，不按还没保存的新位置） */
 const savedRoot = () => notesRoot(JSON.parse(saved.value) as Config)
 const domainBusy = ref(false)
+let domainUndoToast: number | undefined
 async function persistDomains(): Promise<boolean> {
   const base = JSON.parse(saved.value) as Config
   base.domains = JSON.parse(JSON.stringify(draft.domains))
@@ -548,7 +809,7 @@ async function confirmRemove() {
       }
       return
     }
-    toast(
+    domainUndoToast = toast(
       deleted
         ? `已删除领域“${d.name}”，${a.notes ? `文件夹及 ${a.notes} 篇笔记` : '文件夹'}已移入回收站。`
         : `已删除领域“${d.name}”。`,
@@ -556,6 +817,10 @@ async function confirmRemove() {
         action: {
           label: '撤销',
           run: async () => {
+            if (savedRoot() !== root) {
+              toast('收藏库已切换，请切回原收藏库后从回收站恢复。', { kind: 'error' })
+              return
+            }
             if (domainBusy.value || saving.value) {
               domainError.value = '设置正在保存，暂时无法撤销。'
               return
@@ -601,7 +866,12 @@ onBeforeUnmount(() => window.clearTimeout(justSavedTimer))
 /** 撤销：恢复成上次保存的样子 */
 function revert() {
   if (domainBusy.value || saving.value) return
-  Object.assign(draft, JSON.parse(saved.value) as Config)
+  invalidatePromptUndo()
+  const snapshot = JSON.parse(saved.value) as Config
+  for (const key of Object.keys(draft) as (keyof Config)[]) {
+    if (!Object.hasOwn(snapshot, key)) Reflect.deleteProperty(draft, key)
+  }
+  Object.assign(draft, snapshot)
   for (const k of KINDS) {
     newKey[k] = ''
     resetPrice(k)
@@ -634,6 +904,7 @@ async function save(): Promise<boolean> {
     }
   }
   const submitted: Config = JSON.parse(JSON.stringify(draft))
+  invalidatePromptUndo()
   saving.value = true
   try {
     if (submitted.vault.kind === 'obsidian' && submitted.vaultPath && submitted.vault.subfolder.trim())
@@ -664,7 +935,7 @@ async function save(): Promise<boolean> {
 // ---- 有没保存的改动：告诉外面（切换页面前要问），关闭软件时自己问 ----
 watch(pending, (v) => emit('pending', v))
 watch(domainBusy, (v) => emit('domainBusy', v), { flush: 'sync' })
-defineExpose({ save })
+defineExpose({ save, openPromptEditor })
 
 const askClose = ref(false)
 async function saveAndClose() {
@@ -674,6 +945,8 @@ async function saveAndClose() {
 let unguard: (() => void) | undefined
 let disposed = false
 onBeforeUnmount(() => {
+  invalidatePromptUndo()
+  if (domainUndoToast !== undefined) dismiss(domainUndoToast)
   disposed = true
   unguard?.()
 })
@@ -966,6 +1239,221 @@ onMounted(() => {
     </NoticeDialog>
 
     <SettingCard
+      id="prompts"
+      title="整理指令"
+      desc="为每种整理方式选择指令。可以使用系统默认、编辑自定义指令或导入 Markdown 文件。"
+      :open="open === 'prompts'"
+      :closing="closing === 'prompts'"
+      @activate="activate('prompts')"
+    >
+      <div v-if="open === 'prompts'" class="settings-shortcuts">
+        <button
+          v-for="mode in MODES"
+          :key="mode"
+          type="button"
+          class="settings-entry"
+          @click.stop="openPromptEditor(mode)"
+        >
+          {{ mode }}<ChevronRight :size="14" aria-hidden="true" />
+        </button>
+      </div>
+      <span v-else>管理四种整理方式的指令 ›</span>
+    </SettingCard>
+    <NoticeDialog
+      v-if="editingPrompts"
+      class="prompt-editor"
+      :title="'编辑' + promptKey + '指令'"
+      cancel-text="取消"
+      ok-text="完成"
+      @cancel="cancelPromptEditor"
+      @ok="finishPromptEditor"
+    >
+      <div class="custom-settings">
+        <div class="editor-toolbar">
+          <SelectBox
+            :model-value="promptSource(promptKey)"
+            :options="promptOptions"
+            aria-label="指令来源"
+            @update:model-value="selectPrompt(promptKey, String($event))"
+          >
+            <template #option-action="{ value, close }">
+              <button
+                v-if="value && value !== 'custom'"
+                type="button"
+                class="prompt-remove"
+                aria-label="删除指令"
+                @click.stop="requestPromptDelete(String(value), close)"
+              >
+                <X :size="16" class="prompt-remove-icon" aria-hidden="true" />
+              </button>
+            </template>
+          </SelectBox>
+          <button type="button" class="soft" @click="newPrompt = { open: true, name: '', text: '', error: '' }">
+            新建指令
+          </button>
+          <button type="button" class="soft" @click="promptUpload?.click()">导入 Markdown</button>
+          <input ref="promptUpload" hidden type="file" accept=".md" @change="importPrompt(promptKey, $event)" />
+        </div>
+        <p v-if="importError" role="alert">{{ importError }}</p>
+        <div class="prompt-field">
+          <p id="prompt-editor-hint">
+            {{
+              promptSource(promptKey)
+                ? '请核对指令与当前整理方式是否相符，点「完成」后可保存设置。'
+                : '系统默认指令为只读，可选中文字复制。'
+            }}
+          </p>
+          <textarea
+            v-model="promptText"
+            :readonly="!promptSource(promptKey)"
+            aria-label="整理指令"
+            aria-describedby="prompt-editor-hint"
+            rows="11"
+          />
+          <p v-if="promptSource(promptKey) && lacksPromptInstruction(promptText)" class="prompt-warning" role="status">
+            {{ promptWarning }}
+          </p>
+        </div>
+        <details v-if="requiredPromptText(promptKey)">
+          <summary>查看返回格式</summary>
+          <pre>{{ requiredPromptText(promptKey) }}</pre>
+        </details>
+      </div>
+    </NoticeDialog>
+    <NoticeDialog
+      v-if="newPrompt.open"
+      :title="'新建' + promptKey + '指令'"
+      cancel-text="取消"
+      ok-text="完成"
+      @cancel="newPrompt.open = false"
+      @ok="createPrompt"
+    >
+      <div class="custom-settings">
+        <label>指令名称 <input v-model="newPrompt.name" type="text" maxlength="128" /></label>
+        <div class="new-prompt-body">
+          <label>指令正文 <textarea v-model="newPrompt.text" rows="8" placeholder="输入 Markdown 指令" /></label>
+          <p v-if="newPrompt.error" class="new-prompt-error" role="alert">{{ newPrompt.error }}</p>
+          <p v-else-if="lacksPromptInstruction(newPrompt.text)" class="prompt-warning" role="status">
+            {{ promptWarning }}
+          </p>
+        </div>
+      </div>
+    </NoticeDialog>
+    <NoticeDialog
+      v-if="pendingImport"
+      :title="duplicateImport ? '发现重复指令' : '确认导入指令'"
+      cancel-text="取消"
+      :ok-text="duplicateImport ? '仍然导入' : '确认导入'"
+      @cancel="pendingImport = undefined"
+      @ok="confirmPromptImport"
+    >
+      <p v-if="duplicateImport">
+        「{{ pendingImport.name }}」与已导入的「{{ duplicateImport.name }}」内容一致，仍然导入吗？
+      </p>
+      <p v-else>确定将「{{ pendingImport.name }}」导入「{{ pendingImport.mode }}」吗？</p>
+      <p v-if="lacksPromptInstruction(pendingImport.text)" class="prompt-warning">{{ promptWarning }}</p>
+    </NoticeDialog>
+    <NoticeDialog
+      v-if="pendingDelete"
+      title="删除指令"
+      cancel-text="取消"
+      ok-text="删除"
+      danger
+      @cancel="pendingDelete = undefined"
+      @ok="confirmPromptDelete"
+    >
+      <p>确定删除「{{ pendingDelete.name }}」吗？如果正在使用该指令，将切回系统默认。</p>
+    </NoticeDialog>
+    <SettingCard
+      id="appearance"
+      title="外观"
+      desc="更改界面字体。可选择 Windows 已安装的字体，也可导入字体文件。"
+      :open="open === 'appearance'"
+      :closing="closing === 'appearance'"
+      @activate="activate('appearance')"
+    >
+      <div v-if="open === 'appearance'" class="settings-shortcuts">
+        <button type="button" class="settings-entry" @click.stop="openFontEditor">
+          <span>界面字体</span><span class="entry-value">{{ displayedFont }}</span
+          ><ChevronRight :size="14" aria-hidden="true" />
+        </button>
+      </div>
+      <span v-else>{{
+        draft.importedFonts?.find((font) => font.family === fontName)?.name || fontName || '思源黑体（默认）'
+      }}</span>
+    </SettingCard>
+    <NoticeDialog
+      v-if="editingFont"
+      title="界面字体"
+      cancel-text="取消"
+      ok-text="完成"
+      @cancel="cancelFontEditor"
+      @ok="editingFont = false"
+    >
+      <div class="custom-settings">
+        <div class="font-picker">
+          <div class="editor-toolbar font-toolbar">
+            <input v-model="fontSearch" type="search" placeholder="搜索本机和已导入字体" aria-label="搜索字体" />
+            <button type="button" class="soft" @click="fontUpload?.click()">导入字体</button>
+            <input ref="fontUpload" hidden type="file" accept=".ttf,.otf" @change="importFont" />
+          </div>
+          <div ref="fontResults" class="font-results" aria-label="可选字体">
+            <button
+              v-if="!fontSearch.trim() || '思源黑体（默认）'.includes(fontSearch.trim())"
+              type="button"
+              class="settings-entry"
+              :aria-pressed="!fontName"
+              @click="fontName = ''"
+            >
+              思源黑体（默认）<Check v-if="!fontName" :size="14" />
+            </button>
+            <button
+              v-for="font in draft.importedFonts?.filter((entry) =>
+                entry.name.toLowerCase().includes(fontSearch.trim().toLowerCase()),
+              )"
+              :key="font.family"
+              type="button"
+              class="settings-entry"
+              :aria-pressed="fontName === font.family"
+              @click="fontName = font.family"
+            >
+              {{ font.name }}<Check v-if="fontName === font.family" :size="14" />
+            </button>
+            <button
+              v-for="font in filteredFonts"
+              :key="font"
+              type="button"
+              class="settings-entry"
+              :aria-pressed="fontName === font"
+              @click="fontName = font"
+            >
+              {{ font }}<Check v-if="fontName === font" :size="14" />
+            </button>
+          </div>
+        </div>
+        <p v-if="fontImportError" role="alert">{{ fontImportError }}</p>
+        <details v-if="fontListUnavailable || !filteredFonts.length">
+          <summary>输入已安装的字体名称</summary>
+          <input v-model="fontName" aria-label="字体名称" maxlength="128" placeholder="例如 PingFang SC" />
+        </details>
+        <div class="font-preview">
+          <p class="entry-value">字体预览</p>
+          <div
+            :style="{
+              fontFamily: fontName
+                ? JSON.stringify(fontName) + ', var(--default-interface-font)'
+                : 'var(--default-interface-font)',
+            }"
+          >
+            <p>把值得收藏的内容，整理成自己的笔记。</p>
+            <p>ContentToMd</p>
+            <p>0123456789</p>
+          </div>
+        </div>
+      </div>
+    </NoticeDialog>
+
+    <SettingCard
       id="privacy"
       title="隐私说明"
       :open="open === 'privacy'"
@@ -1013,6 +1501,148 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.prompt-editor :deep(.dialog) {
+  width: min(760px, 100%);
+  max-height: calc(100vh - 2 * var(--sp-6));
+  overflow: auto;
+}
+.settings-shortcuts {
+  display: grid;
+}
+.settings-entry {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding-inline: var(--sp-2);
+  background: transparent;
+  border: 0;
+  text-align: left;
+}
+.settings-entry > :is(.entry-value, svg) {
+  margin-inline-start: auto;
+}
+.settings-entry > .entry-value + svg {
+  margin-inline-start: 0;
+}
+.entry-value {
+  color: var(--muted);
+}
+.editor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.editor-toolbar > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+.editor-toolbar button {
+  white-space: nowrap;
+}
+.prompt-remove {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  height: auto;
+  padding: var(--sp-1);
+  border: 0;
+  background: transparent;
+  opacity: 0;
+}
+[role='option']:hover .prompt-remove,
+.prompt-remove:focus-visible {
+  opacity: 1;
+}
+.prompt-remove-icon {
+  scale: 0.875;
+}
+.prompt-remove:hover:not(:disabled),
+.prompt-remove:focus-visible {
+  background: transparent;
+  color: var(--err);
+}
+.custom-settings textarea[readonly] {
+  background: var(--hover);
+  resize: none;
+}
+.prompt-field {
+  display: grid;
+  gap: var(--sp-1);
+  margin-top: var(--sp-1);
+}
+.custom-settings .prompt-field > p {
+  margin: 0;
+  color: var(--muted);
+}
+.font-picker {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+.font-toolbar {
+  padding: var(--sp-2);
+  border-bottom: 1px solid var(--line);
+}
+.font-results {
+  position: relative;
+  padding: var(--sp-1);
+  padding-block: var(--sp-2);
+  max-height: 11rem;
+  overflow: auto;
+}
+.font-results button[aria-pressed='true'] {
+  color: var(--accent);
+  background: var(--hover);
+}
+.custom-settings {
+  display: grid;
+  gap: var(--sp-2);
+}
+.new-prompt-body {
+  display: grid;
+  gap: var(--sp-1);
+}
+.new-prompt-body textarea {
+  display: block;
+}
+.custom-settings .new-prompt-error {
+  margin: 0;
+  color: var(--err);
+}
+p.prompt-warning {
+  margin: 0;
+  color: var(--warn);
+}
+.custom-settings .prompt-field > .prompt-warning {
+  color: var(--warn);
+}
+.custom-settings :is(input, select, textarea, pre) {
+  box-sizing: border-box;
+  min-width: 0;
+  width: 100%;
+  padding: var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  color: inherit;
+  font: inherit;
+}
+.custom-settings pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.custom-settings button {
+  justify-self: start;
+}
+.font-preview {
+  display: grid;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--hover);
+}
+.font-preview p {
+  margin: 0;
+}
 /* 和确认页同一套：浅灰底上的白卡片，尺寸只用 src/style.css 的令牌（卡片本身见 SettingCard.vue） */
 .settings {
   max-width: 880px;

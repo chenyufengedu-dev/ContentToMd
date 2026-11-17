@@ -204,10 +204,29 @@ mod tests {
     fn legacy_config_migrates_then_reloads_without_plaintext() {
         let dir = TempConfig::new();
         let secrets = FakeSecrets::default();
-        fs::write(dir.0.join("config.json"), LEGACY).unwrap();
+        let mut config: serde_json::Value = serde_json::from_str(LEGACY).unwrap();
+        config["interfaceFont"] = "ctmd-font-test".into();
+        config["importedFonts"] = serde_json::json!([
+            {"family": "ctmd-font-test", "name": "Example.ttf", "data": "AA=="}
+        ]);
+        config["promptOverrides"] = serde_json::json!({"要点提炼": "列出步骤"});
+        config["promptFileSelections"] = serde_json::json!({"要点提炼": "example"});
+        config["promptFiles"] = serde_json::json!([
+            {"id": "example", "mode": "要点提炼", "name": "example.md", "text": "列出步骤"}
+        ]);
+        fs::write(dir.0.join("config.json"), config.to_string()).unwrap();
         let loaded: serde_json::Value =
             serde_json::from_str(&load_at(&dir.0, &secrets).unwrap().unwrap()).unwrap();
         assert_eq!(loaded["services"]["text"]["apiKey"], "test-only-text");
+        for key in [
+            "interfaceFont",
+            "importedFonts",
+            "promptOverrides",
+            "promptFileSelections",
+            "promptFiles",
+        ] {
+            assert_eq!(loaded[key], config[key]);
+        }
         let disk = fs::read_to_string(dir.0.join("config.json")).unwrap();
         assert!(!disk.contains("apiKey"));
         assert!(!disk.contains("test-only"));

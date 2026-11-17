@@ -20,10 +20,12 @@ export function toast(text: string, opts: { action?: ToastAction; kind?: 'ok' | 
   clearTimeout(timer)
   current.value = { text, id: ++seq, action: opts.action, kind: opts.kind ?? 'ok' }
   timer = setTimeout(() => (current.value = null), opts.action ? TOAST_ACTION_MS : TOAST_MS)
+  return seq
 }
 
 /** 马上收起提示 */
-export function dismiss() {
+export function dismiss(id?: number) {
+  if (id !== undefined && current.value?.id !== id) return
   clearTimeout(timer)
   current.value = null
 }

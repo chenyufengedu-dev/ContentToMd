@@ -13,11 +13,12 @@ import type { ErrorCode } from '../core/errors'
 const props = defineProps<{
   job: Job
   failed: boolean
+  customPromptFailed?: boolean
   summary: { name: string; info: string }
   error: { code?: ErrorCode; message: string; detail?: string } | null
   now: number
 }>()
-const emit = defineEmits<{ cancel: []; retry: []; back: []; goSettings: [] }>()
+const emit = defineEmits<{ cancel: []; retry: []; retryDefault: []; editPrompt: []; back: []; goSettings: [] }>()
 
 /** 右边文件那一行的小图标：图片、文字类按文件名认，音频、视频各一个 */
 const fileKind = computed<FileKind>(() =>
@@ -136,10 +137,21 @@ function elapsed(s: { startedAt?: number; endedAt?: number }) {
       <template v-if="failed && error">
         <!-- 失败：在原来提示语的位置只写一行原因，不加底色；怎么办交给按钮 -->
         <p class="hint fail-reason">
-          {{ error.message }} <CopyErrorButton v-if="error.detail" :detail="error.detail" />
+          {{
+            customPromptFailed
+              ? '模型返回的内容无法保存为笔记。你可以检查自定义指令，或用系统默认指令重试。'
+              : error.message
+          }}
+          <CopyErrorButton v-if="error.detail" :detail="error.detail" />
         </p>
         <div class="buttons">
-          <button v-if="isAuthError" v-press="'tactile'" class="primary" @click="emit('goSettings')">去设置</button>
+          <template v-if="customPromptFailed">
+            <button v-press class="soft" @click="emit('editPrompt')">编辑指令</button>
+            <button v-press="'tactile'" class="primary" @click="emit('retryDefault')">用默认指令重试</button>
+          </template>
+          <button v-else-if="isAuthError" v-press="'tactile'" class="primary" @click="emit('goSettings')">
+            去设置
+          </button>
           <button v-else-if="canRetry" v-press="'tactile'" class="primary" @click="emit('retry')">重试</button>
           <button v-press :class="canRetry || isAuthError ? 'soft' : 'primary'" @click="emit('back')">返回修改</button>
         </div>

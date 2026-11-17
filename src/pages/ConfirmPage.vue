@@ -646,7 +646,6 @@ async function discardRecovery(): Promise<boolean> {
     return false
   }
 }
-defineExpose({ discardRecovery })
 
 // 改动停下来 0.8 秒后存进草稿，软件意外关掉也不丢（F10）
 let draftTimer: number | undefined
@@ -791,6 +790,7 @@ function updateLink() {
 
 // ---------------- 保存 ----------------
 const saving = ref(false)
+defineExpose({ discardRecovery, saving })
 /** 保存失败：先弹提示框；关掉后按钮上方留一行提醒（设计稿 设计稿/确认页/定稿-保存失败*.webp） */
 const saveError = ref<SaveFailure | null>(null)
 const failDialog = ref(false)
@@ -1755,7 +1755,7 @@ onBeforeUnmount(() => {
           <span class="save-domain">/ {{ domainName }}</span>
         </p>
         <div v-if="edit" class="action-row">
-          <button v-press="'tactile'" class="btn btn-secondary btn-delete" @click="emit('remove')">
+          <button v-press="'tactile'" class="btn btn-secondary btn-delete" :disabled="saving" @click="emit('remove')">
             <Trash2 :size="16" aria-hidden="true" />删除
           </button>
           <button
@@ -1775,7 +1775,7 @@ onBeforeUnmount(() => {
           </div>
         </template>
         <div v-else class="action-row">
-          <button v-press class="btn btn-secondary" @click="confirmingDiscard = true">放弃</button>
+          <button v-press class="btn btn-secondary" :disabled="saving" @click="confirmingDiscard = true">放弃</button>
           <button v-press="'tactile'" class="btn btn-primary" :disabled="saving || titleMissing" @click="save()">
             {{ saving ? '保存中…' : saveError ? '重新保存' : '保存' }}<span class="kbd">Ctrl+S</span>
           </button>

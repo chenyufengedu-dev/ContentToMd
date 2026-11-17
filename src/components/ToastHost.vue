@@ -3,6 +3,14 @@
 import { vPress } from './pressFeedback'
 import { Check, CircleAlert } from './icons'
 import { current, dismiss } from './useToast'
+
+function runAction(event: MouseEvent) {
+  const id = Number((event.currentTarget as HTMLButtonElement).dataset.toastId)
+  const item = current.value
+  if (item?.id !== id || !item.action) return
+  dismiss(id)
+  item.action.run()
+}
 </script>
 
 <template>
@@ -15,7 +23,7 @@ import { current, dismiss } from './useToast'
         aria-hidden="true"
       />
       <span>{{ current.text }}</span>
-      <button v-if="current.action" v-press class="action" @click="(current.action.run(), dismiss())">
+      <button v-if="current.action" v-press class="action" :data-toast-id="current.id" @click="runAction">
         {{ current.action.label }}
       </button>
     </div>
@@ -27,12 +35,12 @@ import { current, dismiss } from './useToast'
   position: fixed;
   top: calc(var(--titlebar-h) + var(--sp-4));
   left: 50%;
-  z-index: 60;
+  z-index: 49;
   display: flex;
   align-items: center;
   gap: var(--sp-2);
   max-width: min(520px, calc(100vw - 2 * var(--sp-5)));
-  padding: var(--sp-3) var(--sp-5) var(--sp-3) var(--sp-4);
+  padding: var(--sp-1) var(--sp-4);
   border-radius: 999px;
   background: var(--card);
   box-shadow: var(--shadow-pop);
@@ -50,7 +58,6 @@ import { current, dismiss } from './useToast'
 }
 .action {
   flex: none;
-  margin-left: var(--sp-2);
   padding: 0 var(--sp-3);
   height: var(--h-xs);
   border: 0;

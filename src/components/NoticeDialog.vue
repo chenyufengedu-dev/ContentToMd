@@ -15,12 +15,18 @@ const props = defineProps<{
   /** 只需关闭的说明窗省略确认按钮，仍复用相同的关闭和焦点逻辑。 */
   okText?: string
   danger?: boolean
+  busy?: boolean
   neutralText?: string
   /** Esc和遮罩仍走保留内容的neutral回调，不要求显示第三个按钮。 */
   dismissToNeutral?: boolean
 }>()
 const emit = defineEmits<{ cancel: []; ok: []; neutral: [] }>()
-const dismiss = () => (props.neutralText || props.dismissToNeutral ? emit('neutral') : emit('cancel'))
+const dismiss = () => {
+  if (!props.busy) {
+    if (props.neutralText || props.dismissToNeutral) emit('neutral')
+    else emit('cancel')
+  }
+}
 
 const dialog = ref<HTMLElement>()
 const titleId = useId()
@@ -35,9 +41,17 @@ useModal(dialog, dismiss)
       </h2>
       <div class="body"><slot /></div>
       <div class="buttons">
-        <button v-if="neutralText" v-press class="neutral" @click="emit('neutral')">{{ neutralText }}</button>
-        <button v-press class="soft" @click="emit('cancel')">{{ cancelText }}</button>
-        <button v-if="okText" v-press="'tactile'" :class="danger ? 'danger' : 'primary'" @click="emit('ok')">
+        <button v-if="neutralText" v-press class="neutral" :disabled="busy" @click="emit('neutral')">
+          {{ neutralText }}
+        </button>
+        <button v-press class="soft" :disabled="busy" @click="emit('cancel')">{{ cancelText }}</button>
+        <button
+          v-if="okText"
+          v-press="'tactile'"
+          :class="danger ? 'danger' : 'primary'"
+          :disabled="busy"
+          @click="emit('ok')"
+        >
           {{ okText }}
         </button>
       </div>

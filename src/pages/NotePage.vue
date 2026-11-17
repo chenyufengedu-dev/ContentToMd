@@ -28,7 +28,7 @@ const emit = defineEmits<{
   /** deleted：笔记已经删了，收藏库页要重新读 */
   back: [changed: boolean]
   /** 删除成功：笔记和图片已放进回收站，由外面给“撤销”的提示 */
-  deleted: [info: { path: string; images: string[] }]
+  deleted: [info: { root: string; path: string; images: string[] }]
   configChanged: [Config]
   goSettings: []
   dirty: [boolean]
@@ -42,6 +42,7 @@ const recovery = ref<NoteRecovery>()
 const editorPage = ref<InstanceType<typeof ConfirmPage>>()
 const recoveryError = ref('')
 async function discardEdits() {
+  if (busy.value) return false
   if (editorPage.value) {
     const discarded = await editorPage.value.discardRecovery()
     if (!discarded) recoveryError.value = RECOVERY_CLEAR_ERROR
@@ -49,7 +50,6 @@ async function discardEdits() {
   }
   return false
 }
-defineExpose({ discardEdits })
 async function leaveWithoutSaving(close = false) {
   if (!(await discardEdits())) return
   if (close) await destroyWindow()
@@ -256,21 +256,30 @@ function onDirty(v: boolean) {
   emit('dirty', v)
 }
 function back() {
+  if (busy.value) return
   if (isDirty.value) askLeave.value = true
   else emit('back', changed.value)
 }
 
 // ---- 删除 ----
 const askDelete = ref(false)
+const deleting = ref(false)
+const busy = computed(() => deleting.value || !!editorPage.value?.saving)
+defineExpose({ discardEdits, busy })
 const deleteError = ref('')
 async function remove() {
+  if (busy.value) return
+  deleting.value = true
+  const target = { root: root.value, path: path.value }
   deleteError.value = ''
   try {
-    const images = await deleteNote(root.value, path.value)
+    const images = await deleteNote(target.root, target.path)
     await editorPage.value?.discardRecovery()
-    emit('deleted', { path: path.value, images })
+    emit('deleted', { ...target, images })
   } catch (e) {
     deleteError.value = String(e)
+  } finally {
+    deleting.value = false
   }
 }
 
@@ -324,6 +333,7 @@ const openInObsidian = () =>
     danger
     cancel-text="取消"
     ok-text="删除"
+    :busy="deleting"
     @cancel="askDelete = false"
     @ok="remove"
   >
