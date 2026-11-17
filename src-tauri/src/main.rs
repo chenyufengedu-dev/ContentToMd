@@ -10,6 +10,53 @@ mod window_state;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+
+#[tauri::command]
+fn list_system_fonts() -> Vec<String> {
+    #[cfg(windows)]
+    {
+        use std::{collections::BTreeSet, ptr::null_mut};
+        use windows_sys::Win32::Graphics::Gdi::{
+            EnumFontFamiliesExW, GetDC, ReleaseDC, DEFAULT_CHARSET, LOGFONTW, TEXTMETRICW,
+        };
+
+        unsafe extern "system" fn collect(
+            font: *const LOGFONTW,
+            _: *const TEXTMETRICW,
+            _: u32,
+            data: isize,
+        ) -> i32 {
+            // GDI calls this synchronously with a valid font record and our set pointer.
+            let face = unsafe { &(*font).lfFaceName };
+            let end = face
+                .iter()
+                .position(|&unit| unit == 0)
+                .unwrap_or(face.len());
+            let name = String::from_utf16_lossy(&face[..end]);
+            if !name.is_empty() && !name.starts_with('@') {
+                unsafe { &mut *(data as *mut BTreeSet<String>) }.insert(name);
+            }
+            1
+        }
+
+        let mut fonts = BTreeSet::<String>::new();
+        let filter = LOGFONTW {
+            lfCharSet: DEFAULT_CHARSET,
+            ..Default::default()
+        };
+        // A null window gets the screen DC. Release it on the same thread.
+        unsafe {
+            let dc = GetDC(null_mut());
+            if !dc.is_null() {
+                EnumFontFamiliesExW(dc, &filter, Some(collect), &mut fonts as *mut _ as isize, 0);
+                ReleaseDC(null_mut(), dc);
+            }
+        }
+        fonts.into_iter().collect()
+    }
+    #[cfg(not(windows))]
+    Vec::new()
+}
 use tauri::Manager;
 use tauri_plugin_window_state::AppHandleExt;
 
@@ -1516,6 +1563,7 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            list_system_fonts,
             clipboard::read_clipboard,
             clipboard::write_clipboard,
             destroy_window,

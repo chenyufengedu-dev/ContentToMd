@@ -37,6 +37,7 @@ import {
   listObsidianVaults,
   ensureSubfolder,
   listSubfolders,
+  listSystemFonts,
   guardClose,
   destroyWindow,
 } from '../shell/tauri'
@@ -298,10 +299,8 @@ const filteredFonts = computed(() =>
 )
 const fontListUnavailable = ref(false)
 async function listFonts() {
-  const browser = window as Window & { queryLocalFonts?: () => Promise<{ family: string }[]> }
   try {
-    const fonts = await browser.queryLocalFonts?.()
-    fontNames.value = [...new Set(fonts?.map((font) => font.family))].sort((a, b) => a.localeCompare(b))
+    fontNames.value = (await listSystemFonts()).sort((a, b) => a.localeCompare(b))
     fontListUnavailable.value = fontNames.value.length === 0
   } catch {
     fontListUnavailable.value = true
