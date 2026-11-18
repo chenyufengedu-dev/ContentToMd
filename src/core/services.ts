@@ -189,17 +189,15 @@ export async function chatJson(
   )
   let content: unknown
   let finish: unknown
-  let usage: Usage | undefined
   if (onText && res.body && /event-stream/i.test(res.headers.get('Content-Type') ?? '')) {
-    ;({ content, finish, usage } = await readStream(res.body, onText, cancel))
+    ;({ content, finish } = await readStream(res.body, onText, cancel, onUsage))
   } else {
     const data = await res.json().catch(() => null)
     if (cancel?.aborted) throw new AppError('cancelled', '已取消')
     content = data?.choices?.[0]?.message?.content
     finish = data?.choices?.[0]?.finish_reason
-    usage = data?.usage
+    if (data?.usage) onUsage?.(data.usage)
   }
-  if (usage) onUsage?.(usage)
   if (finish === 'length') throw new AppError('truncated', '整理结果被截断，请减少内容后重试。', 'finish_reason=length')
   try {
     return JSON.parse(String(content))
@@ -213,45 +211,66 @@ async function readStream(
   body: ReadableStream<Uint8Array>,
   onText: (soFar: string) => void,
   cancel?: AbortSignal,
-): Promise<{ content: string; finish: unknown; usage?: Usage }> {
+  onUsage?: (usage: Usage) => void,
+): Promise<{ content: string; finish: unknown }> {
   const reader = body.getReader()
   const decoder = new TextDecoder()
   let buf = ''
   let content = ''
   let finish: unknown
   let usage: Usage | undefined
-  // 点取消时停止读取（这时请求已经回了话，request() 里的取消管不到这里）
-  const onCancel = () => void reader.cancel().catch(() => {})
-  cancel?.addEventListener('abort', onCancel)
+  let timedOut = false
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const stop = () => void reader.cancel().catch(() => {})
+  const armTimeout = () => {
+    clearTimeout(timer)
+    timer = setTimeout(() => {
+      timedOut = true
+      stop()
+    }, 60_000)
+  }
+  const consume = (lines: string[]) => {
+    const before = content.length
+    for (const line of lines) {
+      const m = /^data:\s*(.*)$/.exec(line.trim())
+      if (!m || m[1] === '[DONE]') continue
+      const chunk = JSON.parse(m[1])
+      if (chunk?.usage) usage = chunk.usage
+      const choice = chunk?.choices?.[0]
+      if (typeof choice?.delta?.content === 'string') content += choice.delta.content
+      if (choice?.finish_reason) finish = choice.finish_reason
+    }
+    if (content.length !== before) onText(content)
+  }
+  cancel?.addEventListener('abort', stop)
   try {
+    if (cancel?.aborted) throw new AppError('cancelled', '已取消')
+    armTimeout()
     for (;;) {
       const { done, value } = await reader.read()
-      if (cancel?.aborted) throw new AppError('cancelled', '已取消')
-      if (done) break
+      if (cancel?.aborted || timedOut) break
+      if (done) {
+        consume([buf + decoder.decode()])
+        break
+      }
+      if (value.byteLength) armTimeout()
       buf += decoder.decode(value, { stream: true })
       const lines = buf.split('\n')
-      buf = lines.pop() ?? '' // 最后一行可能还没收全
-      let changed = false
-      for (const line of lines) {
-        const m = /^data:\s*(.*)$/.exec(line.trim())
-        if (!m || m[1] === '[DONE]') continue
-        const chunk = JSON.parse(m[1])
-        if (chunk?.usage) usage = chunk.usage // 要了用量时，最后一块单独带 usage
-        const choice = chunk?.choices?.[0]
-        if (typeof choice?.delta?.content === 'string') {
-          content += choice.delta.content
-          changed = true
-        }
-        if (choice?.finish_reason) finish = choice.finish_reason
-      }
-      if (changed) onText(content)
+      buf = lines.pop() ?? ''
+      consume(lines)
     }
+    if (cancel?.aborted) throw new AppError('cancelled', '已取消')
+    if (timedOut) throw new AppError('timeout', '连续 60 秒未收到整理结果，请稍后重试。')
   } catch (e) {
     if (cancel?.aborted) throw new AppError('cancelled', '已取消')
+    if (e instanceof AppError) throw e
     if (e instanceof SyntaxError) throw new AppError('bad_response', '服务返回内容异常，请重试。', String(e))
     throw new AppError('network', '连接已中断，请检查网络后重试。', String(e))
   } finally {
-    cancel?.removeEventListener('abort', onCancel)
+    clearTimeout(timer)
+    cancel?.removeEventListener('abort', stop)
+    stop()
+    if (usage) onUsage?.(usage)
   }
-  return { content, finish, usage }
+  return { content, finish }
 }

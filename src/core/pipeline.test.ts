@@ -358,3 +358,21 @@ it('长文一段失败后会取消其他分段请求', async () => {
     controller.abort()
   }
 })
+it('分段转写失败后只重试未完成的音频段', async () => {
+  const job = jobAfterExtract()
+  const calls: number[] = []
+  let fail = true
+  const fetch: Fetch = async (url, init) => {
+    if (!url.endsWith('/audio/transcriptions')) return chatOk(AI_RESULT)()
+    const file = (init?.body as FormData).get('file') as Blob
+    const part = (await file.text()) === 'a' ? 1 : 2
+    calls.push(part)
+    if (part === 2 && fail) return chatStatus(500)()
+    return new Response(JSON.stringify({ text: part === 1 ? CLEANED : '这是转写得到的第二部分。' }))
+  }
+  await expect(runJob(job, ctx(fetch))).rejects.toMatchObject({ code: 'unavailable' })
+  fail = false
+  await runJob(job, ctx(fetch))
+  expect(calls).toEqual([1, 2, 2])
+  expect(job.transcript).toBe(CLEANED + '\n这是转写得到的第二部分。')
+})

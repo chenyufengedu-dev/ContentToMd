@@ -6,6 +6,7 @@ import { vPageFade } from './components/pageFade'
 import { type Config, parseConfig, notesRoot } from './core/config'
 import {
   listEditRecoveries,
+  cleanupAttachmentParts,
   loadConfigJson,
   dirExists,
   ensurePrompts,
@@ -117,6 +118,10 @@ const updatePercent = computed(() =>
 )
 const updateDownloadFailed = ref(false)
 
+function hasPendingUpdateChanges() {
+  return noteDirty.value || settingsPending.value || settingsDomainBusy.value || collect.value?.hasUnsaved()
+}
+
 async function downloadUpdate() {
   if (!update.value || downloadingUpdate.value) return
   if (updateDownloadFailed.value) {
@@ -125,6 +130,10 @@ async function downloadUpdate() {
     } catch {
       toast('无法打开 GitHub，请稍后重试。', { kind: 'error' })
     }
+    return
+  }
+  if (hasPendingUpdateChanges()) {
+    toast('请先保存或放弃当前内容，再更新。')
     return
   }
   downloadedBytes.value = 0
@@ -149,7 +158,7 @@ async function downloadUpdate() {
       })
       updateDownloaded.value = true
     }
-    if (noteDirty.value || settingsPending.value || settingsDomainBusy.value || collect.value?.hasUnsaved()) {
+    if (hasPendingUpdateChanges()) {
       toast('请先保存或放弃当前内容，再安装更新。')
       return
     }
@@ -259,6 +268,7 @@ onMounted(async () => {
     if (!showOnboarding.value && loadedConfig.vaultPath) {
       vaultMissing.value = !(await dirExists(notesRoot(loadedConfig)))
       if (!vaultMissing.value) {
+        await cleanupAttachmentParts(notesRoot(loadedConfig)).catch(() => {})
         try {
           const collection = await inspectCollection(loadedConfig)
           if (collection.config !== loadedConfig) {

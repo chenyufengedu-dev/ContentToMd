@@ -278,3 +278,63 @@ it('取消引导连接测试时，不等待不响应 AbortSignal 的通道', asy
   controller.abort()
   expect(await result).toBe('cancelled')
 })
+it.each(['cancelled', 'network', 'eof'] as const)('流式用量在 %s 时仍记录一次', async (ending) => {
+  const abort = new AbortController()
+  const usage = { prompt_tokens: 10, completion_tokens: 2 }
+  const onUsage = vi.fn()
+  let stream!: ReadableStreamDefaultController<Uint8Array>
+  const data = 'data: ' + JSON.stringify({ choices: [{ delta: { content: '{}' } }], usage })
+  const fetch: Fetch = async () =>
+    new Response(
+      new ReadableStream({
+        start(controller) {
+          stream = controller
+          controller.enqueue(new TextEncoder().encode(data + (ending === 'eof' ? '' : '\n')))
+          if (ending === 'eof') controller.close()
+        },
+      }),
+      { headers: { 'Content-Type': 'text/event-stream' } },
+    )
+  const result = codeOf(
+    chatJson(
+      'text',
+      text,
+      's',
+      'u',
+      fetch,
+      abort.signal,
+      () => {
+        if (ending === 'cancelled') abort.abort()
+        if (ending === 'network') stream.error(new Error('连接中断'))
+      },
+      onUsage,
+    ),
+  )
+  expect(await result).toBe(ending === 'eof' ? 'no-error' : ending)
+  expect(onUsage).toHaveBeenCalledExactlyOnceWith(usage)
+})
+
+it('流式收到新数据后重新计时，连续空闲 60 秒退出', async () => {
+  vi.useFakeTimers()
+  const abort = new AbortController()
+  try {
+    let stream!: ReadableStreamDefaultController<Uint8Array>
+    const fetch: Fetch = async () =>
+      new Response(new ReadableStream({ start: (controller) => (stream = controller) }), {
+        headers: { 'Content-Type': 'text/event-stream' },
+      })
+    const result = codeOf(chatJson('text', text, 's', 'u', fetch, abort.signal, () => {}))
+    await vi.advanceTimersByTimeAsync(59000)
+    stream.enqueue(new TextEncoder().encode(': heartbeat\n'))
+    await vi.advanceTimersByTimeAsync(59000)
+    let done = false
+    void result.then(() => (done = true))
+    await vi.advanceTimersByTimeAsync(999)
+    expect(done).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(await Promise.race([result, Promise.resolve('still waiting')])).toBe('timeout')
+  } finally {
+    abort.abort()
+    vi.useRealTimers()
+  }
+})

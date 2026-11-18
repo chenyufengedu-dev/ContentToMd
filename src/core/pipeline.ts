@@ -61,6 +61,7 @@ export interface Job {
   wavChunks?: Blob[]
   duration?: number
   transcript?: string
+  transcribedChunks?: string[]
   draft?: NoteDraft
   domainFallback?: boolean
   images?: JobImage[]
@@ -197,19 +198,20 @@ const STEPS: Record<StepId, (job: Job, ctx: RunContext, step: StepState) => Prom
 
   async transcribe(job, ctx, step) {
     const chunks = job.wavChunks!
-    const texts: string[] = []
-    for (let i = 0; i < chunks.length; i++) {
+    const texts = (job.transcribedChunks ??= [])
+    for (let i = texts.length; i < chunks.length; i++) {
       if (chunks.length > 1) {
         step.note = `正在转写第 ${i + 1}/${chunks.length} 段`
         ctx.onUpdate()
       }
       const raw = await call(() => transcribe(ctx.config.services.asr, chunks[i], ctx.fetch, ctx.cancel), ctx, step)
-      await recordUsage(job, ctx, 'asr', undefined, wavSeconds(chunks[i]))
       texts.push(cleanTranscript(raw))
+      await recordUsage(job, ctx, 'asr', undefined, wavSeconds(chunks[i]))
     }
     const text = texts.join('\n')
     if (effectiveLength(text) < 20) throw new AppError('no_speech', '未识别到语音，可改用截图整理。')
     job.transcript = text
+    job.transcribedChunks = undefined
     job.wavChunks = undefined // 音频用完就丢掉，不长期保存（方案第 10.5 节）
   },
 

@@ -1088,11 +1088,11 @@ async function save(videoChoice?: boolean) {
     }
     let video = ''
     if (videoChoice && props.videoFile) {
-      const ext = props.videoFile.name.toLowerCase().endsWith('.mov') ? 'mov' : 'mp4'
+      const ext = /[^.]([.][^.]+)$/.exec(props.videoFile.name)?.[1] ?? ''
       const rel = await writeAttachment(
         root,
         created.slice(0, 7),
-        `${created}-${safeFileTitle(title).slice(0, 20)}-原视频.${ext}`,
+        `${created}-${safeFileTitle(title).slice(0, 20)}-原视频${ext}`,
         props.videoFile,
       )
       written.push(rel)

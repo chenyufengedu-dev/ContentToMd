@@ -84,6 +84,7 @@ async function mount(
   type: Job['type'] = '文字',
   transcript?: string,
   imageTexts?: string[],
+  videoFile?: File,
 ) {
   const config = reactive(defaultConfig())
   config.domains.unshift({ id: 1, name: '为人处世' })
@@ -133,6 +134,7 @@ async function mount(
   const componentProps = {
     config,
     job,
+    videoFile,
     existingTags: [],
     edit: editMode ? edit : undefined,
     recovery,
@@ -1060,4 +1062,33 @@ it('保存已有笔记前等待已经发出的恢复写入', async () => {
   expect(early).toBe(0)
   expect(saveNote).toHaveBeenCalledTimes(1)
   expect(clearEditRecovery).toHaveBeenCalled()
+})
+
+it('保留原视频时使用原文件的扩展名', async () => {
+  const video = new File(['video'], '原始视频.webm', { type: 'video/webm' })
+  const view = await mount(
+    '正文',
+    false,
+    undefined,
+    undefined,
+    undefined,
+    '',
+    '原文精修',
+    '视频',
+    undefined,
+    undefined,
+    video,
+  )
+  view.save.click()
+  await view.flush()
+  const dialog = document.querySelector('[role=alertdialog]')!
+  dialog.querySelector<HTMLInputElement>('input[type=checkbox]')!.click()
+  ;[...dialog.querySelectorAll('button')].find((button) => button.textContent?.trim() === '保存')!.click()
+  await view.flush()
+  expect(writeAttachment).toHaveBeenCalledWith(
+    expect.any(String),
+    expect.any(String),
+    expect.stringMatching(/-原视频\.webm$/),
+    video,
+  )
 })

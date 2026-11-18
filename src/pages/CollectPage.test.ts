@@ -8,7 +8,7 @@ import { defaultConfig } from '../core/config'
 import { DEFAULT_PROMPTS } from '../core/defaultPrompts'
 import { readDocx, readPdf } from '../core/docText'
 import { runJob } from '../core/pipeline'
-import { writeNote, guardClose, listVaultTags, writeClipboard } from '../shell/tauri'
+import { loadDraft, writeNote, guardClose, listVaultTags, writeClipboard } from '../shell/tauri'
 
 vi.mock('../shell/tauri', () => ({
   loadDraft: vi.fn().mockResolvedValue(null),
@@ -420,4 +420,53 @@ it('连续导入按批次保序，坏图不占九张额度', async () => {
   ])
   expect(root.textContent).toContain('坏图.png')
   expect(root.textContent).toContain('追加-9.png')
+})
+it.each(['request', 'source', 'unchanged'] as const)('重新开始时按 %s 判断是否重用整理结果', async (change) => {
+  const { root, pick } = await mount()
+  pick('原文.txt')
+  await flush()
+  vi.mocked(runJob).mockImplementationOnce(async (job) => {
+    job.chunkResults = { 0: 'skip' }
+    job.chunkTotal = 2
+    job.steps[0].status = 'done'
+    const { AppError } = await import('../core/errors')
+    throw new AppError('cancelled', '已取消')
+  })
+  root.querySelector<HTMLButtonElement>('.start')!.click()
+  await vi.waitFor(() => expect(runJob).toHaveBeenCalledTimes(1))
+  await vi.waitFor(() => expect(root.querySelector<HTMLButtonElement>('.start')?.disabled).toBe(false))
+  if (change !== 'unchanged') {
+    const input = root.querySelector<HTMLInputElement | HTMLTextAreaElement>(
+      change === 'request' ? 'textarea' : 'input[placeholder^="粘贴来源链接"]',
+    )!
+    input.value = change === 'request' ? '只保留结论' : 'https://example.com/source'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    await flush()
+  }
+  vi.mocked(runJob).mockImplementationOnce(async (job) => {
+    expect(job.transcript).toBe('测试正文')
+    expect(job.chunkResults).toEqual(change === 'unchanged' ? { 0: 'skip' } : undefined)
+    expect(job.steps[0].status).toBe(change === 'unchanged' ? 'done' : 'pending')
+    throw new Error('测试结束')
+  })
+  root.querySelector<HTMLButtonElement>('.start')!.click()
+  await vi.waitFor(() => expect(vi.mocked(runJob)).toHaveBeenCalledTimes(2))
+  await expect(vi.mocked(runJob).mock.results[1].value).rejects.toThrow('测试结束')
+})
+
+it('草稿恢复后返回修改仍保留图片框选范围', async () => {
+  const { toDraft } = await import('../core/draft')
+  const { newImageJob } = await import('../core/pipeline')
+  const file = new File(['image'], '图.png', { type: 'image/png' })
+  const region = { x: 4, y: 8, w: 60, h: 40 }
+  const { data } = toDraft(newImageJob([{ file, region }], '提取内容'))
+  vi.mocked(loadDraft).mockResolvedValueOnce({ data, files: { 'image-0': file } })
+  const { root } = await mount()
+  const click = (label: string) =>
+    [...root.querySelectorAll('button')].find((button) => button.textContent?.trim() === label)?.click()
+  click('继续')
+  await vi.waitFor(() => expect(root.textContent).toContain('返回修改'))
+  click('返回修改')
+  await flush()
+  expect(root.querySelector('.region-mark')?.textContent).toBe('已框选')
 })

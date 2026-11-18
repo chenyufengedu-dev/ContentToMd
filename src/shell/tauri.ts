@@ -131,7 +131,14 @@ export async function readVideoAttachment(root: string, relPath: string, signal?
     parts.push(bytes)
     if (bytes.byteLength < ATTACHMENT_CHUNK) break
   }
-  return new Blob(parts, { type: /\.mov$/i.test(relPath) ? 'video/quicktime' : 'video/mp4' })
+  const ext = relPath.split('.').at(-1)?.toLowerCase() ?? ''
+  const types: Record<string, string> = {
+    mp4: 'video/mp4',
+    mov: 'video/quicktime',
+    webm: 'video/webm',
+    m4v: 'video/mp4',
+  }
+  return new Blob(parts, { type: types[ext] ?? '' })
 }
 
 export async function writeAttachment(vault: string, month: string, name: string, data: Blob): Promise<string> {
@@ -160,6 +167,7 @@ export async function writeAttachment(vault: string, month: string, name: string
     throw error
   }
 }
+export const cleanupAttachmentParts = (root: string) => invoke<void>('cleanup_attachment_parts', { root })
 export const removeAttachment = (vault: string, relPath: string) =>
   invoke<void>('remove_attachment', { vault, relPath })
 

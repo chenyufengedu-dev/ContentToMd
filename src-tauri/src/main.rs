@@ -559,6 +559,76 @@ fn save_attachment(vault: &str, month: &str, name: &str, bytes: &[u8]) -> Result
     Ok(format!("附件/{month}/{file}"))
 }
 
+fn attachment_upload_id(value: &str) -> bool {
+    value.len() == 32 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn cleanup_attachment_parts_at(root: &std::path::Path) -> Result<(), String> {
+    let attachments = root.join("附件");
+    let metadata = match fs::symlink_metadata(&attachments) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(io_msg(&attachments, e)),
+        Ok(metadata) => metadata,
+    };
+    if !metadata.file_type().is_dir() {
+        return Ok(());
+    }
+    ensure_inside(root, &attachments)?;
+    let months = fs::read_dir(&attachments).map_err(|e| io_msg(&attachments, e))?;
+    for month in months.flatten() {
+        let name = month.file_name();
+        let Some((year, number)) = name.to_str().and_then(|name| name.split_once('-')) else {
+            continue;
+        };
+        if year.len() != 4
+            || !year.bytes().all(|b| b.is_ascii_digit())
+            || number.len() != 2
+            || !number.parse::<u8>().is_ok_and(|n| (1..=12).contains(&n))
+            || !month.file_type().is_ok_and(|kind| kind.is_dir())
+            || ensure_inside(root, &month.path()).is_err()
+        {
+            continue;
+        }
+        let Ok(entries) = fs::read_dir(month.path()) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if entry
+                .file_name()
+                .to_str()
+                .and_then(|name| name.strip_prefix('.')?.strip_suffix(".part"))
+                .is_some_and(attachment_upload_id)
+                && entry.file_type().is_ok_and(|kind| kind.is_file())
+            {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn cleanup_attachment_parts(root: String) -> Result<(), String> {
+    cleanup_attachment_parts_at(std::path::Path::new(&root))
+}
+
+#[test]
+fn startup_cleanup_removes_only_generated_attachment_parts() {
+    let vault = tempfile::tempdir().unwrap();
+    let month = vault.path().join("附件/2026-11");
+    fs::create_dir_all(&month).unwrap();
+    let stale = month.join(".0123456789abcdef0123456789abcdef.part");
+    let user_file = month.join(".notes.part");
+    let attachment = month.join("完整.mp4");
+    for path in [&stale, &user_file, &attachment] {
+        fs::write(path, b"keep").unwrap();
+    }
+    cleanup_attachment_parts_at(vault.path()).unwrap();
+    assert!(!stale.exists());
+    assert!(user_file.exists());
+    assert!(attachment.exists());
+}
+
 /// 大附件逐块写入同一临时文件，最后一块才发布。
 fn write_attachment_chunk(
     vault: &str,
@@ -572,7 +642,7 @@ fn write_attachment_chunk(
     use std::io::Write;
     check_segment(month)?;
     check_segment(name)?;
-    if upload.len() != 32 || !upload.bytes().all(|c| c.is_ascii_hexdigit()) {
+    if !attachment_upload_id(upload) {
         return Err("附件上传编号无效".into());
     }
     let root = PathBuf::from(vault);
@@ -1863,6 +1933,7 @@ fn main() {
             ensure_prompts,
             write_note,
             write_attachment,
+            cleanup_attachment_parts,
             remove_attachment,
             list_vault_tags,
             open_note,

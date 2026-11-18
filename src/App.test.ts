@@ -4,6 +4,8 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { createApp, h, nextTick, type App as VueApp } from 'vue'
 import App from './App.vue'
 import { defaultConfig } from './core/config'
+import { useUpdate } from './components/useUpdate'
+import type * as UpdateModule from './components/useUpdate'
 import { current, dismiss } from './components/useToast'
 import { loadConfigJson, loadOnboarding, saveOnboarding, inspectCollection, saveConfig } from './shell/tauri'
 
@@ -14,6 +16,7 @@ vi.mock('./shell/tauri', () => ({
   ensurePrompts: vi.fn().mockResolvedValue({}),
   dirExists: vi.fn().mockResolvedValue(true),
   listEditRecoveries: vi.fn().mockResolvedValue([]),
+  cleanupAttachmentParts: vi.fn().mockResolvedValue(undefined),
   restoreNote: vi.fn(),
   inspectCollection: vi.fn(async (config: ReturnType<typeof defaultConfig>) => ({ config, hasNotes: false })),
   saveConfig: vi.fn().mockResolvedValue(undefined),
@@ -26,9 +29,27 @@ vi.mock('./pages/OnboardingPage.vue', () => ({
       "<button @click=\"$emit('done', config, '其他/欢迎使用 ContentToMd-2026-10-27.md')\">跳过引导测试</button>",
   },
 }))
+const { download, install, hasUnsaved } = vi.hoisted(() => ({
+  download: vi.fn().mockResolvedValue(undefined),
+  install: vi.fn().mockResolvedValue(undefined),
+  hasUnsaved: vi.fn(() => false),
+}))
+vi.mock('./components/useUpdate', async (original) => {
+  const { ref } = await import('vue')
+  const actual = await original<typeof UpdateModule>()
+  return {
+    ...actual,
+    createUpdateCheck() {
+      const update = ref({ current: '1.0.0', version: '1.1.0', notes: '', download, install })
+      const visible = ref(false)
+      return { update, visible, open: () => (visible.value = true), check: vi.fn() }
+    },
+  }
+})
 vi.mock('./pages/CollectPage.vue', () => ({
   default: {
     props: ['config'],
+    methods: { hasUnsaved },
     template: '<div data-test="home">{{ config.domains.map(d => d.name).join("、") }}</div>',
   },
 }))
@@ -39,8 +60,13 @@ vi.mock('./pages/NotePage.vue', () => ({
 }))
 vi.mock('./components/TitleBar.vue', () => ({
   default: {
+    inheritAttrs: false,
     emits: ['navigate'],
-    template: `<button data-test="library-link" @click="$emit('navigate', 'library')">收藏库</button>`,
+    setup() {
+      return { update: useUpdate() }
+    },
+    template: `<button data-test="library-link" @click="$emit('navigate', 'library')">收藏库</button>
+      <button data-test="update-link" @click="update.open()">打开更新</button>`,
   },
 }))
 vi.mock('./components/WelcomeCelebration.vue', async () => {
@@ -168,4 +194,28 @@ it('进入收藏库和窗口重新聚焦时补入新领域', async () => {
   await settle()
   expect(document.querySelector('[data-test="home"]')?.textContent).toContain('首次新增、再次新增')
   expect(saveConfig).not.toHaveBeenCalled()
+})
+
+it('有未保存内容时不下载更新，保存后可以继续', async () => {
+  vi.mocked(loadConfigJson).mockResolvedValueOnce(JSON.stringify(defaultConfig()))
+  hasUnsaved.mockReturnValue(true)
+  try {
+    await mount()
+    document.querySelector<HTMLButtonElement>('[data-test=update-link]')!.click()
+    await settle()
+    const action = [...document.querySelectorAll('button')].find(
+      (button) => button.textContent?.trim() === '下载并安装',
+    )!
+    action.click()
+    await settle()
+    expect(download).not.toHaveBeenCalled()
+    expect(install).not.toHaveBeenCalled()
+    hasUnsaved.mockReturnValue(false)
+    action.click()
+    await settle()
+    expect(download).toHaveBeenCalledTimes(1)
+    expect(install).toHaveBeenCalledTimes(1)
+  } finally {
+    hasUnsaved.mockReturnValue(false)
+  }
 })

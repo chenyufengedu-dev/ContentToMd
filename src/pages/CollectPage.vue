@@ -509,13 +509,25 @@ async function start() {
           : newJob(file.value!.name, fileType.value!, mode.value),
     ) as Job
   }
-  Object.assign(job.value!, {
+  const current = job.value!
+  const input = {
     source: source.value.trim(),
     shareText: share.value?.raw ?? '',
     platform: share.value?.platform ?? '',
     author: share.value?.author ?? '',
     request: request.value.trim(),
-  })
+  }
+  if (Object.entries(input).some(([key, value]) => (current[key as keyof typeof input] ?? '') !== value)) {
+    const index = current.steps.findIndex((step) => step.id === 'organize')
+    if (index >= 0) current.steps[index] = { id: 'organize', status: 'pending' }
+    current.chunkResults = undefined
+    current.chunkTotal = undefined
+    current.draft = undefined
+    current.edits = undefined
+    current.domainFallback = undefined
+    current.preview = undefined
+  }
+  Object.assign(current, input)
   pendingDraft.value = null
   keepDraft(true)
   starting.value = true
@@ -619,7 +631,8 @@ async function resumeDraft() {
     dropDraft()
     return
   }
-  if (j.images) images.value = j.images.map((i) => ({ file: i.file, url: URL.createObjectURL(i.file) }))
+  if (j.images)
+    images.value = j.images.map((i) => ({ file: i.file, url: URL.createObjectURL(i.file), region: i.region }))
   else if (j.type === '文字' || j.type === '文档')
     textFile.value = { name: j.fileName, text: j.transcript ?? '', type: j.type }
   job.value = reactive(j) as Job
