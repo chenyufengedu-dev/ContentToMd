@@ -530,7 +530,7 @@ it('领域改名失败保留旧配置，成功后才更新名称', async () => {
   expect(saved).toHaveBeenCalledTimes(1)
 })
 
-it('手动输入字体按明确操作应用，删除导入字体可撤销', async () => {
+it('删除导入字体可撤销', async () => {
   const { root, vm } = await mount(undefined, (config) => {
     config.interfaceFont = 'ctmd-font-saved'
     config.importedFonts = [{ family: 'ctmd-font-saved', name: '已导入.ttf', fileId: 'a'.repeat(64) }]
@@ -544,12 +544,6 @@ it('手动输入字体按明确操作应用，删除导入字体可撤销', asyn
   await click(root.querySelector('[data-card=appearance]')!, '界面字体已导入.ttf')
   root.querySelector<HTMLButtonElement>('[aria-label="删除字体 已导入.ttf"]')!.click()
   await nextTick()
-  await click(root.querySelector('[aria-label="可选字体"]')!, '手动输入字体名称')
-  const name = root.querySelector<HTMLInputElement>('[aria-label="字体名称"]')!
-  name.value = 'Test Font'
-  name.dispatchEvent(new Event('input', { bubbles: true }))
-  await nextTick()
-  await click(root, '使用此字体')
   await click(root, '完成')
   await click(root.querySelector('.save-bar')!, '撤销')
   expect(root.querySelector('[data-card=appearance] .entry-value')?.textContent).toBe('已导入.ttf')

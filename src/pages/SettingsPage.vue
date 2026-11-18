@@ -99,7 +99,6 @@ function openFontEditor() {
   fontSession++
   fontSnapshot = { interfaceFont: draft.interfaceFont, importedFonts: draft.importedFonts }
   fontSearch.value = ''
-  manualFont.value = null
   fontImportError.value = ''
   editingFont.value = true
   void listFonts().then(async () => {
@@ -275,7 +274,6 @@ function finishPromptEditor() {
 
 type ImportedFont = NonNullable<Config['importedFonts']>[number]
 const fontSearch = ref('')
-const manualFont = ref<string | null>(null)
 const fontImportError = ref('')
 const stagedFonts = new Map<string, Uint8Array<ArrayBuffer>>()
 let fontChoice = 0
@@ -307,13 +305,6 @@ function removeImportedFont(entry: ImportedFont) {
   fontChoice++
   draft.importedFonts = draft.importedFonts?.filter((font) => font.family !== entry.family)
   if (fontName.value === entry.family) fontName.value = ''
-}
-
-function useManualFont() {
-  const name = manualFont.value?.trim()
-  if (!name) return
-  chooseFont(name)
-  manualFont.value = null
 }
 
 async function importFont(event: Event) {
@@ -1473,18 +1464,7 @@ onMounted(() => {
       @ok="editingFont = false"
     >
       <div class="custom-settings">
-        <div v-if="manualFont !== null" class="editor-toolbar">
-          <input
-            v-model="manualFont"
-            aria-label="字体名称"
-            maxlength="128"
-            placeholder="例如 PingFang SC"
-            @keydown.enter.stop.prevent="useManualFont"
-          />
-          <button type="button" class="soft" :disabled="!manualFont.trim()" @click="useManualFont">使用此字体</button>
-          <button type="button" class="soft" @click="manualFont = null">返回搜索</button>
-        </div>
-        <div v-else class="font-picker">
+        <div class="font-picker">
           <div class="editor-toolbar font-toolbar">
             <input v-model="fontSearch" type="search" placeholder="搜索本机和已导入字体" aria-label="搜索字体" />
             <button type="button" class="soft" @click="fontUpload?.click()">导入字体</button>
@@ -1532,9 +1512,6 @@ onMounted(() => {
             <p v-else-if="!showDefaultFont && !filteredFonts.length && !filteredImports.length" class="entry-value">
               未找到匹配的字体。
             </p>
-            <button type="button" class="settings-entry" @click="manualFont = fontSearch.trim()">
-              手动输入字体名称
-            </button>
           </div>
         </div>
         <p v-if="fontImportError" role="alert">{{ fontImportError }}</p>
