@@ -1565,7 +1565,10 @@ fn rename_domain_at(
     match fs::symlink_metadata(&to) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(io_msg(&to, e)),
-        Ok(_) if case_only => {}
+        Ok(_)
+            if case_only
+                && matches!((from.canonicalize(), to.canonicalize()), (Ok(a), Ok(b)) if a == b) => {
+        }
         Ok(_) => return Err(format!("「{new}」文件夹已存在。")),
     }
     let metadata = match fs::symlink_metadata(&from) {
