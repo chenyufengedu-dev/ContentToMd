@@ -26,6 +26,7 @@ vi.mock('../shell/tauri', () => ({
   readUsage: vi.fn().mockResolvedValue([]),
   listObsidianVaults: vi.fn().mockResolvedValue([]),
   dirExists: vi.fn().mockResolvedValue(false),
+  listSystemFonts: vi.fn().mockResolvedValue([['PingFang SC', '苹方-简']]),
   listSubfolders: vi.fn().mockResolvedValue([]),
   guardClose: vi.fn().mockResolvedValue(() => {}),
   pickFolder: vi.fn(),
@@ -358,10 +359,10 @@ it('保存自定义指令和字体，并可将单项指令恢复到软件默认�
   root.querySelector<HTMLElement>('[data-card=appearance]')!.click()
   await nextTick()
   await click(root.querySelector('[data-card=appearance]')!, '界面字体')
-  const font = root.querySelector<HTMLInputElement>('[aria-label=字体名称]')!
-  font.value = 'PingFang SC'
+  const font = root.querySelector<HTMLInputElement>('[aria-label=搜索字体]')!
+  font.value = '苹方'
   font.dispatchEvent(new Event('input', { bubbles: true }))
-  await nextTick()
+  await click(font.closest('[role=alertdialog]')!, 'PingFang SC')
   await click(font.closest('[role=alertdialog]')!, '完成')
   expect(await vm.save()).toBe(true)
   expect(saved.mock.lastCall?.[0]).toMatchObject({
@@ -487,12 +488,13 @@ it.each([undefined, 'Arial'])('撤销字体修改后恢复已保存的字体 %s'
   await nextTick()
   root.querySelector<HTMLButtonElement>('[data-card=appearance] .settings-entry')!.click()
   await nextTick()
-  const font = root.querySelector<HTMLInputElement>('[aria-label=字体名称]')!
-  font.value = 'PingFang SC'
+  const font = root.querySelector<HTMLInputElement>('[aria-label=搜索字体]')!
+  font.value = '苹方'
   font.dispatchEvent(new Event('input', { bubbles: true }))
   await nextTick()
   const clickButton = (scope: ParentNode, label: string) =>
     [...scope.querySelectorAll('button')].find((button) => button.textContent?.trim() === label)!.click()
+  clickButton(font.closest('[role=alertdialog]')!, 'PingFang SC')
   clickButton(font.closest('[role=alertdialog]')!, '完成')
   await nextTick()
   expect(pending).toHaveBeenLastCalledWith(true)
@@ -526,4 +528,36 @@ it('领域改名失败保留旧配置，成功后才更新名称', async () => {
   )
   expect(root.querySelector('[aria-label="删除领域 读书笔记"]')).not.toBeNull()
   expect(saved).toHaveBeenCalledTimes(1)
+})
+
+it('手动输入字体按明确操作应用，删除导入字体可撤销', async () => {
+  const { root, vm } = await mount(undefined, (config) => {
+    config.interfaceFont = 'ctmd-font-saved'
+    config.importedFonts = [{ family: 'ctmd-font-saved', name: '已导入.ttf', fileId: 'a'.repeat(64) }]
+  })
+  const click = async (scope: ParentNode, label: string) => {
+    ;[...scope.querySelectorAll('button')].find((button) => button.textContent?.trim() === label)!.click()
+    await nextTick()
+  }
+  root.querySelector<HTMLElement>('[data-card=appearance]')!.click()
+  await nextTick()
+  await click(root.querySelector('[data-card=appearance]')!, '界面字体已导入.ttf')
+  root.querySelector<HTMLButtonElement>('[aria-label="删除字体 已导入.ttf"]')!.click()
+  await nextTick()
+  await click(root.querySelector('[aria-label="可选字体"]')!, '手动输入字体名称')
+  const name = root.querySelector<HTMLInputElement>('[aria-label="字体名称"]')!
+  name.value = 'Test Font'
+  name.dispatchEvent(new Event('input', { bubbles: true }))
+  await nextTick()
+  await click(root, '使用此字体')
+  await click(root, '完成')
+  await click(root.querySelector('.save-bar')!, '撤销')
+  expect(root.querySelector('[data-card=appearance] .entry-value')?.textContent).toBe('已导入.ttf')
+  expect(await vm.save()).toBe(true)
+  expect(saveConfig).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      interfaceFont: 'ctmd-font-saved',
+      importedFonts: [{ family: 'ctmd-font-saved', name: '已导入.ttf', fileId: 'a'.repeat(64) }],
+    }),
+  )
 })

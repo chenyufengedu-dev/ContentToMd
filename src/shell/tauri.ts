@@ -44,7 +44,9 @@ export const saveOnboarding = (state: OnboardingState) => invoke<void>('save_onb
 export const defaultCollectionFolder = (create = false) => invoke<string>('default_collection_folder', { create })
 
 export const loadConfigJson = () => invoke<string | null>('load_config')
-export const listSystemFonts = () => invoke<string[]>('list_system_fonts')
+export const readInterfaceFont = (id: string) => invoke<ArrayBuffer>('read_interface_font', { id })
+export const storeInterfaceFont = (bytes: Uint8Array) => invoke<string>('store_interface_font', bytes)
+export const listSystemFonts = () => invoke<[string, ...string[]][]>('list_system_fonts')
 export const renameDomain = (root: string | null, old: string, name: string, config: Config) =>
   invoke<void>('rename_domain', { root, old, new: name, json: JSON.stringify(config, null, 2) })
 export const saveConfig = (c: Config) => invoke<void>('save_config', { json: JSON.stringify(c, null, 2) })

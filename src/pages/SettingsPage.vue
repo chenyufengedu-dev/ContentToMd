@@ -39,12 +39,14 @@ import {
   ensureSubfolder,
   listSubfolders,
   listSystemFonts,
+  readInterfaceFont,
+  storeInterfaceFont,
   guardClose,
   destroyWindow,
 } from '../shell/tauri'
 import { formatYuan, keyId, summarize, type Price, type UsageRecord } from '../core/cost'
 import { DEFAULT_PROMPTS, editablePromptText, promptOverride, requiredPromptText } from '../core/defaultPrompts'
-import { loadImportedFont } from '../core/importedFont'
+import { fontFileId, loadImportedFont } from '../core/importedFont'
 import { MODES, type Mode, type Prompts } from '../core/note'
 import SettingCard from '../components/SettingCard.vue'
 // 关于卡片带书写动画的数据（约 110KB），用到才加载，不拖慢启动
@@ -97,6 +99,7 @@ function openFontEditor() {
   fontSession++
   fontSnapshot = { interfaceFont: draft.interfaceFont, importedFonts: draft.importedFonts }
   fontSearch.value = ''
+  manualFont.value = null
   fontImportError.value = ''
   editingFont.value = true
   void listFonts().then(async () => {
@@ -110,6 +113,7 @@ function openFontEditor() {
 }
 function cancelFontEditor() {
   Object.assign(draft, fontSnapshot)
+  clearUnusedStagedFonts()
   editingFont.value = false
 }
 function cancelPromptEditor() {
@@ -269,8 +273,49 @@ function finishPromptEditor() {
   if (keepPromptEdits()) editingPrompts.value = false
 }
 
+type ImportedFont = NonNullable<Config['importedFonts']>[number]
 const fontSearch = ref('')
+const manualFont = ref<string | null>(null)
 const fontImportError = ref('')
+const stagedFonts = new Map<string, Uint8Array<ArrayBuffer>>()
+let fontChoice = 0
+
+function clearUnusedStagedFonts() {
+  const referenced = new Set((draft.importedFonts ?? []).flatMap((font) => ('fileId' in font ? [font.fileId] : [])))
+  for (const id of stagedFonts.keys()) if (!referenced.has(id)) stagedFonts.delete(id)
+}
+
+function chooseFont(name: string) {
+  fontChoice++
+  fontName.value = name
+}
+
+async function chooseImportedFont(entry: ImportedFont) {
+  const session = fontSession
+  const choice = ++fontChoice
+  fontImportError.value = ''
+  try {
+    await loadImportedFont(entry, readInterfaceFont, 'fileId' in entry ? stagedFonts.get(entry.fileId) : undefined)
+    if (session === fontSession && choice === fontChoice && editingFont.value) fontName.value = entry.family
+  } catch {
+    if (session === fontSession && choice === fontChoice && editingFont.value)
+      fontImportError.value = '无法加载这份字体。请删除后重新导入。'
+  }
+}
+
+function removeImportedFont(entry: ImportedFont) {
+  fontChoice++
+  draft.importedFonts = draft.importedFonts?.filter((font) => font.family !== entry.family)
+  if (fontName.value === entry.family) fontName.value = ''
+}
+
+function useManualFont() {
+  const name = manualFont.value?.trim()
+  if (!name) return
+  chooseFont(name)
+  manualFont.value = null
+}
+
 async function importFont(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
@@ -278,31 +323,41 @@ async function importFont(event: Event) {
   if (!file) return
   fontImportError.value = ''
   const session = fontSession
+  const choice = ++fontChoice
   try {
-    if (!/\.(ttf|otf)$/i.test(file.name) || file.size > 25 * 1024 * 1024) throw new Error()
+    if (!/\.(ttf|otf|ttc)$/i.test(file.name) || file.size > 25 * 1024 * 1024) throw new Error()
     const bytes = new Uint8Array(await file.arrayBuffer())
-    let binary = ''
-    for (let offset = 0; offset < bytes.length; offset += 8192)
-      binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192))
-    const entry = { family: 'ctmd-font-' + crypto.randomUUID(), name: file.name, data: btoa(binary) }
-    await loadImportedFont(entry)
-    if (session !== fontSession || !editingFont.value) return
-    draft.importedFonts = [...(draft.importedFonts ?? []), entry]
+    const fileId = await fontFileId(bytes)
+    const existing = draft.importedFonts?.find((font) => 'fileId' in font && font.fileId === fileId)
+    const entry = existing ?? { family: 'ctmd-font-' + fileId, name: file.name, fileId }
+    await loadImportedFont(entry, readInterfaceFont, bytes)
+    if (session !== fontSession || choice !== fontChoice || !editingFont.value) return
+    if (!existing) {
+      stagedFonts.set(fileId, bytes)
+      draft.importedFonts = [...(draft.importedFonts ?? []), entry]
+    }
     fontName.value = entry.family
+    fontSearch.value = ''
+    if (existing) toast(`已导入「${entry.name}」。`)
   } catch {
-    if (session !== fontSession || !editingFont.value) return
-    fontImportError.value = '无法导入字体。请选择有效且不超过 25 MB 的 TTF 或 OTF 文件。'
+    if (session !== fontSession || choice !== fontChoice || !editingFont.value) return
+    fontImportError.value = '无法导入字体。请选择有效且不超过 25 MB 的 TTF、OTF 或 TTC 文件。'
   }
 }
-const fontNames = ref<string[]>([])
+const fontFamilies = ref<[string, ...string[]][]>([])
+const fontQuery = computed(() => fontSearch.value.trim().toLowerCase())
 const filteredFonts = computed(() =>
-  fontNames.value.filter((name) => name.toLowerCase().includes(fontSearch.value.trim().toLowerCase())),
+  fontFamilies.value.filter((names) => names.some((name) => name.toLowerCase().includes(fontQuery.value))),
 )
+const filteredImports = computed(
+  () => draft.importedFonts?.filter((entry) => entry.name.toLowerCase().includes(fontQuery.value)) ?? [],
+)
+const showDefaultFont = computed(() => '思源黑体（默认）'.includes(fontQuery.value))
 const fontListUnavailable = ref(false)
 async function listFonts() {
   try {
-    fontNames.value = (await listSystemFonts()).sort((a, b) => a.localeCompare(b))
-    fontListUnavailable.value = fontNames.value.length === 0
+    fontFamilies.value = (await listSystemFonts()).sort(([a], [b]) => a.localeCompare(b))
+    fontListUnavailable.value = fontFamilies.value.length === 0
   } catch {
     fontListUnavailable.value = true
   }
@@ -889,6 +944,7 @@ function revert() {
     if (!Object.hasOwn(snapshot, key)) Reflect.deleteProperty(draft, key)
   }
   Object.assign(draft, snapshot)
+  clearUnusedStagedFonts()
   for (const k of KINDS) {
     newKey[k] = ''
     resetPrice(k)
@@ -928,7 +984,16 @@ async function save(): Promise<boolean> {
       await ensureSubfolder(submitted.vaultPath, submitted.vault.subfolder.trim())
     if (submitted.vaultPath && notesRoot(submitted) !== savedRoot())
       submitted.domains = (await inspectCollection({ ...submitted, domains: defaultConfig().domains })).config.domains
+    for (const font of submitted.importedFonts ?? []) {
+      if (!('fileId' in font)) continue
+      const bytes = stagedFonts.get(font.fileId)
+      if (bytes && (await storeInterfaceFont(bytes)) !== font.fileId) throw new Error('字体文件校验失败。')
+    }
     await saveConfig(submitted)
+    for (const font of submitted.importedFonts ?? []) {
+      if ('fileId' in font) stagedFonts.delete(font.fileId)
+    }
+    clearUnusedStagedFonts()
     if (notesRoot(draft) === notesRoot(submitted)) draft.domains = submitted.domains
     saved.value = JSON.stringify(submitted)
     emit('saved', submitted)
@@ -1408,51 +1473,71 @@ onMounted(() => {
       @ok="editingFont = false"
     >
       <div class="custom-settings">
-        <div class="font-picker">
+        <div v-if="manualFont !== null" class="editor-toolbar">
+          <input
+            v-model="manualFont"
+            aria-label="字体名称"
+            maxlength="128"
+            placeholder="例如 PingFang SC"
+            @keydown.enter.stop.prevent="useManualFont"
+          />
+          <button type="button" class="soft" :disabled="!manualFont.trim()" @click="useManualFont">使用此字体</button>
+          <button type="button" class="soft" @click="manualFont = null">返回搜索</button>
+        </div>
+        <div v-else class="font-picker">
           <div class="editor-toolbar font-toolbar">
             <input v-model="fontSearch" type="search" placeholder="搜索本机和已导入字体" aria-label="搜索字体" />
             <button type="button" class="soft" @click="fontUpload?.click()">导入字体</button>
-            <input ref="fontUpload" hidden type="file" accept=".ttf,.otf" @change="importFont" />
+            <input ref="fontUpload" hidden type="file" accept=".ttf,.otf,.ttc" @change="importFont" />
           </div>
           <div ref="fontResults" class="font-results" aria-label="可选字体">
             <button
-              v-if="!fontSearch.trim() || '思源黑体（默认）'.includes(fontSearch.trim())"
+              v-if="showDefaultFont"
               type="button"
               class="settings-entry"
               :aria-pressed="!fontName"
-              @click="fontName = ''"
+              @click="chooseFont('')"
             >
               思源黑体（默认）<Check v-if="!fontName" :size="14" />
             </button>
+            <div v-for="font in filteredImports" :key="font.family" class="font-import-row">
+              <button
+                type="button"
+                class="settings-entry"
+                :aria-pressed="fontName === font.family"
+                @click="chooseImportedFont(font)"
+              >
+                {{ font.name }}<Check v-if="fontName === font.family" :size="14" />
+              </button>
+              <button
+                type="button"
+                class="chip-x"
+                :aria-label="`删除字体 ${font.name}`"
+                @click="removeImportedFont(font)"
+              >
+                <X :size="14" />
+              </button>
+            </div>
             <button
-              v-for="font in draft.importedFonts?.filter((entry) =>
-                entry.name.toLowerCase().includes(fontSearch.trim().toLowerCase()),
-              )"
-              :key="font.family"
-              type="button"
-              class="settings-entry"
-              :aria-pressed="fontName === font.family"
-              @click="fontName = font.family"
-            >
-              {{ font.name }}<Check v-if="fontName === font.family" :size="14" />
-            </button>
-            <button
-              v-for="font in filteredFonts"
+              v-for="[font, ...aliases] in filteredFonts"
               :key="font"
               type="button"
               class="settings-entry"
-              :aria-pressed="fontName === font"
-              @click="fontName = font"
+              :aria-pressed="fontName === font || aliases.includes(fontName)"
+              @click="chooseFont(font)"
             >
-              {{ font }}<Check v-if="fontName === font" :size="14" />
+              {{ font }}<Check v-if="fontName === font || aliases.includes(fontName)" :size="14" />
+            </button>
+            <p v-if="fontListUnavailable" class="entry-value">无法读取本机字体，仍可导入字体文件。</p>
+            <p v-else-if="!showDefaultFont && !filteredFonts.length && !filteredImports.length" class="entry-value">
+              未找到匹配的字体。
+            </p>
+            <button type="button" class="settings-entry" @click="manualFont = fontSearch.trim()">
+              手动输入字体名称
             </button>
           </div>
         </div>
         <p v-if="fontImportError" role="alert">{{ fontImportError }}</p>
-        <details v-if="fontListUnavailable || !filteredFonts.length">
-          <summary>输入已安装的字体名称</summary>
-          <input v-model="fontName" aria-label="字体名称" maxlength="128" placeholder="例如 PingFang SC" />
-        </details>
         <div class="font-preview">
           <p class="entry-value">字体预览</p>
           <div
@@ -1606,6 +1691,12 @@ onMounted(() => {
   padding-block: var(--sp-2);
   max-height: 11rem;
   overflow: auto;
+}
+.font-import-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-1);
 }
 .font-results button[aria-pressed='true'] {
   color: var(--accent);

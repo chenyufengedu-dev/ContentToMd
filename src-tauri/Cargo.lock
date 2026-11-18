@@ -536,11 +536,13 @@ dependencies = [
 name = "content-to-md"
 version = "1.1.0"
 dependencies = [
+ "base64 0.22.1",
  "clipboard-win",
  "gray_matter",
  "keyring",
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -551,7 +553,6 @@ dependencies = [
  "tempfile",
  "trash",
  "windows",
- "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -6,6 +6,7 @@ import { vPageFade } from './components/pageFade'
 import { type Config, parseConfig, notesRoot } from './core/config'
 import {
   listEditRecoveries,
+  readInterfaceFont,
   cleanupAttachmentParts,
   loadConfigJson,
   dirExists,
@@ -47,7 +48,7 @@ watch(
     const file = imported?.find((entry) => entry.family === font)
     if (file) {
       try {
-        await loadImportedFont(file)
+        await loadImportedFont(file, readInterfaceFont)
       } catch {
         font = undefined
       }

@@ -12,51 +12,80 @@ use std::fs;
 use std::path::PathBuf;
 
 #[tauri::command]
-fn list_system_fonts() -> Vec<String> {
+fn list_system_fonts() -> Result<Vec<Vec<String>>, String> {
     #[cfg(windows)]
     {
-        use std::{collections::BTreeSet, ptr::null_mut};
-        use windows_sys::Win32::Graphics::Gdi::{
-            EnumFontFamiliesExW, GetDC, ReleaseDC, DEFAULT_CHARSET, LOGFONTW, TEXTMETRICW,
+        use windows::core::{w, BOOL};
+        use windows::Win32::Graphics::DirectWrite::{
+            DWriteCreateFactory, IDWriteFactory, DWRITE_FACTORY_TYPE_SHARED,
         };
 
-        unsafe extern "system" fn collect(
-            font: *const LOGFONTW,
-            _: *const TEXTMETRICW,
-            _: u32,
-            data: isize,
-        ) -> i32 {
-            // GDI calls this synchronously with a valid font record and our set pointer.
-            let face = unsafe { &(*font).lfFaceName };
-            let end = face
-                .iter()
-                .position(|&unit| unit == 0)
-                .unwrap_or(face.len());
-            let name = String::from_utf16_lossy(&face[..end]);
-            if !name.is_empty() && !name.starts_with('@') {
-                unsafe { &mut *(data as *mut BTreeSet<String>) }.insert(name);
-            }
-            1
-        }
-
-        let mut fonts = BTreeSet::<String>::new();
-        let filter = LOGFONTW {
-            lfCharSet: DEFAULT_CHARSET,
-            ..Default::default()
+        // 系统字体集合提供每个字体家族的本地化名称，无需 WebView 授权。
+        let families = unsafe {
+            let factory: IDWriteFactory =
+                DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED).map_err(|e| e.to_string())?;
+            let mut collection = None;
+            factory
+                .GetSystemFontCollection(&mut collection, true)
+                .map_err(|e| e.to_string())?;
+            let collection = collection.ok_or("无法读取系统字体。")?;
+            (0..collection.GetFontFamilyCount())
+                .filter_map(|index| {
+                    let names = collection
+                        .GetFontFamily(index)
+                        .ok()?
+                        .GetFamilyNames()
+                        .ok()?;
+                    let mut english = 0;
+                    let mut exists = BOOL(0);
+                    let _ = names.FindLocaleName(w!("en-us"), &mut english, &mut exists);
+                    let preferred = if exists.as_bool() { english } else { 0 };
+                    let mut aliases = Vec::new();
+                    for index in std::iter::once(preferred)
+                        .chain((0..names.GetCount()).filter(|&i| i != preferred))
+                    {
+                        let Ok(length) = names.GetStringLength(index) else {
+                            continue;
+                        };
+                        let mut buffer = vec![0; length as usize + 1];
+                        if names.GetString(index, &mut buffer).is_ok() && length > 0 {
+                            let name = String::from_utf16_lossy(&buffer[..length as usize]);
+                            if !aliases.contains(&name) {
+                                aliases.push(name);
+                            }
+                        }
+                    }
+                    (!aliases.is_empty()).then_some(aliases)
+                })
+                .collect()
         };
-        // A null window gets the screen DC. Release it on the same thread.
-        unsafe {
-            let dc = GetDC(null_mut());
-            if !dc.is_null() {
-                EnumFontFamiliesExW(dc, &filter, Some(collect), &mut fonts as *mut _ as isize, 0);
-                ReleaseDC(null_mut(), dc);
-            }
-        }
-        fonts.into_iter().collect()
+        Ok(families)
     }
     #[cfg(not(windows))]
-    Vec::new()
+    Ok(Vec::new())
 }
+#[cfg(all(test, windows))]
+#[test]
+#[ignore = "在安装苹方的 Windows 验收机上执行"]
+fn directwrite_finds_installed_pingfang() {
+    let families = list_system_fonts().unwrap();
+    let pingfang: Vec<_> = families
+        .iter()
+        .filter(|family| {
+            family
+                .iter()
+                .any(|name| name.to_lowercase().contains("pingfang") || name.contains("苹方"))
+        })
+        .collect();
+    assert!(
+        pingfang.iter().any(|family| family
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case("PingFang SC"))),
+        "未发现 PingFang SC，已读到：{pingfang:?}"
+    );
+    println!("DirectWrite 字体名称：{pingfang:?}");
+}
+
 use tauri::Manager;
 use tauri_plugin_window_state::AppHandleExt;
 
@@ -81,6 +110,22 @@ fn load_config() -> Result<Option<String>, String> {
 #[tauri::command]
 fn save_config(json: String) -> Result<(), String> {
     config_store::save(&data_dir()?, &json)
+}
+
+#[tauri::command]
+fn store_interface_font(request: tauri::ipc::Request<'_>) -> Result<String, String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("字体数据格式不正确。".into());
+    };
+    config_store::store_font(&data_dir()?, bytes)
+}
+
+#[tauri::command]
+fn read_interface_font(id: String) -> Result<tauri::ipc::Response, String> {
+    Ok(tauri::ipc::Response::new(config_store::read_font(
+        &data_dir()?,
+        &id,
+    )?))
 }
 
 /// 收藏库文件夹是否存在
@@ -1919,6 +1964,8 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             list_system_fonts,
+            store_interface_font,
+            read_interface_font,
             clipboard::read_clipboard,
             clipboard::write_clipboard,
             destroy_window,

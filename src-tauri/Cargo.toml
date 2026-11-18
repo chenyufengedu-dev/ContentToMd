@@ -7,6 +7,8 @@ edition = "2021"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+base64 = "0.22"
+sha2 = "0.10"
 clipboard-win = "5.4"
 gray_matter = "0.3.2"
 keyring = { version = "3.6.3", features = ["windows-native"] }
@@ -22,8 +24,7 @@ trash = "5"
 tempfile = "3"
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.62.2", features = ["Win32_Storage_FileSystem"] }
-windows-sys = { version = "0.61.2", features = ["Win32_Graphics_Gdi"] }
+windows = { version = "0.62.2", features = ["Win32_Graphics_DirectWrite", "Win32_Storage_FileSystem"] }
 
 [profile.release]
 strip = true

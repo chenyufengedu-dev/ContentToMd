@@ -66,7 +66,12 @@ const ConfigSchema = z.object({
     .optional()
     .catch(undefined),
   importedFonts: z
-    .array(z.object({ family: z.string(), name: z.string(), data: z.string() }))
+    .array(
+      z.union([
+        z.object({ family: z.string(), name: z.string(), fileId: z.string().regex(/^[a-f0-9]{64}$/) }),
+        z.object({ family: z.string(), name: z.string(), data: z.string() }),
+      ]),
+    )
     .optional()
     .catch(undefined),
   promptOverrides: z

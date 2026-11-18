@@ -1,5 +1,12 @@
+use base64::Engine;
 use serde_json::Value;
-use std::{collections::BTreeMap, fs, path::Path, sync::Mutex};
+use sha2::{Digest, Sha256};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::{Path, PathBuf},
+    sync::Mutex,
+};
 
 static CONFIG_LOCK: Mutex<()> = Mutex::new(());
 
@@ -80,6 +87,93 @@ fn take_keys(config: &mut Value) -> Result<BTreeMap<String, String>, String> {
     Ok(keys)
 }
 
+fn font_path(dir: &Path, id: &str) -> Result<PathBuf, String> {
+    if id.len() != 64
+        || !id
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    {
+        return Err("字体文件编号无效。".into());
+    }
+    Ok(dir.join("fonts").join(id))
+}
+
+pub fn store_font(dir: &Path, bytes: &[u8]) -> Result<String, String> {
+    if bytes.len() > 25 * 1024 * 1024
+        || !matches!(
+            bytes.get(..4),
+            Some(b"\0\x01\0\0" | b"OTTO" | b"ttcf" | b"true")
+        )
+    {
+        return Err("字体文件格式无效或超过 25 MB。".into());
+    }
+    let id = format!("{:x}", Sha256::digest(bytes));
+    let path = font_path(dir, &id)?;
+    if !path.is_file() {
+        let folder = dir.join("fonts");
+        fs::create_dir_all(&folder).map_err(|e| format!("无法创建字体目录：{e}"))?;
+        let tmp = super::pending_file(&folder, bytes)?;
+        if let Err(error) = super::publish_new_file(&tmp, &path) {
+            if error.kind() != std::io::ErrorKind::AlreadyExists {
+                return Err(format!("无法保存字体文件：{error}"));
+            }
+        }
+    }
+    Ok(id)
+}
+
+pub fn read_font(dir: &Path, id: &str) -> Result<Vec<u8>, String> {
+    fs::read(font_path(dir, id)?).map_err(|e| format!("无法读取字体文件：{e}"))
+}
+
+fn migrate_fonts(dir: &Path, config: &mut Value) -> Result<bool, String> {
+    let Some(fonts) = config.get("importedFonts").and_then(Value::as_array) else {
+        return Ok(false);
+    };
+    if !fonts.iter().any(|font| font.get("data").is_some()) {
+        return Ok(false);
+    }
+    let mut entries: Vec<Value> = Vec::new();
+    let mut selected = config.get("interfaceFont").cloned();
+    for mut font in fonts.iter().cloned() {
+        if let Some(data) = font.get("data").and_then(Value::as_str) {
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(data)
+                .map_err(|_| "旧版字体文件无法读取。")?;
+            let id = store_font(dir, &bytes)?;
+            font["fileId"] = Value::String(id);
+            if let Some(object) = font.as_object_mut() {
+                object.remove("data");
+            }
+        }
+        if let Some(existing) = entries
+            .iter()
+            .find(|entry| entry["fileId"] == font["fileId"])
+        {
+            if selected.as_ref() == font.get("family") {
+                selected = existing.get("family").cloned();
+            }
+        } else {
+            entries.push(font);
+        }
+    }
+    config["importedFonts"] = Value::Array(entries);
+    if let Some(selected) = selected {
+        config["interfaceFont"] = selected;
+    }
+    Ok(true)
+}
+
+fn font_ids(config: &Value) -> BTreeSet<&str> {
+    config
+        .get("importedFonts")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|font| font.get("fileId").and_then(Value::as_str))
+        .collect()
+}
+
 fn load_at(dir: &Path, secrets: &impl Secrets) -> Result<Option<String>, String> {
     let json = match fs::read_to_string(dir.join("config.json")) {
         Ok(json) => json,
@@ -93,9 +187,16 @@ fn load_at(dir: &Path, secrets: &impl Secrets) -> Result<Option<String>, String>
         Some(json) => serde_json::from_str(json).map_err(|_| "凭据中的密钥格式不正确。")?,
         None => BTreeMap::new(),
     };
+    // 迁移失败时仍可按旧格式加载，不影响打开其它设置。
+    let migrated = migrate_fonts(dir, &mut config).unwrap_or(false);
     if !legacy.is_empty() {
         keys.extend(legacy);
         persist(dir, &config, &keys, previous.as_deref(), secrets)?;
+    } else if migrated {
+        write_config(
+            dir,
+            &serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?,
+        )?;
     }
     if let Some(services) = config.get_mut("services").and_then(Value::as_object_mut) {
         for (kind, service) in services {
@@ -113,8 +214,19 @@ fn load_at(dir: &Path, secrets: &impl Secrets) -> Result<Option<String>, String>
 fn save_at(dir: &Path, json: &str, secrets: &impl Secrets) -> Result<(), String> {
     let mut config = parse(json)?;
     let keys = take_keys(&mut config)?;
+    migrate_fonts(dir, &mut config)?;
+    let current = fs::read_to_string(dir.join("config.json"))
+        .ok()
+        .and_then(|json| parse(&json).ok())
+        .unwrap_or_default();
     let previous = secrets.read()?;
-    persist(dir, &config, &keys, previous.as_deref(), secrets)
+    persist(dir, &config, &keys, previous.as_deref(), secrets)?;
+    for id in font_ids(&current).difference(&font_ids(&config)) {
+        if let Ok(path) = font_path(dir, id) {
+            let _ = fs::remove_file(path);
+        }
+    }
+    Ok(())
 }
 
 fn persist(
@@ -351,5 +463,36 @@ mod tests {
         assert!(credential.unwrap().contains("test-only-text"));
         assert!(!disk.contains("apiKey"));
         assert_eq!(secrets.read().unwrap(), None);
+    }
+    #[test]
+    fn legacy_font_moves_to_file_and_delete_waits_for_successful_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let secrets = FakeSecrets::default();
+        let font =
+            serde_json::json!({"family":"ctmd-font-old","name":"old.ttf","data":"AAEAAHRlc3Q="});
+        let duplicate =
+            serde_json::json!({"family":"ctmd-font-copy","name":"copy.ttf","data":"AAEAAHRlc3Q="});
+        let old =
+            serde_json::json!({"interfaceFont":"ctmd-font-copy","importedFonts":[font, duplicate]});
+        fs::write(dir.path().join("config.json"), old.to_string()).unwrap();
+        let config: Value =
+            serde_json::from_str(&load_at(dir.path(), &secrets).unwrap().unwrap()).unwrap();
+        let asset = config["importedFonts"][0]["fileId"]
+            .as_str()
+            .expect("配置只保留字体文件引用");
+        let path = dir.path().join("fonts").join(asset);
+        assert_eq!(config["importedFonts"].as_array().unwrap().len(), 1);
+        assert_eq!(fs::read_dir(dir.path().join("fonts")).unwrap().count(), 1);
+        assert_eq!(fs::read(&path).unwrap(), b"\x00\x01\x00\x00test");
+        assert!(!fs::read_to_string(dir.path().join("config.json"))
+            .unwrap()
+            .contains("AAEAAHRlc3Q="));
+        assert_eq!(config["interfaceFont"], "ctmd-font-old");
+        fs::create_dir(dir.path().join("config.json.tmp")).unwrap();
+        assert!(save_at(dir.path(), "{}", &secrets).is_err());
+        assert!(path.is_file());
+        fs::remove_dir(dir.path().join("config.json.tmp")).unwrap();
+        save_at(dir.path(), "{}", &secrets).unwrap();
+        assert!(!path.exists());
     }
 }
