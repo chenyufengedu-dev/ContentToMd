@@ -45,6 +45,8 @@ export const defaultCollectionFolder = (create = false) => invoke<string>('defau
 
 export const loadConfigJson = () => invoke<string | null>('load_config')
 export const listSystemFonts = () => invoke<string[]>('list_system_fonts')
+export const renameDomain = (root: string | null, old: string, name: string, config: Config) =>
+  invoke<void>('rename_domain', { root, old, new: name, json: JSON.stringify(config, null, 2) })
 export const saveConfig = (c: Config) => invoke<void>('save_config', { json: JSON.stringify(c, null, 2) })
 export const dirExists = (path: string) => invoke<boolean>('dir_exists', { path })
 export const folderHasNotes = (path: string) => invoke<boolean>('folder_has_notes', { path })

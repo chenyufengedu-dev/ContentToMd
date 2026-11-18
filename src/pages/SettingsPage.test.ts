@@ -7,6 +7,7 @@ import { DEFAULT_PROMPTS, editablePromptText } from '../core/defaultPrompts'
 import {
   saveConfig,
   countDomainNotes,
+  renameDomain,
   deleteDomain,
   restoreDomain,
   guardClose,
@@ -30,6 +31,7 @@ vi.mock('../shell/tauri', () => ({
   pickFolder: vi.fn(),
   writeClipboard: vi.fn(),
   countDomainNotes: vi.fn(),
+  renameDomain: vi.fn().mockResolvedValue(undefined),
   deleteDomain: vi.fn(),
   restoreDomain: vi.fn(),
   httpFetch: vi.fn(),
@@ -498,4 +500,30 @@ it.each([undefined, 'Arial'])('撤销字体修改后恢复已保存的字体 %s'
   await nextTick()
   expect(pending).toHaveBeenLastCalledWith(false)
   expect(root.querySelector('[data-card=appearance] .entry-value')?.textContent).toBe(original ?? '思源黑体（默认）')
+})
+
+it('领域改名失败保留旧配置，成功后才更新名称', async () => {
+  const { root, saved } = await mount(undefined, (config) => (config.vaultPath = '隔离收藏库'))
+  const click = async (scope: ParentNode, label: string) => {
+    ;[...scope.querySelectorAll('button')].find((button) => button.textContent?.trim() === label)!.click()
+    await nextTick()
+    await nextTick()
+  }
+  await click(root, '为人处世')
+  const field = root.querySelector<HTMLInputElement>('.domains input')!
+  field.value = '读书笔记'
+  field.dispatchEvent(new Event('input', { bubbles: true }))
+  vi.mocked(renameDomain).mockRejectedValueOnce(new Error('目标已存在'))
+  await click(root.querySelector('.domains')!, '确定')
+  expect(root.textContent).toContain('目标已存在')
+  expect(saved).not.toHaveBeenCalled()
+  await click(root.querySelector('.domains')!, '确定')
+  expect(renameDomain).toHaveBeenLastCalledWith(
+    '隔离收藏库',
+    '为人处世',
+    '读书笔记',
+    expect.objectContaining({ domains: expect.arrayContaining([{ id: 1, name: '读书笔记' }]) }),
+  )
+  expect(root.querySelector('[aria-label="删除领域 读书笔记"]')).not.toBeNull()
+  expect(saved).toHaveBeenCalledTimes(1)
 })

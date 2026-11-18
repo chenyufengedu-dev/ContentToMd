@@ -28,6 +28,7 @@ import {
   saveConfig,
   pickFolder,
   countDomainNotes,
+  renameDomain,
   deleteDomain,
   restoreDomain,
   httpFetch,
@@ -748,9 +749,26 @@ async function finishRename() {
   const err = checkDomainName(editingName.value, draft.domains, d.id)
   domainError.value = err
   if (err) return
-  d.name = editingName.value.trim()
-  editingId.value = null
-  if (await persistDomains()) toast(`领域已改名为「${d.name}」。`)
+  const name = editingName.value.trim()
+  if (name === d.name) {
+    editingId.value = null
+    return
+  }
+  const base = JSON.parse(saved.value) as Config
+  base.domains = base.domains.map((entry) => (entry.id === d.id ? { ...entry, name } : entry))
+  domainBusy.value = true
+  try {
+    await renameDomain(base.vaultPath ? notesRoot(base) : null, d.name, name, base)
+    d.name = name
+    saved.value = JSON.stringify(base)
+    editingId.value = null
+    emit('saved', base)
+    toast(`领域已改名为「${name}」。`)
+  } catch (e) {
+    domainError.value = `领域改名失败：${String(e)}`
+  } finally {
+    domainBusy.value = false
+  }
 }
 
 /** 确认一次后文件夹进回收站、领域马上从列表里去掉，几秒内可以撤销 */

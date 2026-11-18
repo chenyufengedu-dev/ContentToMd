@@ -1373,6 +1373,219 @@ struct DeletedDomain {
     existed: bool,
 }
 
+fn note_with_domain(text: &str, domain: &str) -> Result<String, String> {
+    let value = serde_json::to_string(domain).map_err(|e| e.to_string())?;
+    let newline = if text.contains("\r\n") { "\r\n" } else { "\n" };
+    let Some(fm) = split_frontmatter(text) else {
+        let body = text.trim_start_matches('\u{feff}');
+        if body
+            .lines()
+            .next()
+            .is_some_and(|line| line.trim_end() == "---")
+        {
+            return Err("笔记属性未闭合，无法修改领域".into());
+        }
+        let bom = &text[..text.len() - body.len()];
+        return Ok(format!(
+            "{bom}---{newline}domain: {value}{newline}---{newline}{body}"
+        ));
+    };
+    let mut attributes = String::new();
+    let mut found = false;
+    for line in fm.split_inclusive('\n') {
+        let domain_line = line.split_once(':').filter(|(key, _)| {
+            !key.starts_with([' ', '\t'])
+                && matches!(key.trim_end(), "domain" | "\"domain\"" | "'domain'")
+        });
+        if let Some((_, before)) = domain_line {
+            if found || before.trim_start().starts_with(['|', '>']) {
+                return Err("笔记包含重复或多行领域属性，无法安全修改".into());
+            }
+            found = true;
+            attributes.push_str(&format!("domain: {value}{newline}"));
+        } else {
+            attributes.push_str(line);
+        }
+    }
+    if !found {
+        attributes.insert_str(0, &format!("domain: {value}{newline}"));
+    }
+    let start = text.len() - text.trim_start_matches('\u{feff}').len()
+        + text.trim_start_matches('\u{feff}').find('\n').unwrap()
+        + 1;
+    let updated = format!(
+        "{}{}{}",
+        &text[..start],
+        attributes,
+        &text[start + fm.len()..]
+    );
+    let parsed = gray_matter::Matter::<gray_matter::engine::YAML>::new()
+        .parse::<serde_json::Value>(&updated)
+        .map_err(|e| format!("笔记属性无法读取：{e}"))?;
+    if parsed
+        .data
+        .as_ref()
+        .and_then(|meta| meta.get("domain"))
+        .and_then(|value| value.as_str())
+        != Some(domain)
+    {
+        return Err("无法确认笔记的领域属性已更新".into());
+    }
+    Ok(updated)
+}
+
+fn rename_domain_at(
+    root: &std::path::Path,
+    old: &str,
+    new: &str,
+    persist: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    check_segment(old)?;
+    check_segment(new)?;
+    let from = root.join(old);
+    let to = root.join(new);
+    ensure_inside(root, &to)?;
+    match fs::symlink_metadata(&to) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(io_msg(&to, e)),
+        Ok(_) => return Err(format!("「{new}」文件夹已存在。")),
+    }
+    let metadata = match fs::symlink_metadata(&from) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return persist(),
+        Err(e) => return Err(io_msg(&from, e)),
+        Ok(metadata) => metadata,
+    };
+    ensure_inside(root, &from)?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err("原领域不是普通文件夹。".into());
+    }
+    let staging = tempfile::Builder::new()
+        .prefix(".domain-rename-")
+        .tempdir_in(root)
+        .map_err(|e| io_msg(root, e))?;
+    let originals = staging.path().join("original");
+    let replacements = staging.path().join("updated");
+    fs::create_dir(&originals).map_err(|e| io_msg(&originals, e))?;
+    fs::create_dir(&replacements).map_err(|e| io_msg(&replacements, e))?;
+    let mut notes = Vec::new();
+    for entry in fs::read_dir(&from).map_err(|e| io_msg(&from, e))? {
+        let entry = entry.map_err(|e| io_msg(&from, e))?;
+        let path = entry.path();
+        if !path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+        {
+            continue;
+        }
+        let file_type = entry.file_type().map_err(|e| io_msg(&path, e))?;
+        if !file_type.is_file() {
+            if file_type.is_symlink() {
+                return Err(format!("无法安全修改链接笔记：{}", path.display()));
+            }
+            continue;
+        }
+        ensure_inside(root, &path)?;
+        let original = fs::read_to_string(&path).map_err(|e| io_msg(&path, e))?;
+        let updated = note_with_domain(&original, new)
+            .map_err(|e| format!("无法修改「{}」：{e}", path.display()))?;
+        let backup = originals.join(entry.file_name());
+        let replacement = replacements.join(entry.file_name());
+        fs::write(&backup, original).map_err(|e| io_msg(&backup, e))?;
+        fs::write(&replacement, updated).map_err(|e| io_msg(&replacement, e))?;
+        notes.push((entry.file_name(), backup, replacement));
+    }
+    publish_new_file(&from, &to).map_err(|e| io_msg(&to, e))?;
+    let mut written = 0;
+    let result = (|| {
+        for (name, backup, replacement) in &notes {
+            let target = to.join(name);
+            let original = fs::read_to_string(backup).map_err(|e| io_msg(backup, e))?;
+            check_note_unchanged(&target, &original)?;
+            fs::rename(replacement, &target).map_err(|e| io_msg(&target, e))?;
+            written += 1;
+        }
+        persist()
+    })();
+    if let Err(error) = result {
+        let mut rollback_errors = Vec::new();
+        for (name, backup, _) in notes[..written].iter().rev() {
+            let target = to.join(name);
+            let restored = fs::read(backup)
+                .map_err(|e| io_msg(backup, e))
+                .and_then(|bytes| pending_file(staging.path(), &bytes))
+                .and_then(|tmp| fs::rename(&tmp, &target).map_err(|e| io_msg(&target, e)));
+            if let Err(e) = restored {
+                rollback_errors.push(e);
+            }
+        }
+        if let Err(e) = publish_new_file(&to, &from) {
+            rollback_errors.push(io_msg(&from, e));
+        }
+        if !rollback_errors.is_empty() {
+            return Err(format!(
+                "{error}；自动回退失败：{}。原始笔记备份保留在「{}」。",
+                rollback_errors.join("；"),
+                staging.keep().display()
+            ));
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn rename_domain(
+    root: Option<String>,
+    old: String,
+    new: String,
+    json: String,
+) -> Result<(), String> {
+    let dir = data_dir()?;
+    let persist = || config_store::save(&dir, &json);
+    match root {
+        Some(root) => rename_domain_at(std::path::Path::new(&root), &old, &new, persist),
+        None => persist(),
+    }
+}
+
+#[test]
+fn domain_rename_updates_notes_and_rolls_back_on_config_failure() {
+    let vault = tempfile::tempdir().unwrap();
+    let root = vault.path();
+    fs::create_dir(root.join("旧领域")).unwrap();
+    let original = "---\r\ntitle: A\r\ndomain: 旧领域\r\ntags: [a]\r\n---\r\n正文\r\n";
+    fs::write(root.join("旧领域/a.md"), original).unwrap();
+    let updated = original.replace("domain: 旧领域", "domain: \"新领域\"");
+    let result = rename_domain_at(root, "旧领域", "新领域", || {
+        assert_eq!(
+            fs::read_to_string(root.join("新领域/a.md")).unwrap(),
+            updated
+        );
+        Err("模拟配置写入失败".into())
+    });
+    assert!(result.unwrap_err().contains("模拟配置写入失败"));
+    assert!(!root.join("新领域").exists());
+    assert_eq!(
+        fs::read_to_string(root.join("旧领域/a.md")).unwrap(),
+        original
+    );
+
+    fs::create_dir(root.join("新领域")).unwrap();
+    assert!(rename_domain_at(root, "旧领域", "新领域", || panic!("不应提交配置")).is_err());
+    assert_eq!(
+        fs::read_to_string(root.join("旧领域/a.md")).unwrap(),
+        original
+    );
+    fs::remove_dir(root.join("新领域")).unwrap();
+
+    rename_domain_at(root, "旧领域", "新领域", || Ok(())).unwrap();
+    assert!(!root.join("旧领域").exists());
+    assert_eq!(
+        fs::read_to_string(root.join("新领域/a.md")).unwrap(),
+        updated
+    );
+}
+
 fn delete_domain_at(root: &std::path::Path, domain: &str) -> Result<DeletedDomain, String> {
     check_segment(domain)?;
     if domain == "附件" || domain.starts_with('.') {
@@ -1664,6 +1877,7 @@ fn main() {
             delete_note,
             restore_note,
             count_domain_notes,
+            rename_domain,
             delete_domain,
             restore_domain,
             draft_write,
