@@ -367,32 +367,41 @@ async function organizeInChunks(
       '\n\n分段规则：若用户明确限定保留范围，逐条判断句子、列表项和表格行。仅保留直接回答要求的内容，以及影响其含义的适用对象、条件和例外；同段有一条命中也要逐条筛选。整段无相关内容时，只返回 JSON {"skip":true}。若用户只要求调整措辞、术语或格式，保留原文全部信息。'
     : system
   let done = Object.keys(results).length
-  await mapPool(chunks, CONCURRENCY, async (chunk, i) => {
-    if (results[i]) return
-    const user = buildUserMessage(
-      `${sourceDesc(job)}，长文的第 ${i + 1}/${chunks.length} 段，只整理这一段（标题、摘要按这一段写，小标题接着前文）`,
-      chunk,
-      extra,
-    )
-    for (let attempt = 0; ; attempt++) {
-      try {
-        // 打字机预览只跟第一块
-        const raw = await askJson(job, ctx, step, 'text', chunkSystem, user, i === 0 ? onText : undefined)
-        if (request && raw && typeof raw === 'object' && 'skip' in raw && raw.skip === true) {
-          results[i] = 'skip'
-        } else {
-          const parsed = requireDraft(raw, ctx)
-          if (attempt === 0 && !request && isCondensed(chunk.length, parsed.draft.body.length)) continue
-          results[i] = { draft: parsed.draft, domainFallback: parsed.domainFallback }
+  const controller = new AbortController()
+  const cancel = ctx.cancel ? AbortSignal.any([ctx.cancel, controller.signal]) : controller.signal
+  const chunkContext = { ...ctx, cancel }
+  await mapPool(
+    chunks,
+    CONCURRENCY,
+    async (chunk, i) => {
+      if (results[i]) return
+      const user = buildUserMessage(
+        `${sourceDesc(job)}，长文的第 ${i + 1}/${chunks.length} 段，只整理这一段（标题、摘要按这一段写，小标题接着前文）`,
+        chunk,
+        extra,
+      )
+      for (let attempt = 0; ; attempt++) {
+        try {
+          // 打字机预览只跟第一块
+          const raw = await askJson(job, chunkContext, step, 'text', chunkSystem, user, i === 0 ? onText : undefined)
+          if (cancel.aborted) throw new AppError('cancelled', '已取消')
+          if (request && raw && typeof raw === 'object' && 'skip' in raw && raw.skip === true) {
+            results[i] = 'skip'
+          } else {
+            const parsed = requireDraft(raw, ctx)
+            if (attempt === 0 && !request && isCondensed(chunk.length, parsed.draft.body.length)) continue
+            results[i] = { draft: parsed.draft, domainFallback: parsed.domainFallback }
+          }
+          step.note = `已完成 ${++done}/${chunks.length} 段`
+          ctx.onUpdate()
+          return
+        } catch (e) {
+          if (!isAppError(e, 'format') || attempt >= 1) throw e
         }
-        step.note = `已完成 ${++done}/${chunks.length} 段`
-        ctx.onUpdate()
-        return
-      } catch (e) {
-        if (!isAppError(e, 'format') || attempt >= 1) throw e
       }
-    }
-  })
+    },
+    () => controller.abort(),
+  )
   const parts = chunks.map((_, i) => results[i]).filter((part) => part !== 'skip')
   const first = parts[0]
   if (!first) throw new AppError('no_text', '未找到符合本次要求的内容，请调整要求后重试。')

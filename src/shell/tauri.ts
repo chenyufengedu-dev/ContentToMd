@@ -162,15 +162,27 @@ export const removeAttachment = (vault: string, relPath: string) =>
   invoke<void>('remove_attachment', { vault, relPath })
 
 // 草稿（F10）：draft.json 和图片原文件，见 core/draft.ts
-const putDraftFile = async (name: string, data: Blob) =>
-  invoke<void>('draft_write', new Uint8Array(await data.arrayBuffer()), {
-    headers: { name: encodeURIComponent(name) },
+let draftGeneration = 0
+let draftIo: Promise<unknown> = Promise.resolve()
+function queueDraftIo(operation: () => Promise<void>) {
+  const next = draftIo.then(operation)
+  draftIo = next.catch(() => {})
+  return next
+}
+async function putDraftFile(generation: number, name: string, data: Blob) {
+  if (generation !== draftGeneration) return
+  const bytes = new Uint8Array(await data.arrayBuffer())
+  await queueDraftIo(async () => {
+    if (generation === draftGeneration)
+      await invoke<void>('draft_write', bytes, { headers: { name: encodeURIComponent(name) } })
   })
+}
 /** withFiles：连图片原文件一起存（只在任务刚开始时存一次，之后只更新 draft.json） */
 export async function saveDraft(job: Job, withFiles = false): Promise<void> {
+  const generation = draftGeneration
   const { data, files } = toDraft(job)
-  if (withFiles) for (const f of files) await putDraftFile(f.name, f.blob)
-  await putDraftFile(DRAFT_JSON, new Blob([JSON.stringify(data)]))
+  if (withFiles) for (const f of files) await putDraftFile(generation, f.name, f.blob)
+  await putDraftFile(generation, DRAFT_JSON, new Blob([JSON.stringify(data)]))
 }
 /** 没有草稿时返回 null */
 export async function loadDraft(): Promise<{ data: DraftData; files: Record<string, Blob> } | null> {
@@ -182,7 +194,10 @@ export async function loadDraft(): Promise<{ data: DraftData; files: Record<stri
   for (const n of names.filter((n) => n !== DRAFT_JSON)) files[n] = await read(n)
   return { data, files }
 }
-export const clearDraft = () => invoke<void>('draft_clear')
+export function clearDraft() {
+  draftGeneration++
+  return queueDraftIo(() => invoke<void>('draft_clear'))
+}
 
 // 费用记录（F14）：usage.jsonl，一次调用一行
 export const appendUsage = (r: UsageRecord) => invoke<void>('usage_append', { line: JSON.stringify(r) })

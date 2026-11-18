@@ -339,3 +339,22 @@ describe('runJob：图片', () => {
     expect(job.draft).toMatchObject({ body: `${CLEANED}\n${CLEANED}`, summary: '', tags: [], keywords: [] })
   })
 })
+it('长文一段失败后会取消其他分段请求', async () => {
+  const job = newTextJob('long.md', '这一段是需要保留的会议记录。\n\n'.repeat(500), '原文精修')
+  const signals: AbortSignal[] = []
+  const fetch: Fetch = async (_url, init) => {
+    signals.push(init!.signal!)
+    if (signals.length === 1) return chatStatus(400)()
+    return new Promise((_resolve, reject) => {
+      init!.signal!.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true })
+    })
+  }
+  const controller = new AbortController()
+  try {
+    await expect(runJob(job, { ...ctx(fetch), cancel: controller.signal })).rejects.toBeDefined()
+    expect(signals.length).toBeGreaterThan(1)
+    expect(signals.slice(1).every((signal) => signal.aborted)).toBe(true)
+  } finally {
+    controller.abort()
+  }
+})

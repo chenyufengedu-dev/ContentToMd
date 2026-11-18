@@ -593,11 +593,12 @@ const recoveryError = ref('')
 let recoveryPath = props.edit?.path ?? ''
 let recoveryTimer: number | undefined
 let recoveryDiscarded = false
+let recoveryWrite: Promise<void> | undefined
 function reportRecoveryError(error: unknown) {
   recoveryError.value = `本地恢复副本未能更新：${String(error)}。请检查磁盘空间或权限。`
 }
 function persistRecovery(): Promise<void> {
-  if (!props.edit || recoveryDiscarded || baseline.value === null) return Promise.resolve()
+  if (!props.edit || recoveryDiscarded || saving.value || baseline.value === null) return Promise.resolve()
   const root = notesRoot(props.config)
   const operation = dirty.value
     ? saveEditRecovery({
@@ -618,14 +619,18 @@ function persistRecovery(): Promise<void> {
         })),
       })
     : clearEditRecovery(root, recoveryPath)
-  return operation.then(() => {
+  const write = operation.then(() => {
     recoveryError.value = ''
   }, reportRecoveryError)
+  recoveryWrite = write
+  return write.finally(() => {
+    if (recoveryWrite === write) recoveryWrite = undefined
+  })
 }
 watch(
   () => [bodyTick.value, snapshot()],
   () => {
-    if (!props.edit || recoveryDiscarded || recoveryTimer !== undefined) return
+    if (!props.edit || recoveryDiscarded || saving.value || recoveryTimer !== undefined) return
     // 连续输入也定期写检查点，不因每次按键重置计时而一直推迟。
     recoveryTimer = window.setTimeout(() => {
       recoveryTimer = undefined
@@ -949,11 +954,12 @@ async function saveEdit(e: EditInfo) {
     const md = buildMarkdown(submitted, meta, images, attachments)
     // 文件名跟着标题走；标题没改过就不动文件名（笔记可能重名时加过日期，或在 Obsidian 里改过名）
     const stem = title === savedTitle ? e.stem : safeFileTitle(title)
+    if (recoveryWrite) await recoveryWrite
     const rel = await saveNote(root, e.path, domain, stem, md, savedFileContent)
     savedFileContent = md
     const previousRecoveryPath = recoveryPath
     recoveryPath = rel
-    void clearEditRecovery(root, previousRecoveryPath).catch(reportRecoveryError)
+    await clearEditRecovery(root, previousRecoveryPath).catch(reportRecoveryError)
     if (props.job.type === '视频') {
       const added = images.slice(images.length - videoFrames.value.length)
       for (const [i, frame] of videoFrames.value.entries())
@@ -1029,8 +1035,14 @@ async function save(videoChoice?: boolean) {
   saving.value = true
   saveError.value = null
   if (props.edit) {
-    await saveEdit(props.edit)
-    saving.value = false
+    window.clearTimeout(recoveryTimer)
+    recoveryTimer = undefined
+    try {
+      await saveEdit(props.edit)
+    } finally {
+      saving.value = false
+      if (dirty.value) void persistRecovery()
+    }
     return
   }
   const title = form.title.trim()

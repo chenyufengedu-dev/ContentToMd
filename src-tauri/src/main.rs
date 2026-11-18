@@ -202,17 +202,39 @@ fn draft_dir() -> Result<PathBuf, String> {
     Ok(data_dir()?.join("drafts").join("current"))
 }
 
-/// 先写临时文件再改名，写到一半崩溃也不会留下坏掉的草稿
+/// 读取最近一次完整发布的草稿文件，旧版草稿仍可恢复。
+fn latest_draft_file(dir: &std::path::Path, name: &str) -> (u64, PathBuf) {
+    fs::read_dir(dir.join(".versions").join(name))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| {
+            Some((
+                entry.file_name().to_str()?.parse::<u64>().ok()?,
+                entry.path(),
+            ))
+        })
+        .max_by_key(|(number, _)| *number)
+        .unwrap_or_else(|| (0, dir.join(name)))
+}
+
 fn put_draft_file(dir: &std::path::Path, name: &str, bytes: &[u8]) -> Result<(), String> {
     check_segment(name)?;
-    fs::create_dir_all(dir).map_err(|e| io_msg(dir, e))?;
-    let target = dir.join(name);
-    let tmp = dir.join(format!(".{name}.tmp"));
-    fs::write(&tmp, bytes).map_err(|e| io_msg(&tmp, e))?;
-    fs::rename(&tmp, &target).map_err(|e| {
-        let _ = fs::remove_file(&tmp);
-        io_msg(&target, e)
-    })
+    let versions = dir.join(".versions").join(name);
+    fs::create_dir_all(&versions).map_err(|e| io_msg(&versions, e))?;
+    let tmp = pending_file(&versions, bytes)?;
+    loop {
+        let (number, previous) = latest_draft_file(dir, name);
+        let target = versions.join((number + 1).to_string());
+        match publish_new_file(&tmp, &target) {
+            Ok(()) => {
+                let _ = fs::remove_file(previous);
+                return Ok(());
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(io_msg(&target, e)),
+        }
+    }
 }
 
 fn list_draft_files(dir: &std::path::Path) -> Vec<String> {
@@ -224,7 +246,16 @@ fn list_draft_files(dir: &std::path::Path) -> Vec<String> {
         .filter_map(|e| e.file_name().into_string().ok())
         .filter(|n| !n.starts_with('.'))
         .collect();
+    if let Ok(versions) = fs::read_dir(dir.join(".versions")) {
+        names.extend(
+            versions
+                .flatten()
+                .filter_map(|e| e.file_name().into_string().ok())
+                .filter(|name| latest_draft_file(dir, name).0 > 0),
+        );
+    }
     names.sort();
+    names.dedup();
     names
 }
 
@@ -251,7 +282,7 @@ fn draft_list() -> Result<Vec<String>, String> {
 #[tauri::command]
 fn draft_read(name: String) -> Result<tauri::ipc::Response, String> {
     check_segment(&name)?;
-    let path = draft_dir()?.join(&name);
+    let (_, path) = latest_draft_file(&draft_dir()?, &name);
     let bytes = fs::read(&path).map_err(|e| io_msg(&path, e))?;
     Ok(tauri::ipc::Response::new(bytes))
 }
@@ -300,7 +331,10 @@ fn write_edit_recovery_at(
         return Ok(());
     }
     let bytes = serde_json::to_vec(&records).map_err(|_| "无法保存笔记恢复副本".to_string())?;
-    put_draft_file(dir, "note-edits.json", &bytes)
+    fs::create_dir_all(dir).map_err(|e| io_msg(dir, e))?;
+    let tmp = pending_file(dir, &bytes)?;
+    let target = dir.join("note-edits.json");
+    fs::rename(&tmp, &target).map_err(|e| io_msg(&target, e))
 }
 
 #[tauri::command]
@@ -388,6 +422,92 @@ fn ensure_inside(root: &std::path::Path, path: &std::path::Path) -> Result<(), S
 }
 
 /// 写入笔记：收藏库/领域/标题.md；重名时依次尝试 标题-日期.md、标题-日期-2.md……绝不覆盖（方案第 10.4 节）。
+fn publish_new_file(tmp: &std::path::Path, target: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows::core::PCWSTR;
+        use windows::Win32::Storage::FileSystem::{MoveFileExW, MOVE_FILE_FLAGS};
+        let from: Vec<_> = tmp.as_os_str().encode_wide().chain(Some(0)).collect();
+        let to: Vec<_> = target.as_os_str().encode_wide().chain(Some(0)).collect();
+        unsafe {
+            MoveFileExW(
+                PCWSTR(from.as_ptr()),
+                PCWSTR(to.as_ptr()),
+                MOVE_FILE_FLAGS(0),
+            )
+        }
+        .map_err(|e| std::io::Error::from_raw_os_error(e.code().0 & 0xffff))
+    }
+    #[cfg(not(windows))]
+    {
+        fs::hard_link(tmp, target)?;
+        let _ = fs::remove_file(tmp);
+        Ok(())
+    }
+}
+
+fn pending_file(dir: &std::path::Path, bytes: &[u8]) -> Result<tempfile::TempPath, String> {
+    use std::io::Write;
+    let mut file = tempfile::Builder::new()
+        .prefix(".pending-")
+        .suffix(".tmp")
+        .tempfile_in(dir)
+        .map_err(|e| io_msg(dir, e))?;
+    file.write_all(bytes).map_err(|e| io_msg(dir, e))?;
+    Ok(file.into_temp_path())
+}
+
+fn publish_numbered(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    tmp: &std::path::Path,
+    name: impl Fn(u32) -> String,
+) -> Result<String, String> {
+    for n in 1.. {
+        let file = name(n);
+        let target = dir.join(&file);
+        ensure_inside(root, &target)?;
+        match publish_new_file(tmp, &target) {
+            Ok(()) => return Ok(file),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(io_msg(&target, e)),
+        }
+    }
+    unreachable!()
+}
+
+fn numbered_filename(name: &str, n: u32) -> String {
+    if n == 1 {
+        return name.to_string();
+    }
+    match name.rsplit_once('.') {
+        Some((stem, ext)) => format!("{stem}-{n}.{ext}"),
+        None => format!("{name}-{n}"),
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn publishing_new_file_preserves_existing_destination() {
+    let dir = std::env::temp_dir().join(format!("contenttomd-publish-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let tmp = dir.join("pending");
+    let target = dir.join("existing");
+    fs::write(&tmp, "new").unwrap();
+    fs::write(&target, "existing").unwrap();
+    let result = publish_new_file(&tmp, &target);
+    let existing = fs::read_to_string(&target).unwrap();
+    let pending = fs::read_to_string(&tmp).ok();
+    fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(existing, "existing");
+    assert_eq!(pending.as_deref(), Some("new"));
+    assert_eq!(
+        result.unwrap_err().kind(),
+        std::io::ErrorKind::AlreadyExists
+    );
+}
+
 /// 先写临时文件再改名（方案第 10.5 节）。返回相对收藏库的路径
 #[tauri::command]
 fn write_note(
@@ -410,25 +530,12 @@ fn write_note(
     let dir = vault.join(&domain);
     ensure_inside(&vault, &dir)?;
     fs::create_dir_all(&dir).map_err(|e| io_msg(&dir, e))?;
-    let mut name = format!("{title}.md");
-    let mut n = 1;
-    while dir.join(&name).exists() {
-        name = if n == 1 {
-            format!("{title}-{date}.md")
-        } else {
-            format!("{title}-{date}-{n}.md")
-        };
-        n += 1;
-    }
-    let target = dir.join(&name);
-    let tmp = dir.join(format!(".{name}.tmp"));
-    ensure_inside(&vault, &target)?;
-    ensure_inside(&vault, &tmp)?;
-    fs::write(&tmp, content).map_err(|e| io_msg(&tmp, e))?;
-    if let Err(e) = fs::rename(&tmp, &target) {
-        let _ = fs::remove_file(&tmp);
-        return Err(io_msg(&target, e));
-    }
+    let tmp = pending_file(&dir, content.as_bytes())?;
+    let name = publish_numbered(&vault, &dir, &tmp, |n| match n {
+        1 => format!("{title}.md"),
+        2 => format!("{title}-{date}.md"),
+        _ => format!("{title}-{date}-{}.md", n - 1),
+    })?;
     Ok(format!("{domain}/{name}"))
 }
 
@@ -447,25 +554,8 @@ fn save_attachment(vault: &str, month: &str, name: &str, bytes: &[u8]) -> Result
     let dir = vault.join("附件").join(month);
     ensure_inside(&vault, &dir)?;
     fs::create_dir_all(&dir).map_err(|e| io_msg(&dir, e))?;
-    let (stem, ext) = match name.rsplit_once('.') {
-        Some((s, e)) => (s.to_string(), format!(".{e}")),
-        None => (name.to_string(), String::new()),
-    };
-    let mut file = name.to_string();
-    let mut n = 2;
-    while dir.join(&file).exists() {
-        file = format!("{stem}-{n}{ext}");
-        n += 1;
-    }
-    let target = dir.join(&file);
-    let tmp = dir.join(format!(".{file}.tmp"));
-    ensure_inside(&vault, &target)?;
-    ensure_inside(&vault, &tmp)?;
-    fs::write(&tmp, bytes).map_err(|e| io_msg(&tmp, e))?;
-    if let Err(e) = fs::rename(&tmp, &target) {
-        let _ = fs::remove_file(&tmp);
-        return Err(io_msg(&target, e));
-    }
+    let tmp = pending_file(&dir, bytes)?;
+    let file = publish_numbered(&vault, &dir, &tmp, |n| numbered_filename(name, n))?;
     Ok(format!("附件/{month}/{file}"))
 }
 
@@ -511,21 +601,11 @@ fn write_attachment_chunk(
     if !last {
         return Ok(String::new());
     }
-    let (stem, ext) = name
-        .rsplit_once('.')
-        .map_or((name, String::new()), |(s, e)| (s, format!(".{e}")));
-    let mut filename = name.to_string();
-    let mut n = 2;
-    while dir.join(&filename).exists() {
-        filename = format!("{stem}-{n}{ext}");
-        n += 1;
-    }
-    let target = dir.join(&filename);
-    ensure_inside(&root, &target)?;
-    if let Err(e) = fs::rename(&tmp, &target) {
+    let result = publish_numbered(&root, &dir, &tmp, |n| numbered_filename(name, n));
+    if result.is_err() {
         let _ = fs::remove_file(&tmp);
-        return Err(io_msg(&target, e));
     }
+    let filename = result?;
     Ok(format!("附件/{month}/{filename}"))
 }
 
@@ -1019,26 +1099,18 @@ fn save_note_at(
     ensure_inside(root, &target)?;
     let same = target.exists()
         && matches!((target.canonicalize(), old.canonicalize()), (Ok(a), Ok(b)) if a == b);
-    if target.exists() && !same {
-        return Err(format!(
-            "“{domain}”里已经有叫“{stem}”的笔记了，请换个文件名或领域"
-        ));
-    }
     fs::create_dir_all(&dir).map_err(|e| io_msg(&dir, e))?;
-    let tmp = dir.join(format!(".{stem}.md.tmp"));
-    ensure_inside(root, &tmp)?;
-    fs::write(&tmp, content).map_err(|e| io_msg(&tmp, e))?;
-    if let Err(error) = check_note_unchanged(&old, expected) {
-        let _ = fs::remove_file(&tmp);
-        return Err(error);
-    }
-    if let Err(e) = fs::rename(&tmp, &target) {
-        let _ = fs::remove_file(&tmp);
-        return Err(io_msg(&target, e));
-    }
-    if !same {
+    let tmp = pending_file(&dir, content.as_bytes())?;
+    check_note_unchanged(&old, expected)?;
+    let filename = if same {
+        fs::rename(&tmp, &target).map_err(|e| io_msg(&target, e))?;
+        format!("{stem}.md")
+    } else {
+        let name = format!("{stem}.md");
+        let filename = publish_numbered(root, &dir, &tmp, |n| numbered_filename(&name, n))?;
         fs::remove_file(&old).map_err(|e| io_msg(&old, e))?;
-    }
+        filename
+    };
     // 笔记落盘后再清理旧引用；读不全其他笔记时保留图片，清理失败不回滚已保存的笔记。
     if let Ok(images) = unreferenced_attachments(root, expected, "") {
         for image in images {
@@ -1047,7 +1119,7 @@ fn save_note_at(
             }
         }
     }
-    Ok(format!("{domain}/{stem}.md"))
+    Ok(format!("{domain}/{filename}"))
 }
 
 #[tauri::command]
@@ -1946,17 +2018,15 @@ aliases:
     }
 
     #[test]
-    fn 保存笔记_目标已有同名笔记时拒绝_两边都不动() {
+    fn 保存笔记_目标已有同名笔记时换编号() {
         let v = TempVault::new("save-conflict");
         let root = PathBuf::from(v.path());
         write(&v, "其他", "甲", "甲的内容").unwrap();
         write(&v, "设计UI", "甲", "别人的").unwrap();
-        let e = save_note_at(&root, "其他/甲.md", "设计UI", "甲", "覆盖", "甲的内容").unwrap_err();
-        assert!(e.contains("已经有"), "{e}");
-        assert_eq!(
-            fs::read_to_string(root.join("其他/甲.md")).unwrap(),
-            "甲的内容"
-        );
+        let rel = save_note_at(&root, "其他/甲.md", "设计UI", "甲", "更新", "甲的内容").unwrap();
+        assert_eq!(rel, "设计UI/甲-2.md");
+        assert_eq!(fs::read_to_string(root.join(rel)).unwrap(), "更新");
+        assert!(!root.join("其他/甲.md").exists());
         assert_eq!(
             fs::read_to_string(root.join("设计UI/甲.md")).unwrap(),
             "别人的"
@@ -2189,7 +2259,8 @@ cover: \"../附件/2026-10/a.png\"
     fn edit_recovery_corrupt_file_is_preserved_and_not_overwritten() {
         let v = TempVault::new("edit-recovery-corrupt");
         let dir = v.0.join("recovery");
-        put_draft_file(&dir, "note-edits.json", b"corrupt").unwrap();
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("note-edits.json"), b"corrupt").unwrap();
         assert!(write_edit_recovery_at(&dir, "root", "note.md", Some("edit".into())).is_err());
         assert_eq!(fs::read(dir.join("note-edits.json")).unwrap(), b"corrupt");
     }
@@ -2241,8 +2312,16 @@ cover: \"../附件/2026-10/a.png\"
         put_draft_file(&dir, "image-0", b"png").unwrap();
         put_draft_file(&dir, "draft.json", b"{\"a\":2}").unwrap();
         assert_eq!(list_draft_files(&dir), vec!["draft.json", "image-0"]);
-        assert_eq!(fs::read(dir.join("draft.json")).unwrap(), b"{\"a\":2}");
-        assert_eq!(fs::read_dir(&dir).unwrap().count(), 2);
+        assert_eq!(
+            fs::read(latest_draft_file(&dir, "draft.json").1).unwrap(),
+            b"{\"a\":2}"
+        );
+        assert_eq!(
+            fs::read_dir(dir.join(".versions/draft.json"))
+                .unwrap()
+                .count(),
+            1
+        );
     }
 
     #[test]

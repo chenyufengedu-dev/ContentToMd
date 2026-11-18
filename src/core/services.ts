@@ -52,7 +52,9 @@ async function request(
   cancel?.addEventListener('abort', onCancel)
   let res: Response
   try {
-    res = await Promise.race([fetch(url, { ...init, signal: ctrl.signal }), stopped])
+    // 保留外部信号的连接，收到响应头后取消也能停止下载响应体。
+    const signal = cancel ? AbortSignal.any([ctrl.signal, cancel]) : ctrl.signal
+    res = await Promise.race([fetch(url, { ...init, signal }), stopped])
   } catch (e) {
     if (e instanceof AppError) throw e // 上面的取消、超时
     if (cancel?.aborted) throw new AppError('cancelled', '已取消')
@@ -192,6 +194,7 @@ export async function chatJson(
     ;({ content, finish, usage } = await readStream(res.body, onText, cancel))
   } else {
     const data = await res.json().catch(() => null)
+    if (cancel?.aborted) throw new AppError('cancelled', '已取消')
     content = data?.choices?.[0]?.message?.content
     finish = data?.choices?.[0]?.finish_reason
     usage = data?.usage

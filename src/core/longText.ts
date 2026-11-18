@@ -80,21 +80,29 @@ export function splitTextChunks(text: string, target = REFINE_CHUNK): string[] {
 export const isCondensed = (srcLen: number, outLen: number) => outLen < srcLen * 0.6
 
 /** 同时最多跑 limit 个，结果按原来的顺序返回；有一个失败就报错，后面没开始的不再开始 */
-export async function mapPool<T, R>(items: T[], limit: number, fn: (x: T, i: number) => Promise<R>): Promise<R[]> {
+export async function mapPool<T, R>(
+  items: T[],
+  limit: number,
+  fn: (x: T, i: number) => Promise<R>,
+  onFailure?: () => void,
+): Promise<R[]> {
   const out = new Array<R>(items.length)
   let next = 0
-  let failed = false
+  let failure: { error: unknown } | undefined
   const worker = async () => {
-    while (!failed && next < items.length) {
+    while (!failure && next < items.length) {
       const i = next++
       try {
         out[i] = await fn(items[i], i)
       } catch (e) {
-        failed = true
-        throw e
+        if (!failure) {
+          failure = { error: e }
+          onFailure?.()
+        }
       }
     }
   }
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+  if (failure) throw failure.error
   return out
 }

@@ -1045,3 +1045,19 @@ it('已保存笔记的来源链接用完整地址打开', async () => {
   link?.click()
   expect(openLink).toHaveBeenCalledExactlyOnceWith(url)
 })
+it('保存已有笔记前等待已经发出的恢复写入', async () => {
+  let finish!: () => void
+  vi.mocked(saveEditRecovery).mockImplementationOnce(() => new Promise<void>((resolve) => (finish = resolve)))
+  const view = await mount()
+  await view.setTitle('新标题')
+  await vi.waitFor(() => expect(saveEditRecovery).toHaveBeenCalled(), { timeout: 1200 })
+  vi.mocked(saveNote).mockResolvedValue('为人处世/新标题.md')
+  view.save.click()
+  await view.flush()
+  const early = vi.mocked(saveNote).mock.calls.length
+  finish()
+  await view.flush()
+  expect(early).toBe(0)
+  expect(saveNote).toHaveBeenCalledTimes(1)
+  expect(clearEditRecovery).toHaveBeenCalled()
+})
