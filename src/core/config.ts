@@ -152,7 +152,9 @@ export function checkDomainName(name: string, domains: Domain[], selfId?: number
   if (!n) return '请填写领域名。'
   if (ILLEGAL.test(n)) return '领域名不能包含：\\ / : * ? " < > |'
   if (n.length > 20) return '领域名最多 20 个字。'
-  if (domains.some((d) => d.name === n && d.id !== selfId)) return '该领域名已存在，请换一个名称。'
+  // Windows 文件夹名不分大小写，只差大小写的两个领域会落进同一个文件夹
+  if (domains.some((d) => d.name.toLowerCase() === n.toLowerCase() && d.id !== selfId))
+    return '该领域名已存在，请换一个名称。'
   return null
 }
 

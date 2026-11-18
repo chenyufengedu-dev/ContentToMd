@@ -70,6 +70,9 @@ describe('领域', () => {
     expect(checkDomainName('设计/UI', domains)).toMatch('不能包含')
     expect(checkDomainName('设计UI', domains)).toBe('该领域名已存在，请换一个名称。')
     expect(checkDomainName('设计UI', domains, 5)).toBeNull()
+    // Windows 文件夹名不分大小写：别的领域只差大小写算重名，自己改大小写可以
+    expect(checkDomainName('设计ui', domains)).toBe('该领域名已存在，请换一个名称。')
+    expect(checkDomainName('设计ui', domains, 5)).toBeNull()
     expect(checkDomainName('读书笔记', domains)).toBeNull()
   })
   it('新编号跳过“其他”的 99', () => {

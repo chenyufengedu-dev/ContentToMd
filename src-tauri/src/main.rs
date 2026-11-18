@@ -1560,9 +1560,12 @@ fn rename_domain_at(
     let from = root.join(old);
     let to = root.join(new);
     ensure_inside(root, &to)?;
+    // 只改大小写时（ai → AI），Windows 上新旧名字指向同一个文件夹，不算“已存在”
+    let case_only = old != new && old.to_lowercase() == new.to_lowercase();
     match fs::symlink_metadata(&to) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(io_msg(&to, e)),
+        Ok(_) if case_only => {}
         Ok(_) => return Err(format!("「{new}」文件夹已存在。")),
     }
     let metadata = match fs::symlink_metadata(&from) {
@@ -1698,6 +1701,26 @@ fn domain_rename_updates_notes_and_rolls_back_on_config_failure() {
     assert_eq!(
         fs::read_to_string(root.join("新领域/a.md")).unwrap(),
         updated
+    );
+}
+
+#[test]
+fn domain_rename_allows_case_only_change() {
+    let vault = tempfile::tempdir().unwrap();
+    let root = vault.path();
+    fs::create_dir(root.join("ai")).unwrap();
+    fs::write(root.join("ai/a.md"), "---\ndomain: ai\n---\n正文\n").unwrap();
+    rename_domain_at(root, "ai", "AI", || Ok(())).unwrap();
+    let names: Vec<_> = fs::read_dir(root)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().into_string().unwrap())
+        .filter(|n| !n.starts_with('.'))
+        .collect();
+    assert_eq!(names, ["AI"]);
+    assert_eq!(
+        fs::read_to_string(root.join("AI/a.md")).unwrap(),
+        "---\ndomain: \"AI\"\n---\n正文\n"
     );
 }
 
